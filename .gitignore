@@ -1,0 +1,36 @@
+# ===== Build artifacts (sjasmplus / spgbld) =====
+/main.lst
+/zuma_new_spg.lst
+/user.l
+/main0.bin
+/main1.bin
+/page_a.bin
+/Core.bin
+/TSLib.bin
+
+# ===== Unreal memory dumps (F12) =====
+/111
+/222
+/333
+/555
+
+# ===== Python cache =====
+__pycache__/
+*.pyc
+*.pyo
+
+# ===== Debug / preview artifacts (root only) =====
+/_*.png
+/_*.gif
+/_emu_*.txt
+/_render_test.png
+/_test_*.asm
+
+# ===== Screenshots (user-local) =====
+/Безымянный.png
+/Безымянный*.png
+
+# ===== Misc =====
+*.swp
+*.bak
+*.tmp
