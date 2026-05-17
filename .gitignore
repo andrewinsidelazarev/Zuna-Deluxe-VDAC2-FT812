@@ -49,14 +49,6 @@ zuma.sym
 zuma_vdac2_without_rotation.spg
 /zuma.spg
 /vdc_emulator_log.txt
-# Old baselines (только latest публикуем; локально остаются)
-/releases/baseline_2026-05-12_*
-/releases/baseline_2026-05-14_*
-/releases/baseline_2026-05-17_mouse_aim_fix
-/releases/baseline_2026-05-17_random_unbiased_rtc_output
-/releases/baseline_2026-05-17_vdac2_fixed_killzone
-/releases/baseline_2026-05-17_vdac2_ft812_spin_natural
-/releases/baseline_2026-05-17_gameover_skull_hd_anim
 # Untranslated Docs архивы patches (исторические)
 /Docs/ft812_dl_optimized_patch.zip
 /Docs/mainloop_dxt1_l2_patch.zip
@@ -81,8 +73,3 @@ CLAUDE+.md
 /cursor_debug.png
 /spgbld.ini
 /z80_python_simulator_guide.md
-# Old baselines — только latest release публикуем
-/releases/baseline_2026-05-10_*
-/releases/baseline_2026-05-08_*
-/releases/baseline_2026-05-09_*
-/releases/baseline_2026-05-11_*
