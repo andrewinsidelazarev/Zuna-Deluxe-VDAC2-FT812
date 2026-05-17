@@ -1510,3 +1510,628 @@ build делается в render time, write строго в vblank.
 - Подтверждение fix mouse-motion artifact на железе. Текущая версия —
   кандидат на полный fix.
 - Hemisphere insert (target = i vs i+1 по ближайшему neighbour).
+
+
+## Глава 21. DXT1-эмуляция на FT812: компрессия фона до 0.5 байт/пикс через L2-mask + RGB565 blend (2026-05-12)
+
+### Задача
+
+Фон уровня 640×480 в нативном RGB565 занимает **614 400 байт** в RAM_G FT812 —
+60% от всего 1 МБ. Для multi-level игры (22 уровня Zuma Deluxe) это неприемлемо:
+22 × 614 400 = 13.5 МБ — нужен какой-то стриминг или сжатие.
+
+Раньше использовали трюк «400×300 RGB565 + cmd_scale(1.6) NEAREST до 640×480»:
+240 000 байт, но качество ступенчатое (см. `reference_zuma_vdac2_bg_compression.md`).
+Хочется честные 640×480 при минимальном объёме.
+
+**Block-compressed форматы (DXT, ETC, ASTC) FT812 не поддерживает hardware'но.**
+Список `BITMAP_LAYOUT.format` (FT81X PG Table 7): только ARGB1555, L1/L2/L4/L8,
+RGB332, ARGB2/4, RGB565, TEXT8X8, TEXTVGA, BARGRAPH, PALETTED565/4444/8. Никаких
+DXT/S3TC. `BITMAP_EXT_FORMAT` (под ASTC) появился только с BT815/816.
+
+### Идея
+
+DXT1 кодирует 4×4 пиксельный блок 8 байтами:
+- 2 байта c0 endpoint (RGB565)
+- 2 байта c1 endpoint (RGB565)
+- 4 байта = 16 × 2-битных индексов выбора цвета
+
+Декодирование на лету: для каждого пикселя индекс 0..3 определяет цвет:
+- `0` → `c0`
+- `1` → `c1`
+- `2` → `(2·c0 + c1) / 3` (≈ ⅔c0 + ⅓c1)
+- `3` → `(c0 + 2·c1) / 3` (≈ ⅓c0 + ⅔c1)
+
+FT812 умеет каждый из этих кусков по-отдельности:
+- **c0 и c1 endpoint цвета** = два RGB565 цвета на блок 4×4 = массив `(W/4)×(H/4)` RGB565
+- **Индекс выбора** = 2 бита на пиксель = формат `FT_L2` `W×H`
+- **Интерполяция между c0 и c1** через индекс → реализуется аппаратным **alpha-blending'ом**:
+  L2 пишет alpha канал, c0/c1 рисуются с `DST_ALPHA` / `ONE_MINUS_DST_ALPHA` blend
+
+Это классический трюк из EVE Application Note **AN_340** (DXT1 emulation,
+Bridgetek). Конвертер `ft812_dxt_convert.py` (автор — Lina, TSL community)
+раскладывает обычный DXT1 в нужный layout.
+
+### Формат raw файла
+
+```
++------------------+ offset 0
+|   c0 plane       |  RGB565, (W/4) × (H/4)
+|   38400 bytes    |  для 640×480 → 160 × 120 cells × 2 байта
++------------------+ offset 38400
+|   c1 plane       |  RGB565, (W/4) × (H/4)
+|   38400 bytes    |
++------------------+ offset 76800
+|   L2 mask        |  2 бит/пикс, W × H
+|   76800 bytes    |  для 640×480 → 640 × 480 / 4 = 76800
++------------------+ offset 153600
+```
+
+**Всего: 153 600 байт для 640×480** ровно 0.5 байт/пикс — теоретический минимум
+среди форматов FT812 (PALETTED8 = 1 байт/пикс минимум). Экономия **75%** vs raw
+RGB565.
+
+### L2 alpha mapping (нелинейный)
+
+Эмпирически FT812 декодирует 2-битный raw L2 в 8-битную alpha по таблице
+`(0, 255, 85, 170)` для (raw 0, 1, 2, 3). **Не линейно** — `raw=1 → alpha=255`,
+а не `85`.
+
+```python
+L2_ALPHAS = (0, 255, 85, 170)
+```
+
+Конвертер использует эту таблицу при выборе selector-ов так, чтобы итоговый
+композит после blend = `c0 * (1-A/255) + c1 * A/255` давал:
+
+| sel | alpha | финальный цвет     | смысл DXT1   |
+|-----|-------|--------------------|--------------|
+| 0   | 0     | c0                 | endpoint c0  |
+| 1   | 255   | c1                 | endpoint c1  |
+| 2   | 85    | ⅔c0 + ⅓c1          | интерполяция |
+| 3   | 170   | ⅓c0 + ⅔c1          | интерполяция |
+
+Это **точно** DXT1 декомпрессия, без потерь относительно стандартного DXT1.
+
+### Display List — 3 прохода
+
+```asm
+        FT_CMD_BUF (ZL_DL_SAVE_CONTEXT)
+        CALL  ZL_EmitLoadId
+        CALL  ZL_EmitSetMatrix
+
+        ; handle 1: RGB565 color cells (cell 0=c0, cell 1=c1)
+        FT_BitmapHandle 1
+        FT_BitmapSource ZL_BG_COLOR_ADDR
+        FT_BitmapLayout FT_RGB565, ZL_BG_COLOR_STRIDE, ZL_BG_BLOCK_H
+        FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, ZL_BG_W, ZL_BG_H
+
+        ; handle 8: L2 mask на full resolution
+        FT_BitmapHandle ZL_BG_L2_HANDLE
+        FT_BitmapSource ZL_BG_L2_ADDR
+        FT_BitmapLayout ZL_FT_L2, ZL_BG_L2_STRIDE, ZL_BG_H
+        FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, ZL_BG_W, ZL_BG_H
+
+        FT_Begin FT_BITMAPS
+
+        ;--- Pass 1: L2 → alpha канал dst.A ---
+        FT_CMD_BUF (ZL_DL_COLOR_MASK | ZL_COLOR_MASK_A)         ; только A
+        FT_CMD_BUF (ZL_DL_BLEND_FUNC | (ZL_BLEND_ONE << 3) | ZL_BLEND_ZERO)
+        FT_CMD_BUF (ZL_DL_COLOR_A | 255)
+        FT_Vertex2ii 0, 0, ZL_BG_L2_HANDLE, 0
+
+        ;--- готовимся к color planes ---
+        FT_CMD_BUF (ZL_DL_COLOR_MASK | ZL_COLOR_MASK_RGB)       ; только RGB
+        CALL  ZL_EmitLoadId
+        FT_CMD_BUF FT_CMD_SCALE
+        FT_CMD_BUF #00040000                  ; sx = 4.0
+        FT_CMD_BUF #00040000                  ; sy = 4.0
+        CALL  ZL_EmitSetMatrix
+
+        ;--- Pass 2: c1 plane с DST_ALPHA blend ---
+        FT_CMD_BUF (ZL_DL_BLEND_FUNC | (ZL_BLEND_DST_ALPHA << 3) | ZL_BLEND_ZERO)
+        FT_Vertex2ii 0, 0, 1, 1               ; cell 1 = c1, out = c1 * A
+
+        ;--- Pass 3: c0 plane с ONE_MINUS_DST_ALPHA сверху ---
+        FT_CMD_BUF (ZL_DL_BLEND_FUNC | (ZL_BLEND_ONE_MINUS_DST_ALPHA << 3) | ZL_BLEND_ONE)
+        FT_Vertex2ii 0, 0, 1, 0               ; cell 0 = c0, out = c0*(1-A) + dst
+
+        FT_End
+        FT_CMD_BUF (ZL_DL_RESTORE_CONTEXT)
+```
+
+Математика итогового пикселя:
+```
+после pass1: dst.A = L2_ALPHAS[selector] (∈ {0, 255, 85, 170})
+после pass2: dst.RGB = c1 * dst.A / 255
+после pass3: dst.RGB = c0 * (1 - dst.A/255) + dst.RGB * 1
+           = c0 * (1 - A/255) + c1 * (A/255)
+```
+
+### Подводные камни (на отладку ушёл вечер)
+
+#### 1. sjasmplus parsing macro-аргументов с `|`
+
+В `--syntax=ab` запись `FT_CMD_BUF ZL_DL_COLOR_MASK | 15` парсится криво —
+в макрос приходит **только первый operand** (`ZL_DL_COLOR_MASK` = `#20000000`),
+а `| 15` пропадает.
+
+Результат: COLOR_MASK эмитится с битами `0000` (всё запрещено к записи), все
+последующие draw-ы становятся no-op-ами, экран = clear color.
+
+**Лечение:** ВСЕГДА оборачивать в скобки.
+```asm
+FT_CMD_BUF (ZL_DL_COLOR_MASK | 15)        ; правильно
+FT_ColorMask 1, 1, 1, 1                    ; или штатный TSLib-макрос
+```
+
+#### 2. `FT_BitmapSize` уже эмитит BITMAP_SIZE_H
+
+```asm
+FT_BitmapSize macro Filter?, WrapX?, WrapY?, Width?, Height?
+    FT_CMD_BUF ((0x29 << 24) | ((W>>9)<<2) | (H>>9))    ; BITMAP_SIZE_H
+    FT_CMD_BUF ((0x08 << 24) | ... | (W & 511) | ...)   ; BITMAP_SIZE
+endm
+```
+
+Передаём 640/480 **напрямую** в макрос. Если попытаться вручную предварительно
+эмитить `FT_CMD_BUF (ZL_DL_BITMAP_SIZE_H | hi)` + потом `FT_BitmapSize` с
+младшими `W_LO, H_LO` — макрос **затирает** ручной SIZE_H своим (с нулевыми
+hi-битами, потому что W_LO=128, H_LO=480 укладываются в 9 бит). Высокие биты
+теряются → BITMAP_SIZE становится 128×480, draws обрезаются.
+
+Также `FT_BitmapLayout` сам эмитит `BITMAP_LAYOUT_H` для linestride > 1023 /
+height > 511.
+
+#### 3. BITMAP_SIZE = screen extent, не source
+
+Для c0/c1 cells источник 160×120 + `cmd_scale(4,4)` → screen draws 640×480.
+`FT_BitmapSize` должен быть **640×480** (final screen extent после matrix),
+не source 160×120. Иначе draws обрезаются до 160×120 в верхнем-левом углу.
+
+L2 plane (handle 8) — source уже 640×480 нативно, scale identity → BITMAP_SIZE
+тоже 640×480.
+
+#### 4. Vertex2ii max 511×511
+
+`VERTEX2II` имеет 9-битные поля координат (max 511). Для рисования full-screen
+640×480 надо использовать `Vertex2f` с `VertexFormat` 0 (1 px) или 4 (1/16 px).
+
+В нашем случае все draws начинаются с (0,0), поэтому Vertex2ii ОК — позиция
+ноль помещается, а размер контролируется через BITMAP_SIZE.
+
+### Сравнение объёмов 640×480
+
+| Формат                                    | Байт      | vs DXT1-эмул |
+|-------------------------------------------|-----------|--------------|
+| Raw RGB565                                | 614 400   | 4.0×         |
+| ARGB4                                     | 614 400   | 4.0×         |
+| 400×300 RGB565 + scale 1.6 (старый bg)    | 240 000   | 1.56×        |
+| **DXT1-эмуляция (c0+c1+L2)**              | **153 600** | **1.0×**   |
+| 320×240 RGB565 + scale 2.0                | 153 600   | 1.0× (мыло)  |
+| PALETTED8                                 | 308 224   | 2.0×         |
+| L8 (grayscale)                            | 307 200   | 2.0×         |
+
+### Когда использовать
+
+OK Фотореалистичный фон (level background, splash screen)
+OK Текстуры с плавными цветовыми переходами
+OK Когда RAM_G сильно ограничен (multi-level игра)
+
+NOT Спрайты с резкими краями и небольшим количеством цветов — артефакты на
+   границах (DXT1 теряет alpha, плохо ловит тонкие линии). Для шаров/frog
+   эффективнее ARGB4.
+NOT Текст и UI — здесь DXT1 даёт «лесенки» из-за грубых endpoint цветов.
+
+### Конвертер ft812_dxt_convert.py
+
+Опции качества (effort `-e 0..10`):
+- `-e 0` — быстро, шумный (видны блоки 4×4 на градиентах)
+- `-e 3` — почти неотличим от оригинала (рекомендация Lina)
+- `-e 6+` — perceptual weights + seam smoothing + residual diffusion, медленно
+
+Базовый запуск:
+```
+python ft812_dxt_convert.py level01.png -o out/level01 -f l2 -t raw -e 3 -p
+```
+
+Выход:
+- `out/level01_l2.raw` — 153 600 байт raw в формате c0|c1|L2 (грузим в RAM_G как есть)
+- `out/level01_l2.h` — C-заголовок с offset-ами/strides (для интеграции)
+- `out/level01_l2_preview.png` — реконструкция (для визуальной оценки качества)
+
+### Multi-level в Zuma — что меняется
+
+22 уровня × 153 600 = 3.4 МБ DXT1-эмуляции vs 13.5 МБ raw RGB565. Сейчас один
+уровень упаковывается в 10 spgbld-страниц по 16 КБ. При переключении уровней
+upload bg = ~150 КБ через SPI ≈ 70 мс на 14 МГц Z80 (вполне допустимая пауза
+при level transition).
+
+Объёмы по сравнению с zlib (`cmd_inflate` план):
+- DXT1-эмуляция: 153 КБ uncompressed, ~70 мс upload, hardware decode
+- ZX0/zlib: ~100 КБ compressed → ~150 КБ uncompressed, ~120 мс upload + decode
+
+DXT1-эмуляция выигрывает по uncompressed size (тот же объём в SPI transfer),
+проще в реализации (нет decode-кода), и качество фотореалистичных фонов
+визуально приемлемое начиная с `-e 3`.
+
+### Источники
+
+- **EVE Application Note AN_340** (Bridgetek, "Compressing texture using DXT1 with EVE2/EVE3 chipsets") — оригинальная идея трюка.
+- `ft812_dxt_convert.py` — реализация конвертера, автор Lina (TSL community).
+- `reference_zuma_vdac2_dxt1_emulation_l2_blend.md` — компактная памятка по технике.
+- `feedback_sjasmplus_macro_or_parens.md` — про скобки в FT_CMD_BUF.
+
+## Глава 22. Апгрейд DXT1-эмуляции с L2 до L4: +50% SPI за фотокачество (2026-05-12)
+
+### Зачем понадобился L4
+
+Глава 21 описала DXT1 на L2-маске: 0.5 байт/пикс, 153 600 байт на 640×480.
+Объёмно идеально, но на каменной текстуре фона `level_src_01` оставалась
+заметная **блочность 4×4**.
+
+Корень: L2-маска даёт всего **4 уровня** между endpoints (`{0, 85, 170, 255}` →
+четыре цвета: c0, ⅔c0+⅓c1, ⅓c0+⅔c1, c1). На гладких градиентах внутри блока
+8 уникальных оттенков в исходнике вынуждены коллапсировать в 4 → видна
+ступенька в каждом блоке.
+
+Чтобы оценить «насколько лучше» — переходим на L4:
+- **16 уровней** маски (линейный ramp `0..255` шагом 17)
+- 4×4 блок цветов c0/c1 тот же, размер endpoint planes не меняется
+- **mask** 4bpp вместо 2bpp → +76 800 байт (76800 → 153600)
+- Итого raw: **230 400 байт** vs 153 600 = +50%
+
+Пиксельный «бюджет фона» 200 КБ был принятой границей бюджета SPI/RAM_G.
+230 КБ — чуть выше потолка, но bg уже **по-настоящему фотореалистичен**.
+
+### Сравнение L2 vs L4 в одном блоке
+
+```
+оригинал блока 4×4:          цвета на пиксель
++---+---+---+---+
+| A | A | B | B |            A   = (200, 90,  60)
+| A | A | B | B |            B   = (210, 130, 80)
+| C | C | D | D |            C   = (180, 100, 70)
+| C | C | D | D |            D   = (170, 110, 90)
++---+---+---+---+
+
+L2 (4 уровня):                L4 (16 уровней):
+endpoints: c0=A, c1=D         endpoints: c0=A, c1=D
+selectors per pixel:          selectors per pixel:
+  A→0  B→2 (⅔A+⅓D)             A→0   B→5  (a~85)
+  C→3 (⅓A+⅔D)  D→1              C→10 (a~170)  D→15
+ошибка перекраски:            ошибка перекраски:
+  B → ⅔A+⅓D отличается от B     B → a*A+(1-a)*D с лучше подбираемым α
+  → видимый шов между блоками  → плавная интерполяция, шов невидим
+```
+
+### Что меняется в raw layout
+
+Только размер маски и её stride:
+
+```
++------------------+ offset 0
+|   c0 plane       |  RGB565, (W/4) × (H/4)
+|   38400 bytes    |  для 640×480 → 160 × 120 cells × 2 байта
++------------------+ offset 38400
+|   c1 plane       |  RGB565, (W/4) × (H/4)
+|   38400 bytes    |
++------------------+ offset 76800
+|   L4 mask        |  4 бит/пикс, W × H  (вместо 2 бит/пикс)
+|   153600 bytes   |  для 640×480 → 640 × 480 / 2 = 153600  ← х2 от L2
++------------------+ offset 230400
+```
+
+### Изменения в asm (минимально)
+
+#### main.asm: 10 → 15 spgbld pages
+
+```asm
+BG_FIRST_PAGE      EQU 7
+; было:
+; BG_PAGE_COUNT    EQU 10                ; DXT1-decomp 640×480 (c0|c1|L2 = 153600)
+; стало:
+BG_PAGE_COUNT      EQU 15                ; DXT1_L4 640×480 (c0|c1|L4 = 230400, last padded)
+```
+
+RAM_G layout не меняется: BG занимает `#010000..#04C000` = 245 760 байт
+(230400 реальных + 15 360 padding из последней spgbld-страницы). Killzone
+сидит ровно на `#04C000` — без overlap.
+
+#### MainLoop.asm: формат маски и stride
+
+```asm
+; было:
+; ZL_BG_L2_STRIDE EQU ZL_BG_W / 4                ; FT_L2 = 2bpp → 4 пикс/байт
+; ZL_FT_L2        EQU 17                         ; format code FT_L2
+
+; стало:
+ZL_BG_L2_STRIDE EQU ZL_BG_W / 2                  ; FT_L4 = 4bpp → 2 пикс/байт
+ZL_FT_L2        EQU FT_L4                        ; format code FT_L4 (=2)
+```
+
+`FT_L4` = 2, `FT_L2` = 17 — две разные ячейки в `BITMAP_LAYOUT.format`
+(см. FT81x PG §4.7.7, Table 7). Stride для 4bpp = `(W+1)/2`.
+
+#### DL pipeline — без изменений
+
+```asm
+;--- Pass 1: маска → dst.A через ONE/ZERO blend ---
+FT_CMD_BUF (ZL_DL_COLOR_MASK | ZL_COLOR_MASK_A)
+FT_CMD_BUF (ZL_DL_BLEND_FUNC | (ZL_BLEND_ONE << 3) | ZL_BLEND_ZERO)
+FT_CMD_BUF (ZL_DL_COLOR_A | 255)
+FT_Vertex2ii 0, 0, ZL_BG_L2_HANDLE, 0          ; теперь L4 mask
+
+;--- Pass 2/3: c1/c0 с DST_ALPHA blend — те же команды ---
+```
+
+L4 декодируется FT812 в **линейный** 8-битный alpha: `raw_value × 17`
+(значения 0, 17, 34, ..., 255). В отличие от L2 (`{0, 255, 85, 170}`), L4
+без перестановок — selector `k` даёт alpha ≈ `k/15 * 255`. Конвертер
+автоматически использует правильное соответствие.
+
+Финальный blend `dst.RGB = c0*(1-A) + c1*A` алгебраически одинаков —
+просто `A` теперь имеет 16 значений вместо 4.
+
+### Подводный камень: CPU энкодер на Windows нежизнеспособен
+
+Для 640×480 = 19 200 блоков 4×4. Локальный энкодер (без GPU):
+
+| Режим                       | Результат                                     |
+|-----------------------------|-----------------------------------------------|
+| `-j 0` (auto = 6 cores)     | **BrokenProcessPool** (OOM при effort 8 / L4) |
+| `-j 1` (single-process)     | ~3 мин до 2% при effort 4 → ~2.5 часа total   |
+| `-j 2` effort 6             | ~2 мин до 0%, не дождались                    |
+
+Multiprocessing у `concurrent.futures.ProcessPoolExecutor` на Windows
+**не shared memory**: каждый воркер получает копию `blocks` через pickle.
+Для 230 КБ blocks × 6 воркеров = 1.4 МБ × Python overhead ~50× = ~70 МБ
+накапливается; через несколько итераций OOM на 4 ГБ VM.
+
+Single-process работает стабильно, но 19 200 блоков × ~0.5 сек/блок (effort 4
+с perceptual weights) = 160 мин. Эта длительность была подтверждена
+эмпирически на CPU `2 × Xeon Gold 6132` под Hyper-V.
+
+**Решение: запускать энкодер на хост-машине с GPU через pyopencl.**
+
+```
+python ft812_dxt_convert.py level_src_01.png -o out -f l4 -t raw -x -p -e 8
+```
+
+На AMD `gfx1032` весь pipeline (initial pair generation + hybrid refine + write)
+проходит **менее чем за 30 секунд** на effort 8. Готовые файлы
+(`out/level_src_01_l4.raw` 230 400 байт) копируются в проект, режутся на
+страницы, собираются.
+
+### Сплит в spgbld pages
+
+```python
+# split_l4.py
+PAGE = 16384
+data = open('level_src_01_l4.raw', 'rb').read()
+assert len(data) == 230400
+n_pages = (len(data) + PAGE - 1) // PAGE     # = 15
+for i in range(n_pages):
+    chunk = data[i*PAGE:(i+1)*PAGE]
+    if len(chunk) < PAGE:
+        chunk += b'\x00' * (PAGE - len(chunk))   # padding zeros
+    open(f'bg_l4_p{i:02d}.bin', 'wb').write(chunk)
+# wrote 15 файлов, последний с 1024 реальных байт + 15360 нулей
+```
+
+`spgbld_vdac2.ini`:
+
+```ini
+Block = #0000, #07, bg_l4_p00.bin
+Block = #0000, #08, bg_l4_p01.bin
+...
+Block = #0000, #15, bg_l4_p14.bin
+Block = #0000, #16, killzone_p00.bin     ; следом, без overlap
+```
+
+### Итоговый бюджет
+
+| Формат                                | Байт      | vs Raw  | Качество        |
+|---------------------------------------|-----------|---------|-----------------|
+| Raw RGB565 640×480                    | 614 400   | 1.00×   | reference       |
+| 400×300 RGB565 + scale 1.6 NEAREST    | 240 000   | 0.39×   | ступенька 1.6×  |
+| DXT1_L2 (Глава 21)                    | 153 600   | 0.25×   | блочность 4×4   |
+| **DXT1_L4 (эта глава)**               | **230 400** | **0.38×** | **фоторовно** |
+| ARGB4 native 640×480                  | 614 400   | 1.00×   | reference       |
+
+L4 даёт **2/3 объёма** native RGB565 при визуально неотличимом качестве —
+ровно та точка цена/качество, которая нужна для multi-level Zuma:
+22 × 230 КБ = 5 МБ vs 13.5 МБ raw. Помещается в обычный TR-DOS + spgbld.
+
+### Когда выбирать L2 vs L4
+
+- **L2**: tile-фон, splash-screen с большими flat-зонами, ограниченный RAM_G.
+  Если 75% экономии важнее минимальной блочности — берём L2.
+- **L4**: фотореалистичные уровни, фоны с плавными градиентами (наш случай),
+  splash-screen с тонкой деталировкой. +50% к L2, но качество скачком вверх.
+
+### Источники
+
+- `ft812_dxt_convert.py` — light версия (1197 строк) после автора;
+  hybrid GPU/CPU pipeline через pyopencl + numpy.
+- `reference_zuma_vdac2_baseline_2026-05-12_bg_dxt_l4.md` — опорный baseline
+  после интеграции.
+- FT81x PG §4.7.7 — таблица `BITMAP_LAYOUT.format` (FT_L1/L2/L4/L8 codes).
+
+## Глава 23. Render-loop оптимизации и DL-emit ловушки (2026-05-17)
+
+Главы 18-22 закрыли визуальную часть Zuma. Эта глава — три приёма, которые
+выжали из FT812 ещё несколько процентов и закрыли тонкий баг рендера.
+Появились в процессе финального полировок kill-zone (плавное поглощение
+шаров) и frog-композиции.
+
+### 23.1 Bucket-grouped tangent rotation: 32 cmd_rotate → 16, а потом обратно
+
+VDC выдаёт каждому шару в цепи `tangent` 0..255 — направление трека в точке.
+HD-источник вращает каждый шар своим `cmd_rotate(angle)`, но на FT812 это
+N call'ов `cmd_loadidentity → cmd_translate → cmd_rotate → cmd_translate
+→ cmd_setmatrix` на каждый шар. При длине цепи 85 шаров это ~30% бюджета DL.
+
+**Bucket-grouping** — группировка шаров по углу:
+
+1. Pre-pass: для каждого шара вычисляем `bucket = (tangent + N/2) >> log2(N)`
+   и кешируем (bucket, cell, Vx, Vy) в RAM.
+2. Outer loop по N бакетам: emit matrix для `bucket * (256/N)`,
+   inner scan — все шары с этим bucket'ом → Cell + Vertex2f.
+
+При N=32: шаг 11.25° (256/32 = 8 BRAD = 11.25°). Шар получит
+visually-acceptable rotation, плюс цены matrix-emit'а только 32 раза за кадр.
+
+```asm
+; 32-bucket scheme: bucket = (tangent+4) >> 3
+LD   A, (VDC_LastTangent)
+ADD  A, 4                              ; round-nearest
+RRCA : RRCA : RRCA                    ; >> 3
+AND  31                                ; mod 32
+LD   (cache_bucket), A
+; ...позже, в outer loop:
+LD   A, (current_bucket)
+ADD  A, A : ADD A, A : ADD A, A        ; bucket * 8
+CALL ZL_EmitRotate                     ; A = BRAD 0..255
+```
+
+**Lesson: 16 vs 32**. Изначально 32 бакета считались избыточными — попробовали
+16 (шаг 22.5°). На статичных шарах выглядело норм, но на быстро двигающихся
+по крутой кривой (вход в killzone, головной шар) проявился **визуальный
+jitter** — глаз ловит ступеньки. Откатили обратно в 32. Урок: не оптимизируй
+"на глаз" в статике; смотри на самые быстрые моменты gameplay.
+
+### 23.2 Per-sprite alpha fade через COLOR_A — плавное поглощение
+
+FT812 имеет команду `COLOR_A(alpha)` — умножает alpha-канал последующего
+bitmap'а на 0..255. Это позволяет делать **dissolve-эффект на спрайте без
+изменения текстуры**.
+
+В нашем случае: head-шар цепи во время Game Over absorb должен плавно
+исчезать в kill-zone, а не пропадать дискретно. Алгоритм:
+
+```asm
+; Каждый тик absorb (state=1):
+LD   A, (VDC_HSub)             ; HSub 0..31 in cell
+ADD  A, A : ADD A, A : ADD A, A  ; * 8 (max 31*8 = 248)
+CPL                              ; alpha = 255 - HSub*8
+LD   (VDC_HeadAbsorbAlpha), A   ; смыкается с 255 до 7 за цикл
+
+; В .BInner bucket-loop, перед Vertex2f head-шара:
+LD   A, (VDC_HeadAbsorbAlpha)
+LD   E, A
+CALL FT.Coprocessor.ColorA      ; emit COLOR_A(alpha)
+LD   C, (IX+2) : LD B, (IX+3)   ; перезагрузить BC (Cell/ColorA уничтожили)
+LD   E, (IX+4) : LD D, (IX+5)
+CALL FT.Coprocessor.Vertex2f
+LD   E, 255
+CALL FT.Coprocessor.ColorA      ; восстановить для остальных шаров
+```
+
+Ловушка: COLOR_A — **persistent state DL**. Если не восстановить до 255, все
+последующие спрайты в этом кадре будут полупрозрачные.
+
+**Identify the target sprite**: head-шар = первая запись в кеше bucket-prepass
+по адресу `ZL_BALL_CACHE_ADDR`. В .BInner проверяем `IX == ZL_BALL_CACHE_ADDR`
+(PUSH IX / POP HL / CP HIGH / CP LOW) — это slot[0]. COLOR_A применяется только
+к этому одному `Vertex2f`.
+
+### 23.3 Cell/ColorA корраптят BC/DE — координаты грузить ПОСЛЕ, а не ДО
+
+Все одноаргументные DL-команды TSLib (`Cell`, `ColorA`, `Tag`, `LineWidth`...)
+эмитятся через `Command_BCDE` — формируют 4 байта опкода в BC/DE и пишут в
+буфер. **После такого CALL'а BC и DE мусор.**
+
+Из этого следует жёсткое правило для пары Cell+Vertex2f:
+
+```asm
+; WRONG — баг, который у нас прятался месяц в DrawKillzoneDual:
+LD   BC, x_scaled              ; BC = X
+LD   DE, y_scaled              ; DE = Y
+XOR  A
+CALL FT.Coprocessor.Cell        ; BC, DE corrupted!
+CALL FT.Coprocessor.Vertex2f    ; uses corrupted BC, DE → sprite в ?,?
+
+; RIGHT — Cell первым, координаты после:
+XOR  A
+CALL FT.Coprocessor.Cell
+LD   BC, x_scaled
+LD   DE, y_scaled
+CALL FT.Coprocessor.Vertex2f
+```
+
+Bug-symptom при wrong ordering: спрайт рисуется в верхнем-левом углу или вообще
+не виден — Cell оставляет в BC значение `0x0600` (опкод Cell), Vertex2f
+интерпретирует это как X*16 = 1536, что выходит за разумный экранный диапазон,
+либо clip.
+
+**Эвристика**: если sprite появляется не там где ожидаешь, или мигает, или
+"то ли есть, то ли нет" — **первое что проверить**: между LD BC,coords и
+Vertex2f нет ли промежуточного CALL'а к Cell/ColorA/Tag/etc. Если есть —
+переставить порядок.
+
+### 23.4 Скип лишнего DL: bg-baked = overlay не нужен
+
+Иногда самый быстрый рендер — **не рисовать вообще**. Kill-zone "закрытый
+череп" уже запечён в bg-арте (golden 8-pointed sun); рисовать overlay
+поверх в idle-state — двойная работа.
+
+```asm
+DrawKillzoneDual:
+                LD   A, (VDC_KzFrame)
+                CP   2
+                RET  C                  ; KzFrame=0/1 (idle / final GO) → bg сам показывает
+                ; ...emit Cell + Vertex2f только когда KzFrame >= 2 (анимация)
+```
+
+Это экономит **~10 байт DL × 60 FPS = 600 байт/сек** трафика SPI, который
+освобождает Z80 cycles для chain physics + input + sound. Микроптимизация,
+но накладывается на каждый "статичный" sprite в render-loop'е.
+
+### 23.5 Continuous-motion absorb через HSub-advance (mirror of fast-spawn)
+
+Last optimization-pattern: **используй существующий механизм движения, не пиши
+свой**. Игра уже умеет двигать цепь плавно — в fast-spawn phase chain
+двигается HSub++ × `VDC_FAST_ADVANCE`=12 раз за тик. Это даёт плавное
+скольжение шаров по треку.
+
+Для Game Over absorb разумно использовать **тот же механизм с другими
+параметрами**:
+
+```asm
+VDC_UpdateAbsorb:
+                LD   B, VDC_ABSORB_ADVANCE  ; e.g., 8 (32/8 = 4 ticks/cell)
+.aa_loop:       PUSH BC
+                CALL .ua_move_once          ; HSub++; on wrap → array shift, HSA capped
+                POP  BC
+                DJNZ .aa_loop
+                ; alpha рассчитывается из HSub → синхрон с motion
+```
+
+`.ua_move_once`:
+```asm
+LD   A, (VDC_HSub)
+INC  A
+CP   VDC_CELL_SIZE
+JR   C, .save                 ; HSub < CS → просто save
+XOR  A                         ; wrap: HSub=0
+LD   (VDC_HSub), A
+; remove slot[0] (array shift), HSA capped → новый head в том же clamped
+; последнем track sample → 1px continuity jump (invisible)
+```
+
+Эффект: tail-шары плавно скользят (sub-pixel HSub), head clamped на последнем
+сэмпле трека, alpha fade ↔ HSub progress. При wrap — array shift И сброс
+alpha в 255. **Visual continuity = 1 px разрыв** вместо discrete cell-jump.
+
+Аналогичный паттерн можно применить к: уменьшению цепи после match-3 cascade,
+выбросу bonus-шаров, любым "цепь сжимается/растягивается" анимациям.
+
+### Источники
+
+- `releases/baseline_2026-05-17_killzone_smooth_absorb/` — production-ready
+  baseline после применения всех пяти приёмов.
+- `Source/ASM/MainLoop.asm`:`.BInner` — bucket loop с per-head COLOR_A inject.
+- `Source/ASM/main.asm`:`DrawKillzoneDual`, `VDC_UpdateAbsorb` — Cell-order
+  fix + skip-in-idle + HSub-based absorb.
+- FT81x PG §4.5 — `COLOR_A` opcode + persistent DL state.

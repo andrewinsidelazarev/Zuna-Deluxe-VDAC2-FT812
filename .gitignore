@@ -34,3 +34,55 @@ __pycache__/
 *.swp
 *.bak
 *.tmp
+zuma.sym
+/444
+/_l2_*
+/_q_*
+/_check_kz*.py
+/_diag*.py
+/above_skull.png
+/skull0.png
+/top_right.png
+/Без*
+/Текстовый*
+*.cmd
+zuma_vdac2_without_rotation.spg
+/zuma.spg
+/vdc_emulator_log.txt
+# Old baselines (только latest публикуем; локально остаются)
+/releases/baseline_2026-05-12_*
+/releases/baseline_2026-05-14_*
+/releases/baseline_2026-05-17_mouse_aim_fix
+/releases/baseline_2026-05-17_random_unbiased_rtc_output
+/releases/baseline_2026-05-17_vdac2_fixed_killzone
+/releases/baseline_2026-05-17_vdac2_ft812_spin_natural
+/releases/baseline_2026-05-17_gameover_skull_hd_anim
+# Untranslated Docs архивы patches (исторические)
+/Docs/ft812_dl_optimized_patch.zip
+/Docs/mainloop_dxt1_l2_patch.zip
+/Docs/ft812_dl_optimized_patch/
+/Docs/mainloop_dxt1_l2_patch/
+# Debug/dev artifacts в Source
+Source/OTHER/_*.log
+Source/OTHER/_*.err
+Source/OTHER/_*.out
+Source/OTHER/_*.py
+Source/OTHER/_replay_logs/
+Source/OTHER/_q_tiny_out/
+Source/OTHER/_z80_lib_cburbridge/
+Source/OTHER/__pycache__/
+Source/OTHER/run_catch_wrong_target_bg.ps1
+Source/ASM/MainLoop_.asm
+Source/ASM/_test_init_video.asm
+# HD reference source code (copyright) — приватная reference копия
+Graphics/Original/_hd_refs/
+# Legacy / dev
+CLAUDE+.md
+/cursor_debug.png
+/spgbld.ini
+/z80_python_simulator_guide.md
+# Old baselines — только latest release публикуем
+/releases/baseline_2026-05-10_*
+/releases/baseline_2026-05-08_*
+/releases/baseline_2026-05-09_*
+/releases/baseline_2026-05-11_*
