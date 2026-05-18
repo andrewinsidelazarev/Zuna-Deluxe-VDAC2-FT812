@@ -8,6 +8,56 @@ baseline'ами (они аддитивные — atlas/bg/sprites только �
 
 ---
 
+## baseline_2026-05-18_per_ball_grouped_6colors  *(09:37)* ⭐ **CURRENT**
+
+User-verified on real FT812 hardware: **no tearing, no segment flicker, all 6 colors visible.**
+
+Три связанных изменения:
+
+1. **Per-ball matrix с grouped emit.** Замена 32-bucket классификатора на
+   per-slot byte-level hysteresis (threshold 8 BRAD = ширина бакета). В draw
+   loop квантуем stable tangent к 8 BRAD и пропускаем `cmd_setmatrix` пакет
+   когда у соседних шаров цепи квантованный tangent совпадает. Типичная цепь —
+   ~8-15 matrix emits/кадр вместо 35 (3-4× меньше coproc-нагрузки). Голый
+   per-ball без grouping рвал кадры на 74Hz vblank window — grouped версия
+   укладывается.
+
+2. **6 цветов.** `VDC_NUM_COLORS 4 → 6`. `FT_Cell` DL опкод 7-битный (wrap at
+   128), поэтому для цветов 4-5 добавлен второй `BITMAP_HANDLE 9` с источником
+   `RAM_G #090000` (атлас offset для cells 128+). Per-ball loop выбирает
+   handle по биту 7 cell-индекса; Bullet/Frog mouth+next используют helper
+   `ZL_EmitBallHandle` для общей логики.
+
+3. **RNG fix.** `VDC_RandomColor` имел LFSR-bias: для poly `#B400` бит-pattern
+   `(L XOR H) & 7` почти не выдавал значения 2 и 5. Жёлтый (color 5)
+   практически не появлялся в цепи. Замена на mul-then-shift через
+   `ZL_Mul16x8`: `((L XOR H) * NUM_COLORS) >> 8`. Bias ≤ 1.4%, все 6 цветов
+   спавнятся.
+
+Побочные фиксы:
+- **B-clobber bug** в Bullet/Frog: макросы `FT_BitmapLayout/Size` клобают BCDE.
+  Pattern «save color in B → emit macros → re-read B» давал мусорный cell
+  index. Симптом: пуля рендерилась цветом X, в цепь вставлялась цветом Y.
+  Fix: перечитывать color из памяти после макросов.
+- **AND 1 + RET NZ** subdivider закомментирован — физика теперь 60 Гц (было 30).
+  Цепь и spin в 2× быстрее реал-тайма.
+
+Учебник: Глава 24 разбирает паттерн per-slot hysteresis + grouped emit,
+B-clobber pitfall, mul-then-shift vs AND-mask для RNG bias.
+
+Core 8134 байт (58 байт свободно до #8000). Все тесты PASS.
+
+## baseline_2026-05-18_pre_per_ball_6_colors  *(07:39)*
+
+Pre-change snapshot перед per-ball рефакторингом. Использовался для отката если
+эксперимент сломается на реале (не понадобился). Эквивалентен предыдущему
+production-baseline `2026-05-17_killzone_smooth_absorb` плюс утренний Codex'овский
+combined ball rotation jitter fix (offline-сглаженный track tangent + compact
+per-slot bucket hysteresis at #4100). 32 buckets + Manhattan-46 wrong-insert
+filter в Bullet.
+
+---
+
 ## baseline_2026-05-10_classic_calibrated  *(23:50)*
 
 Calibration под classic Zuma: ball **32×32 native** (без upscale), **4 цвета**,
