@@ -371,20 +371,12 @@ Bullet_Draw:        LD   A, (Bullet_Active)
                     CALL ZL_EmitLoadId
                     CALL ZL_EmitSetMatrix
 
-                    ; Dual handle 6-color через helper. color<4: handle 0; color>=4: handle 9.
-                    ; B-clobber fix 2026-05-18: re-read Bullet_Color из памяти после
-                    ; макросов FT_BitmapLayout/Size (которые клобают BCDE), а не из B.
-                    LD   A, (Bullet_Color)
-                    CP   4
-                    LD   A, 0
-                    JR   C, .bullet_h
-                    LD   A, 9
-.bullet_h:          CALL ZL_EmitBallHandle
+                    FT_BitmapHandle 0
+                    FT_BitmapSource FT_RAM_G + BALLS_RAMG_ADDR
                     FT_BitmapLayout FT_ARGB4, 32 * 2, 32
                     FT_BitmapSize   FT_BILINEAR, FT_BORDER, FT_BORDER, 32, 32
-                    LD   A, (Bullet_Color)                 ; re-read color (B clobbered macros)
-                    AND  3                                 ; local color (0..3)
-                    ADD  A, A : ADD A, A : ADD A, A : ADD A, A : ADD A, A   ; *32 = local cell
+                    LD   A, (Bullet_Color)
+                    ADD  A, A : ADD A, A : ADD A, A : ADD A, A : ADD A, A   ; *32 (cell = color*32)
                     CALL FT.Coprocessor.Cell
                     ; Vertex2f((X - 28) * 16, (Y - 28) * 16)
                     LD   HL, (Bullet_X)

@@ -2899,3 +2899,40 @@ Logic added in VDAC2: `VDC_GameState` 0=play, 1=absorb, 2=gameover. When the hea
 2026-05-17 VDAC2 Game Over visual follow-up: removed the strange gold rays from kill-zone cell 0 by keeping only the near-black center pixels from the HD hole crop; normal play now initializes `VDC_KzFrame=1` (closed skull), Game Over advances skull frames and then leaves cell 0 as the clean black hole. Smoothness tweak: `VDC_UpdateAbsorb` now advances the skull frame every update and removes a head ball every 2 ticks instead of tying both to a 4-tick jump. Frog randomizer guard: `Bullet_Spawn` now reports failure with CF=1 when the single bullet slot is busy, and mouse/keyboard fire returns without promoting `Frog_NextBallColor`; this prevents color/randomizer cycling when no bullet was actually spawned. Rebuilt `zuma_vdac2.spg`; Core size 8181 bytes; tail/match3 tests PASS.
 
 2026-05-17 VDAC2 frog corruption after kill-zone animation: fixed FT812 persistent `Cell()` state leak. Kill-zone animation leaves `Cell(VDC_KzFrame)` active, so the following frog bitmap handles were rendered from non-zero cells and appeared sliced/duplicated. `MainLoop.asm` now emits `Cell(0)` immediately before `Frog_DrawPlate/Body/Tongue`; overlay already had its own reset. Rebuilt `zuma_vdac2.spg`; Core size 8185 bytes; tail/match3 tests PASS.
+
+2026-05-18 Codex: VDAC2 ball rotation jitter follow-up.
+
+Before trying combined rotation, saved reference build/files:
+- releases/zuma_vdac2_2026-05-18_ref_before_combined_ball_rotation.spg
+- releases/Core_2026-05-18_ref_before_combined_ball_rotation.bin
+- releases/MainLoop_2026-05-18_ref_before_combined_ball_rotation.asm
+- releases/Bullet_2026-05-18_ref_before_combined_ball_rotation.asm
+- releases/VDC_2026-05-18_ref_before_combined_ball_rotation.asm
+
+Applied lightweight combined ball-turn stabilization from Docs/zuma_ball_jitter_fix.md:
+- Source/OTHER/make_track_640.py now does wrap-aware offline moving-average smoothing of tangent bytes after WINDOW=8 tangent calculation. Generated Graphics/Converted/track_640.bin again for level 1.
+- Source/ASM/MainLoop.asm now uses per-slot stable tangent buckets in page-5 RAM at #4100. Runtime bucket changes only when tangent moves outside the previous bucket center by >= 8 BRAD (half-step 4 + hysteresis 4). This keeps 32 tangent buckets / 32 spin phases, but suppresses boundary flip-flop on turns.
+- Did not add the full md struct with smoothed_angle/pending_group/pending_counter because Core has a hard #8000 limit; current compact version keeps Core under the page boundary.
+
+Also kept the earlier wrong-insert fix in Bullet.asm: square bbox hit is additionally filtered by Manhattan distance threshold 46, so diagonal bbox corner hits should no longer insert far ahead of the visible chain.
+
+Verification after this change:
+- sjasmplus Source/ASM/main.asm: 0 errors, 0 warnings.
+- Core.bin size 8133 bytes, end #7FC4, free before #8000 = 59 bytes.
+- python Source/OTHER/zuma_full_z80_emulator.py --frames 10: PASS, no CPU HALT.
+- python Source/OTHER/vdc_test_runner.py: ALL TESTS PASSED.
+- python Source/OTHER/test_match3_stuck.py: PASS/no real-ball stuck.
+- python Source/OTHER/test_tail_fix_verify.py: PASS.
+- spgbld_vdac2.ini packed zuma_vdac2.spg successfully.
+
+2026-05-18 Codex: saved new baseline after hardware visual check.
+
+User result: balls still jitter a tiny bit, but much less than before. Saved this version as the current reference/baseline:
+- releases/zuma_vdac2_2026-05-18_ref_combined_ball_rotation_less_jitter.spg
+- releases/Core_2026-05-18_ref_combined_ball_rotation_less_jitter.bin
+- releases/MainLoop_2026-05-18_ref_combined_ball_rotation_less_jitter.asm
+- releases/Bullet_2026-05-18_ref_combined_ball_rotation_less_jitter.asm
+- releases/make_track_640_2026-05-18_ref_combined_ball_rotation_less_jitter.py
+- releases/track_640_2026-05-18_ref_combined_ball_rotation_less_jitter.bin
+
+Baseline contents: 32 spin phases, offline wrap-aware smoothed track tangent, compact per-slot bucket hysteresis at #4100, and wrong-insert Manhattan hit filter.

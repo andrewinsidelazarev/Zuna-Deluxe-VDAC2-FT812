@@ -695,18 +695,13 @@ Frog_DrawBallNow:
                   ADD  HL, DE
                   LD   (Frog_TmpY), HL
 
-                  ; Dual handle. B-clobber fix 2026-05-18: re-read color из памяти после макросов.
-                  LD   A, (Frog_BallColor)
-                  CP   4
-                  LD   A, 0
-                  JR   C, .fbm_h
-                  LD   A, 9
-.fbm_h:           CALL ZL_EmitBallHandle
+                  ; Native size 56×56 — оригинальный chain-ball размер.
+                  FT_BitmapHandle 0
+                  FT_BitmapSource FT_RAM_G + BALLS_RAMG_ADDR
                   FT_BitmapLayout FT_ARGB4, FROG_BALL_W * 2, FROG_BALL_W
                   FT_BitmapSize   FT_BILINEAR, FT_BORDER, FT_BORDER, FROG_BALL_DST_W, FROG_BALL_DST_W
-                  LD   A, (Frog_BallColor)               ; re-read (macros clobber B/C/D/E)
-                  AND  3
-                  ADD  A, A : ADD A, A : ADD A, A : ADD A, A : ADD A, A    ; *32 = local cell
+                  LD   A, (Frog_BallColor)
+                  ADD  A, A : ADD A, A : ADD A, A : ADD A, A : ADD A, A    ; *32 (cell = color*32)
                   CALL FT.Coprocessor.Cell
                   CALL Frog_EmitVertex2f_Tmp_BallCentred
                   RET
@@ -743,18 +738,13 @@ Frog_DrawNextBall:
                   ADD  HL, DE
                   LD   (Frog_TmpY), HL
 
-                  ; Dual handle. B-clobber fix 2026-05-18: re-read color из памяти после макросов.
-                  LD   A, (Frog_NextBallColor)
-                  CP   4
-                  LD   A, 0
-                  JR   C, .fbn_h
-                  LD   A, 9
-.fbn_h:           CALL ZL_EmitBallHandle
+                  ; Native size 56×56 — оригинальный chain-ball размер.
+                  FT_BitmapHandle 0
+                  FT_BitmapSource FT_RAM_G + BALLS_RAMG_ADDR
                   FT_BitmapLayout FT_ARGB4, FROG_BALL_W * 2, FROG_BALL_W
                   FT_BitmapSize   FT_BILINEAR, FT_BORDER, FT_BORDER, FROG_BALL_DST_W, FROG_BALL_DST_W
-                  LD   A, (Frog_NextBallColor)           ; re-read (macros clobber B/C/D/E)
-                  AND  3
-                  ADD  A, A : ADD A, A : ADD A, A : ADD A, A : ADD A, A    ; *32 = local cell
+                  LD   A, (Frog_NextBallColor)
+                  ADD  A, A : ADD A, A : ADD A, A : ADD A, A : ADD A, A    ; *32 (cell = color*32)
                   CALL FT.Coprocessor.Cell
                   CALL Frog_EmitVertex2f_Tmp_BallCentred
                   RET

@@ -2135,3 +2135,314 @@ alpha в 255. **Visual continuity = 1 px разрыв** вместо discrete ce
 - `Source/ASM/main.asm`:`DrawKillzoneDual`, `VDC_UpdateAbsorb` — Cell-order
   fix + skip-in-idle + HSub-based absorb.
 - FT81x PG §4.5 — `COLOR_A` opcode + persistent DL state.
+
+
+## Глава 24. Per-ball matrix с per-slot hysteresis и grouped emit (2026-05-18)
+
+### 24.1 Постановка задачи
+
+Шары цепи Zuma вращаются по тангенсу трека: на изгибе спрайт повёрнут так,
+чтобы рисунок (рельеф/блик) шёл по направлению движения, а не «лежал на
+боку». На каждый шар нужна BITMAP_TRANSFORM с углом = tangent_at_track[i].
+
+В лоб через FT812 это:
+
+```asm
+; per ball: 5 coproc-commands → 6 BITMAP_TRANSFORM_X DL entries
+CALL ZL_EmitLoadId                ; cmd_loadidentity
+LD   HL, ZL_BALL_HALF
+LD   DE, ZL_BALL_HALF
+CALL ZL_EmitTranslate             ; cmd_translate(+16, +16)
+LD   A, (cache+0)
+CALL ZL_EmitRotate                ; cmd_rotate(tangent_byte)
+LD   HL, -ZL_BALL_HALF
+LD   DE, -ZL_BALL_HALF
+CALL ZL_EmitTranslate             ; cmd_translate(-16, -16)
+CALL ZL_EmitSetMatrix             ; cmd_setmatrix
+```
+
+Translate(+16) → Rotate(θ) → Translate(-16) — стандартная связка чтобы
+повернуть spritе вокруг центра bitmap (16,16) для атласа 32×32, а не вокруг
+угла (0,0).
+
+Стоимость на цепь 35 шаров: **175 coproc-команд + 210 DL-записей BITMAP_TRANSFORM**.
+
+FT812 coproc'у на это не хватает vblank-окна даже на 74Hz → **тиринг на реале.**
+
+### 24.2 Альтернатива #1: бакеты — почему не подошло
+
+Классический способ дёшево покрыть N шаров: разбить tangent диапазон 0..255 BRAD
+на K корзин (buckets), назначить каждому шару ближайшую корзину, и в outer-loop
+эмитить матрицу 1 раз на корзину, а внутри обходить все шары своей корзины.
+
+```
+матрицы за кадр = K (фиксированно)
+DL записи      = K × 6 transform + N × (cell + vertex)
+```
+
+K=32 → 11.25° на bucket, ~6× быстрее чем per-ball. Так и было сделано до 2026-05-18.
+
+**Проблема:** «глобальный flip». Если raw tangent шара трамплинит между двумя
+бакетами кадр-к-кадру (например, из-за округления track-данных), его
+поворот скачет на 11.25°. И — что хуже — поскольку соседние шары находятся
+в **одной с ним** корзине (общая матрица), они визуально мигают **сегментом
+цепи целиком**. Глаз ловит «волну» на изгибах.
+
+Это была реальная жалоба пользователя за всю прошедшую неделю работы.
+
+### 24.3 Альтернатива #2: чистый per-ball — почему сломалось на реале
+
+Прямой переход к per-ball matrix (для каждого шара свой `cmd_setmatrix`) убирает
+эффект «сегмент мигает» начисто — каждый шар вращается независимо. Visual quality
+максимальный.
+
+Но coproc-нагрузка взлетела в ~6 раз. На баре эмуляторе (Unreal x64) кадр строился,
+на реальном FT812 при 74Hz и DL ≥ 300 записей **vblank-окна не хватало**:
+коприйцессор не успевал обработать команды до следующего DLSWAP — экран рвало.
+
+Симптом: верхняя половина — frame N, нижняя — frame N−1, с горизонтальной чертой
+разрыва. Появляется в самых нагруженных моментах (длинная цепь + жаба + bullet).
+
+### 24.4 Гибрид: per-slot hysteresis + run-length grouped emit
+
+Идея: **хранить tangent per-ball независимо** (это уже даёт per-slot stability —
+flicker нет), но **эмитить матрицу только когда у соседних шаров в цепи tangent
+действительно поменялся**.
+
+На спирали Zuma соседние шары цепи находятся на одной дуге трека, поэтому их
+tangent'ы очень близки. С разумной квантизацией (8 BRAD = ширина бакета)
+адъяцентные шары часто попадают в **одинаковую дольку** — для них достаточно
+одной матрицы.
+
+#### 24.4.1 Per-slot byte-level hysteresis
+
+Pre-pass для каждого шара хранит **свой** «стабильный» tangent в page-5 RAM
+(`#4100 + slot_idx`), обновляется только когда raw отличается на ≥ THR=8 BRAD:
+
+```asm
+; D = raw tangent (preserved). HL = state addr через H = STATE_HI, L = slot.
+LD   A, (VDC_LastTangent)
+LD   D, A
+LD   A, C                              ; slot index
+LD   H, ZL_BALL_TANGENT_STATE_ADDR >> 8 ; #41 (low byte STATE_ADDR = 0 заведомо)
+LD   L, A
+LD   A, (HL)                           ; prev stable
+LD   E, A
+LD   A, D                              ; raw
+SUB  E                                  ; (raw - prev) mod 256
+JP   P, .stab_pos                      ; signed sign-bit check
+NEG
+.stab_pos: CP   ZL_BALL_TANGENT_HYSTERESIS_THR  ; = 8
+JR   NC, .stab_update                  ; |delta| >= THR → update
+LD   A, E                              ; else keep prev
+JR   .stab_done
+.stab_update: LD   A, D
+LD   (HL), A
+.stab_done:                            ; A = stable tangent (raw if updated, prev else)
+```
+
+**Почему именно 8 BRAD threshold:** должен быть ≥ ширине квантизационной
+корзины (8 BRAD), иначе raw, осциллирующий на границе ±4, заставит stable
+скакать между двумя бакетами. С 8: stable меняется только если raw уехал
+заметно в новую область → stable settles в одной корзине.
+
+**Почему ёлки H=STATE_ADDR>>8, L=slot** (а не `LD HL,…+LD DE,slot+ADD HL,DE`):
+выбрали ZL_BALL_TANGENT_STATE_ADDR=`#4100` с low-byte=0 специально, чтобы 8-bit
+slot index ставился прямо в L без сложения. Сохраняет регистр D (с raw
+tangent) от затирания через `LD DE, addr`.
+
+#### 24.4.2 Quantize-then-compare в draw loop
+
+В per-ball loop **квантуем** stable tangent к ближайшему 8 BRAD (`AND #F8` =
+32 корзины) и сравниваем с tangent'ом, для которого мы УЖЕ эмитили матрицу.
+Если совпал — пропускаем `cmd_setmatrix` пакет:
+
+```asm
+.ChainDraw:
+                LD   A, #01                         ; sentinel (не multiple-of-8)
+                LD   (ZL_TmpLastTangent), A
+                LD   A, (ZL_BallCount)
+                LD   B, A                            ; loop count
+                LD   IX, ZL_BALL_CACHE_ADDR
+.PerBallLoop:   LD   A, (IX+1)                       ; cell (+1) = 0xFF marks gap
+                CP   #FF
+                JP   Z, .PBSkip
+                PUSH BC
+                ; Skip matrix emit если quantized tangent совпал с предыдущим.
+                LD   A, (IX+0)                       ; stable tangent
+                AND  #F8                              ; quantize к multiple-of-8
+                LD   HL, ZL_TmpLastTangent
+                CP   (HL)
+                JR   Z, .PBNoMatrix                  ; same bucket → reuse матрицу
+                LD   (HL), A                          ; новый bucket → save
+                ; emit full matrix pack (5 coproc-cmds)
+                CALL ZL_EmitLoadId
+                LD   HL, ZL_BALL_HALF
+                LD   DE, ZL_BALL_HALF
+                CALL ZL_EmitTranslate
+                LD   A, (ZL_TmpLastTangent)
+                CALL ZL_EmitRotate
+                LD   HL, -ZL_BALL_HALF
+                LD   DE, -ZL_BALL_HALF
+                CALL ZL_EmitTranslate
+                CALL ZL_EmitSetMatrix
+.PBNoMatrix:
+                ; ... handle, cell, vertex2f для текущего шара (без матрицы) ...
+```
+
+Sentinel `#01` гарантирует что первый шар всегда триггерит matrix emit
+(никакой реальный quantized stable tangent не равен 1, т.к. они кратны 8).
+
+#### 24.4.3 Что в итоге
+
+На спирали с 35 шарами цепи статистически на цепь приходится ~8–15 уникальных
+quantized buckets, и balls внутри bucket'а лежат подряд (соседи по track) →
+matrix emit срабатывает ~8–15 раз вместо 35. **3–4× падение coproc-нагрузки.**
+
+Метрики:
+```
+              Bucketed (старое)    Per-ball naive     Per-ball + grouped
+matrix/frame         32              35                  8-15
+coproc-cmd/frame     160             175                 40-75
+DL entries (chain)   294             315                 ~150
+flip-flicker         YES             NO                  NO
+vblank ok @ 74Hz     YES             NO (tear)           YES
+```
+
+### 24.5 Ловушки реализации
+
+#### Регистр-сейв (B-clobber)
+
+Helpers `FT_BitmapLayout`, `FT_BitmapSize` — макросы, разворачивающиеся в
+инлайн через FT_CMD_BUF, который **клобает BCDE**. Поэтому паттерн «сохрани
+цвет в B → emit setup macros → возьми обратно из B» молча даёт мусор:
+
+```asm
+LD A, (Bullet_Color)
+LD B, A                                ; "save"
+... CALL ZL_EmitBallHandle ...
+FT_BitmapLayout ...                    ; ← кладёт B = 0x07 (opcode)
+FT_BitmapSize ...                      ; ← кладёт B = 0x08
+LD A, B                                ; ← А не цвет! → cell wrong
+AND 3
+CALL Cell                              ; рисует случайный цвет
+```
+
+**Симптом был:** жаба стреляет одним цветом, в цепь вставляется другой. Потому
+что **в памяти** `Bullet_Color` корректный (`VDC_InsertAt(Bullet_Color)`),
+а **на экране** во время полёта пуля рисовалась мусорным cell.
+
+**Фикс:** перечитать color из памяти после макросов, не из регистра:
+
+```asm
+LD A, (Bullet_Color)
+CP 4
+LD A, 0
+JR C, .h0
+LD A, 9
+.h0: CALL ZL_EmitBallHandle
+FT_BitmapLayout ...
+FT_BitmapSize ...
+LD A, (Bullet_Color)                   ; re-read — macros clobbered registers
+AND 3
+ADD A,A : ... *32
+CALL Cell
+```
+
+Аналогично для chain draw, но там есть `IX → (IX+1)` cache pointer — Cell
+читаем оттуда, IX через хелперы сохраняется.
+
+#### Sentinel выбор
+
+`ZL_TmpLastTangent` инициализируется `#01`, а не `#FF` — потому что после
+`AND #F8` реальные quantized tangent'ы могут быть `0, 8, 16, ..., 248`. Значение
+`#FF` после AND F8 даёт `#F8` (валидный bucket), и если у первого шара
+quantized = 248 = `#F8`, он бы совпал с sentinel и **пропустил matrix emit** —
+а матрицы ещё нет (FT812 unitialized state) → шар нарисуется с identity matrix.
+Sentinel `#01` гарантированно не совпадает ни с одним quantized = multiple-of-8.
+
+#### JR vs JP — out of range
+
+После добавления matrix-skip логики body цикла вырос. `JR Z, .PBSkip` (2 байта,
+±127 диапазон) перестал доставать. Заменил на `JP Z, .PBSkip` (+1 байт но
+absolute address). Уроки прошлых сессий: при росте кода всегда чекать
+JR-distances через `--lst`.
+
+### 24.6 RNG bias как побочный bug (2026-05-18)
+
+Параллельно с per-ball рефакторингом расширил `VDC_NUM_COLORS` с 4 до 6 (атлас
+уже содержал colors 4-5: white + yellow). Жёлтый не появлялся в цепи СОВСЕМ.
+
+LFSR Galois с polynomial `#B400`:
+
+```asm
+LD HL, (VDC_LfsrSeed)
+LD A, L
+AND 1                          ; bit out
+SRL H : RR L                   ; shift HL right
+JR Z, .no_xor
+LD A, H : XOR #B4 : LD H, A    ; feed back via poly
+.no_xor:
+LD (VDC_LfsrSeed), HL
+LD A, L
+XOR H                          ; 8-bit "random"
+AND 7                          ; → 0..7
+CP NUM_COLORS                  ; reject если >= NUM
+JR NC, retry
+RET
+```
+
+**Скрытая корреляция битов:** для конкретного poly `#B400`, после XOR L⊕H и
+маски `AND 7` результат покрывает почти исключительно `{0,1,3,4}`, а значения
+`{2,5,6,7}` встречаются ~1 раз на 1000. Rejection (`CP NUM_COLORS`) отсекает
+6,7 — а 2 и 5 он не лечит. Цвета 2 (фиолетовый) и 5 (жёлтый) выпадают почти
+никогда.
+
+**Замер на baseline:** 1000 вызовов `VDC_RandomColor` дали `[306, 231, 2, 230, 230, 1]`.
+
+**Фикс — mul-then-shift вместо bit-masking:**
+
+```asm
+LD A, L
+XOR H                          ; A = 8-bit raw rand
+LD L, A
+LD H, 0                        ; HL = rand byte
+LD A, VDC_NUM_COLORS           ; A = 6
+CALL ZL_Mul16x8                ; HL = rand * NUM (max 6*255=1530, <16-bit)
+LD A, H                        ; A = (rand * NUM) >> 8 = 0..NUM-1
+RET
+```
+
+Принцип: любое значение rand 0..255 распределяется по NUM_COLORS bucket'ов
+пропорционально размеру bucket'а. Bias ≤ 1.4% даже при равномерном rand,
+и НЕ требует, чтобы определённые биты были некоррелированы.
+
+После замера: `[166, 111, 110, 57, 222, 334]` — все 6 цветов появляются.
+Дистрибуция всё ещё неравномерна из-за самой неравномерности LFSR-байта,
+но **колор 5 теперь в игре**.
+
+### 24.7 Применимость в других случаях
+
+Паттерн «per-slot hysteresis + run-length grouped emit» обобщается:
+
+1. **Условие применимости:** есть много объектов, которым нужно индивидуальное
+   состояние (color, scale, rotation), но в смежных объектах состояние часто
+   одинаково.
+2. **Шаг 1:** state per-object с byte-level hysteresis (storage = N байт RAM,
+   threshold ≥ quantization step).
+3. **Шаг 2:** в draw-loop сравнивай с last-emitted state, пропускай emit при
+   совпадении.
+
+Кандидаты на это в Zuma VDAC2:
+- Spin frame (cell number): соседние шары на одной фазе rolling — сейчас
+  они **уже** имеют разные cell индексы из-за `t × K`, group skip = no-op.
+- Bitmap handle 0 vs 9 (для colors 4-5 split): группировать по color group —
+  уже работает (handle меняется только при cell ≥ 128).
+
+### Источники
+
+- `Source/ASM/MainLoop.asm`:`.ChainDraw` / `.PerBallLoop` — финальная реализация.
+- `Source/ASM/VDC.asm`:`VDC_RandomColor` — mul-then-shift fix.
+- `releases/baseline_2026-05-18_pre_per_ball_6_colors/` — pre-change snapshot
+  для отката.
+- FT81x PG §4.7 — BITMAP_TRANSFORM_A..F state, persistent across vertex2f.

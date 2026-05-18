@@ -37,7 +37,7 @@ CELL_DST = 32                                     # ячейка = native (бе�
                                                   # шары classic не вращаются по tangent визуально)
 PAD = 0
 N_COLORS = 6
-N_FRAMES = 16                                     # 16 phases sparkle — smooth classic feel
+N_FRAMES = 32                                     # 32 phases sparkle/rolling for smoother spin
 PAGE_SZ  = 16384
 START_PAGE = 0x2D
 
@@ -90,8 +90,8 @@ for i in range(n_pages):
         f.write(chunk)
 
 print(f'wrote balls_atlas.bin: {len(out)} bytes, {n_pages} pages')
-print(f'  total cells = {total_cells} (6 colors × 8 frames)')
-print(f'  cell size = {CELL_DST}×{CELL_DST}, ball {CELL_BALL}×{CELL_BALL} centered')
+print(f'  total cells = {total_cells} ({N_COLORS} colors x {N_FRAMES} frames)')
+print(f'  cell size = {CELL_DST}x{CELL_DST}, ball {CELL_BALL}x{CELL_BALL} centered')
 print('\n# spgbld_vdac2.ini block lines:')
 for i in range(n_pages):
     pg = START_PAGE + i

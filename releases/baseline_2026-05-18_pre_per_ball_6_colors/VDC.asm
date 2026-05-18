@@ -42,7 +42,7 @@ VDC_DECAY_POS          EQU 1                             ; cascade rollback (pos
 VDC_MAX_SLOTS          EQU 240
 VDC_GAP_STOP           EQU #FE
 VDC_GAP_CASCADE        EQU #FD
-VDC_NUM_COLORS         EQU 6                             ; 6 colors (atlas already supports 6×32 cells). Pre 2026-05-18: 4.
+VDC_NUM_COLORS         EQU 4                             ; classic Zuma level 1: colors="4"
 VDC_GAP_STEP_FRAMES    EQU VDC_CELL_SIZE
 VDC_DM3_OFFSET_GAP_MAX EQU 10                            ; ~CELL_SIZE/4
 VDC_BALLS_TARGET       EQU 85                            ; classic level 1: start 35 + repeat 50 = 85 (для воспроизведения cap-glitch в Z80-симуляторе)
@@ -176,13 +176,12 @@ VDC_Update:
                 DJNZ .upd_fast
                 CALL VDC_AnimateChain
                 JP   VDC_TrySpawn_NoHsubGate
-.upd_normal:    ; Normal phase: spawn каждые 64 кадра. Subdivider /2 (AND 1 + RET NZ)
-                ; ЗАКОММЕНТИРОВАН 2026-05-18 — физика теперь 60 Гц вместо 30 Гц.
-                ; Эффект: цепь и spin в 2× быстрее реал-тайм vs baseline.
-                ; Если слишком быстро — раскомментировать AND 1 + RET NZ ниже.
+.upd_normal:    ; Normal phase: subdivider /2 + spawn каждые 64 кадра.
+                ; TrySpawn (с hsub-gate) синхронен с Python: spawn только когда
+                ; chain выровнен по cell-границе.
                 LD   A, (ZL_FrameCounter)
-                ; AND  1
-                ; RET  NZ                              ; odd frame → skip всё
+                AND  1
+                RET  NZ                                ; odd frame → skip всё
                 CALL VDC_MoveChain
                 CALL VDC_AnimateChain
                 LD   A, (VDC_BallsSpawned)
@@ -1409,11 +1408,12 @@ VDC_DivHLbyA:
 ; (8 mod 6 = 2 → дубли 6→0 и 7→1). Mul/shift даёт ≤1.4% bias.
 ; ============================================================================
 VDC_RandomColor:
-                ; Mul-then-shift: A = ((L XOR H) * NUM_COLORS) >> 8 = 0..NUM-1.
-                ; Старый AND 7 + reject имел LFSR-bias для poly 0xB400: (L XOR H) & 7
-                ; почти не выдавал значения 2 и 5 (биты коррелированы) → цвета 2 и 5
-                ; не появлялись в цепи. Mul-then-shift bias ≤ 1.4% при NUM=6.
-                ; Fix 2026-05-18.
+                ; Rejection sampling: AND 7 + reject if >= NUM. Корректен для
+                ; любого NUM <= 8 (level 1=4, end-game filter может дропнуть
+                ; до 3, hard levels до 5-6). Старый AND (NUM-1) работал ТОЛЬКО
+                ; для степеней двойки (4,8); для NUM=6 давал 0,1,4,5 only
+                ; (бит 1 жёстко обнулялся). Gemini-fix 2026-05-17.
+.rc_loop:
                 LD   HL, (VDC_LfsrSeed)
                 LD   A, L
                 AND  1
@@ -1423,12 +1423,10 @@ VDC_RandomColor:
 .rc_no_xor:
                 LD   (VDC_LfsrSeed), HL
                 LD   A, L
-                XOR  H                                 ; A = 8-bit random
-                LD   L, A
-                LD   H, 0                              ; HL = rand byte (0..255)
-                LD   A, VDC_NUM_COLORS
-                CALL ZL_Mul16x8                        ; HL = rand * NUM (max 6*255 = 1530)
-                LD   A, H                              ; A = (rand * NUM) >> 8 = 0..NUM-1
+                XOR  H                                 ; 8-bit random
+                AND  7                                 ; 0..7 (max NUM=8)
+                CP   VDC_NUM_COLORS                    ; reject if >= NUM
+                JR   NC, .rc_loop                      ; retry
                 RET
 
 ; ============================================================================
