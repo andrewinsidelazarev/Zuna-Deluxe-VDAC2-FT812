@@ -2936,3 +2936,143 @@ User result: balls still jitter a tiny bit, but much less than before. Saved thi
 - releases/track_640_2026-05-18_ref_combined_ball_rotation_less_jitter.bin
 
 Baseline contents: 32 spin phases, offline wrap-aware smoothed track tangent, compact per-slot bucket hysteresis at #4100, and wrong-insert Manhattan hit filter.
+
+## [2026-05-18 22:40] VDAC2 → VDC: Match-3 explode pass and regression status
+**Контекст:** в VDAC2 добавлена match-3 animation stage поверх обычного fade-out. Explosion sprite берется из третьей правой колонки `gameobjects.png`, грузится отдельным atlas'ом `destroy_atlas_p00..p03.bin`, рисуется отдельным pass после chain, тоном модулируется по цвету matched-шара через FT812 `COLOR_RGB`, а alpha гасится hardware `ColorA`. Core удержан ниже `#8000` после ужатия кода.
+**Применимо ли в TO:** да, логика match-3/cascade и delayed visual finalization соответствует VDC-инвариантам; для другого рендера можно перенести тот же паттерн "separate pass + hardware fade + color tint".
+**Ссылки:** `Source/ASM/MainLoop.asm`, `Source/ASM/VDC.asm`, `Source/ASM/main.asm`, `Source/OTHER/make_destroy_atlas.py`, `spgbld_vdac2.ini`; тесты `sjasmplus`, `spgbld`, `match3-stuck --frames 3000`, `stack --symbol Core.VDC_Init`, `shadow-dl`, `Core.Initialize`, UTF-8 check.
+
+## [2026-05-18 20:00] VDAC2 → VDC: main0/main1 split в slot 1 + slot 3 — новый memory layout
+
+**Контекст:** Лимит «считать байты Core» (9216 байт в slot 1 page 5) снят расщеплением. Core (#5C00, slot 1 page 5) теперь только bootstrap = **415 байт** (Start, Initialize, Init_Core, Init_Int, INT_Handler). Сценовый код (Init_Video + VDC + Frog + Bullet + MainLoop) уехал в новый файл **`main1_play.bin`** на slot 3 page #04, ORG #C000, **8795 байт из 16384**. Запас на main0 = 8.8 KB, на main1_play = 7.5 KB. Симулятор `zuma_z80_simulator.py` догружает обе части flat; регресс PASS; user-verified «играется» 2026-05-18 19:50.
+
+Cross-slot CALL работает без thunks — Z80 видит slot 1 и slot 3 одновременно после `Init_Core` (`SetPage3 #04`). Thunks потребуются только когда добавим Title/LevelSelect (свап slot 3 на другие main1_*.bin).
+
+**Применимо ли в VDC TS-Conf:** В TS-Conf проекте уже именно так — main0.bin slot 1 + main1.bin **slot 2** (а не slot 3, потому что у вас на slot 3 — TrackData с дин. свапом под уровни). VDAC2 пошёл slot 3 потому что TrackData у нас на slot 2 (статически page 6, без свапа). Логика разделения та же — общие helpers (log, RNG, paging) → main0, сцена → main1_<scene>.
+
+**Две ловушки которые поймали (если будете рефакторить дальше):**
+
+1. **`Main0_End:` обязательно ПОСЛЕ всех main0 функций**, перед SLOT 3 директивой. У меня она попала между Init_Core и Init_Int → SAVEBIN обрезал Init_Int+INT_Handler → на железе Z80 NOPил через нули в TrackData → RST 38 на байте 0xFF → прыжок в #0038 → NOPил до #1000 = TSLib `SetPage0:` функция (`LD (#0410), A : RET`) → A=8 (последнее из upload loop) → slot 0 переключился на page 8 = bg_l4_p01 → TSLib исчез → chaos. Paged simulator с FMADDR_REGS hook + ring buffer PC + watchpoint на #1000 нашёл за 4 итерации.
+
+2. **`CMD_ADDRESS_PTR` дефолт в TSLib = `#C000` (slot 3)** — наш FT command buffer перезаписывает main1_play код 3.5 KB/кадр. Симптом: игра стартует (1 кадр), потом цепочки не появляются, фрог не стреляет, при выстреле виснет. Fix — override **ДО** TSLib include:
+   ```asm
+   define CMD_ADDRESS_PTR #5E00     ; slot 1 free area после main0 (8.5 KB до #8000)
+   ```
+   У вас в TS-Conf этой ловушки нет, потому что main1 в slot 2, slot 3 = level data, буфер на #C000 не мешает коду.
+
+**Ссылки:**
+- `Source/ASM/main.asm` (`define CMD_ADDRESS_PTR #5E00`, `Main0_End:` после INT_Handler, `SLOT 3 : PAGE #04 : ORG #C000`, две `SAVEBIN`)
+- `spgbld_vdac2.ini`: `Block = #C000, #04, main1_play.bin`
+- `Source/OTHER/zuma_full_z80_emulator.py`: FMADDR_REGS hook в `_write_ref` (writes к #0410..#0413 обновляют `mem.pages[slot]`) + ring buffer + watchpoint
+- `Source/OTHER/zuma_z80_simulator.py`: догружает `main1_play.bin @ #C000` для физ. тестов
+- `Docs/uchebnik_tsconf_vdac2.md`: глава 25 с полным разбором
+- `releases/v021-2026-05-18-main0-main1-split.spg`: рабочий baseline
+- Регресс PASS: `vdc_test_runner.py`, `test_match3_stuck.py`, `test_tail_fix_verify.py`
+
+## [2026-05-18 20:45] VDAC2 → VDC: shared asset ZX7 compression — SPG -36%, HW verified
+
+**Контекст:** Поверх v021 split включил ZX7-декомпрессию для shared-assets (balls/frog/kz/destroy/cursor). Dzx7Turbo (~62 байта, портирован из вашего zuma_new_spg.asm:4466) + новый wrapper `UnpackAndUploadPage` (декомп src page → SCRATCH_PAGE #01, FT.WriteMem 16K, advance BgRamH/L) живут в slot 0 (после TSLib helpers, до LOG_BLOCK_END). 4 upload-loop в Initialize заменены на CALL UnpackAndUploadPage. SCRATCH_PAGE=#01, после серии compressed uploads — `SetPage2 6 : SetPage3 #04` чтобы вернуть TrackData и main1_play. **SPG 978→629 KB (-36%)**, регресс PASS, HW user-verified «работает».
+
+**Что НЕ компрессится:** bg L4 (DXT-like формат `c0|c1|L4_mask`). ZX7 даёт ratio ~99.8% — формат уже визуально сжатый. Bg upload остался прежний.
+
+**Что не дало RAM savings (важно для 22 уровней):** 1:1 mapping (один compressed файл = одна SPG page). SPG-файл меньше потому что spgbld не паддит до 16K. Но в RAM каждая page по-прежнему 16K. Для реальной экономии RAM (для 22 уровней) нужно **packing** — concat compressed sub-streams + multi-page Block + smart slot 2 swap в decomp loop. Это следующий шаг (v023).
+
+**Применимо ли в VDC TS-Conf:** У вас уже есть UnpackZX7Page + UnpackZX7_9Pages с тем же паттерном (saved_sp + slot 2 src + slot 3 dst + Dzx7Turbo + restore). У нас отличие — `UnpackAndUploadPage` сразу за декомпом делает FT.WriteMem в FT812 RAM_G и продвигает counter в slot 1 (BgRamH/BgRamL). Можно посмотреть для одобрения паттерна, если кто-то будет приносить compressed assets в ваш проект.
+
+**Ссылки:**
+- `Source/ASM/main.asm` (`Dzx7Turbo`, `UnpackAndUploadPage`, `SCRATCH_PAGE EQU #01`, 4 укороченных upload-loop, финальный `SetPage3 #04`)
+- `Source/OTHER/compress_zx7.py` (порт из вашего `compress_zx7_lite.py`)
+- `Source/OTHER/compress_shared_assets.py` (batch скрипт)
+- `Graphics/Converted/*_zx7.bin` (43 файла)
+- `spgbld_vdac2.ini` — все compressed assets перекинуты на `*_zx7.bin`
+- `releases/v022-2026-05-18-shared-asset-zx7.spg` — baseline
+
+**Ловушки на которые наступили (для записи):**
+- kosarev/z80 (используется в physics-симуляторе) НЕ декодирует undocumented `SLL E` (`CB 33`) — Z80-decomp валидируется через cburbridge (`zuma_full_z80_emulator.py`)
+- Полный Initialize в Python-эмуляторе таймаутит на ~3 минутах (43 декомпа × overhead). На реале <1 сек.
+- `UnpackAndUploadPage` оставляет slot 2 = последний src, slot 3 = SCRATCH; caller обязан в конце серии восстановить `SetPage2 6 : SetPage3 #04` чтобы VDC_Init получил TrackData и main1 был доступен.
+
+## [2026-05-18 22:00] VDAC2 → VDC: level intro screen + Game Over в nativealien48 шрифте
+
+**Контекст:** Поверх v022 (shared asset ZX7) добавлено intro-состояние (`VDC_STATE_INTRO=3`) на 240 frames (~4 сек), shows LEVEL 1-1 (bottom-right, large) + SPIRAL OF DOOM (below) + fade-out за последние 60 ticks. GAME OVER переведён с FT812 cmd_text (bitmap font 30) на nativealien48 bitmap. 3 текстовых атласа в FT_RAM_G #000000-#00C000 (zoned под bg). HW user-verified «круто».
+
+**Реализация:**
+- Font: `_fonts/nativealien48.{png,txt}` из HD `content/fonts/`. Python renderer `Source/OTHER/make_text_atlas.py` парсит BMFont-format (CharList/WidthList/RectList/OffsetList), берёт цвета НАПРЯМУЮ из PNG (там уже нарисован красно-жёлтый dithered gradient — не нужно synthetic intensity remap).
+- 3 атласа: GAME OVER 169×46 (native 47 px), LEVEL 1-1 89×36 (source, FT812 cmd_scale ×16/9 → 158×64 display BILINEAR), SPIRAL OF DOOM 192×36 (native). Все ZX7-сжаты, 1 SPG page each.
+- Fade-out: `LD A, (VDC_IntroTick) : CP 60 : JR NC, full_alpha : ADD A,A : ADD A,A` → ColorA = tick*4 (last 60 ticks). FT812 FT_ColorA умножает альфу на bitmap pixels.
+- Cross-page CALL: `DrawIntroText` живёт в slot 0 (после Log_*), вызывает `Core.ZL_EmitLoadId/SetMatrix` (в slot 3) через `Core.` префикс — sjasmplus резолвит.
+
+**Применимо ли в VDC TS-Conf:** Концептуально да, у вас TSU sprites + cancun10/nativealien48 шрифты в `_fonts/`. У нас отличается: FT812 bitmap rendering вместо TSU, FT_BitmapTransform/cmd_scale для динамического resize. Но pattern «render text → ARGB4 bitmap → upload в FT_RAM_G → cmd_scale» переносим. ColorA для fade умножается на pixel alpha, отличный способ effects.
+
+**Ловушки которые поймали:**
+- **`uint8 << 12` overflow в Python**. `to_argb4()` сдвиг u8 на 12 бит = 0. Cast в u16 ДО сдвига. Без этого все пиксели сохранялись с alpha=0 → bitmap полностью прозрачный, ничего не видно.
+- **Font PNG уже имеет gradient**. Не нужно synthetic intensity-based remap. Изначально я делал `gradient_rgba(intensity)` — выходил uniform yellow. Прямое копирование RGBA из source даёт красивый dithered red→yellow→red.
+- **`ZL_EmitSetMatrix` resolves to 0 без префикса** — symbol живёт в `Core.*` module (main1_play, slot 3). Из slot 0 DrawIntroText вызывать через `CALL Core.ZL_EmitSetMatrix`.
+- **EQU forward references в макросах**. TEXT_*_W/H должны быть объявлены ДО TSLib block (т.е. в начале main.asm), иначе FT_BitmapLayout/Size не разрешает.
+
+**Ссылки:**
+- `Source/ASM/main.asm`: TEXT_*_PAGE/RAMG/W/H EQUs, upload через `UnpackAndUploadPage`, `DrawGameOverText`, `DrawIntroText`
+- `Source/ASM/VDC.asm`: `VDC_STATE_INTRO=3`, `VDC_INTRO_TICKS=240`, `VDC_IntroTick`, fade logic в VDC_Update
+- `Source/ASM/MainLoop.asm`: `CALL Z, DrawIntroText` при state=INTRO в DrawFrame
+- `Source/OTHER/make_text_atlas.py`: BMFont parser + ARGB4 encoder
+- `Docs/uchebnik_tsconf_vdac2.md`: добавится глава 26 (level intro + fade)
+- `releases/v023-2026-05-18-level-intro-gameover-nativealien.spg`: baseline 645 KB
+
+## [2026-05-18 23:30] VDAC2 → VDC: полный intro pipeline + state-gated frog
+
+**Контекст:** Поверх v023 закрыт полный level-intro flow в trio states INTRO→PREVIEW→CLOSING→PLAY. State machine VDC_GameState теперь 6 значений (0=PLAY, 1=ABSORB, 2=GAMEOVER, 3=INTRO, 4=PREVIEW, 5=CLOSING). Также блокировал outside-PLAY interactions фрога.
+
+**Поведение:**
+- **INTRO (240 ticks ~4 сек):** LEVEL 1-1 + SPIRAL OF DOOM с fade-out в нижнем правом углу, череп открыт (KzFrame=11, mouth wide open).
+- **PREVIEW (193 ticks ~3.2 сек):** sparkle wave вдоль track. 8 sparkles, head advance 15 samples/tick, spacing 16 samples. PREVIEW_TICKS=193 синк с моментом влёта последней звезды в череп. Tint gold (255,220,80).
+- **CLOSING (22 ticks ~0.37 сек):** KzFrame анимация 11→1, череп закрывается. 2 tick per frame.
+- **PLAY:** balls спавнятся, KzFrame=1, VDC_CheckKillzone управляет.
+
+**State-gating frog/bullet (важно):**
+- `Bullet_Spawn`: добавлен check `VDC_GameState ≠ 0 → CF=1 (fail)`. Запрет стрельбы в absorb/intro/preview/closing/gameover.
+- `Frog_Update.fu_skip`: `Frog_RefilterCurrent` вызывается ТОЛЬКО при state=PLAY. RefilterCurrent дёргает LFSR seed через Frog_FilteredRandomColor — без гейта цвета BallColor/NextBallColor спонтанно меняются в absorb/intro/preview. Now цвета во рту жабы стабильные вне PLAY.
+
+**Применимо ли в VDC TS-Conf:** Концептуально да. У вас тоже есть state machine, тоже могут «дрейфовать» цвета без гейта. Sparkle wave — лёгкая фича, можно перенести (sprite в gameobjects.png правый нижний угол, x=738..755 y=2470..2486 = biggest frame). У нас в VDAC2 через FT812 BITMAP + Vertex2f. У вас через TSU sprites — другой mechanism, но идея «head advance + trail with skip-when-out-of-range» переносим.
+
+**Ловушки которые поймали:**
+- **Frog_RefilterCurrent не нужен вне PLAY** — он re-randomizer, меняет цвета без явного запроса. Sequenced правильно только во время gameplay.
+- **PREVIEW_TICKS должен sync с wave dynamics**, иначе пустое ожидание между «последняя звезда влетела» и «череп начал закрываться». Формула: `ceil((NumSamples + (COUNT-1)*SPACING) / SPEED)`.
+- **DrawKillzoneDual пропускал KzFrame ≠ 2..11** — для cell 0 (open black hole) overlay не рисовался. Изменено: пропуск только при KzFrame=1 (idle closed, bg-baked).
+- **CLOSING (11→1) визуально совпадает с roll-back** (chain retreat в gameplay). Это OK — kz atlas имеет 12 cells, переиспользование sprite frames нормально.
+
+**Ссылки:**
+- `Source/ASM/VDC.asm`: STATE_PREVIEW/CLOSING EQUs, TICKS, state machine .upd_intro/preview/closing, KzCloseTick variable, KzFrame=11 initial
+- `Source/ASM/Frog.asm:107-115`: `Frog_RefilterCurrent` gating
+- `Source/ASM/Bullet.asm:34-43`: `Bullet_Spawn` state check
+- `Source/ASM/main.asm`: `DrawPreviewSparkles` (slot 0, ~140 байт), sparkle EQUs, KZ_PAGE/RAMG, DrawKillzoneDual condition fix
+- `Source/OTHER/make_sparkle.py`: extract sparkle 18×17 из gameobjects.png
+- `Graphics/Converted/sparkle_zx7.bin`: 242 байта compressed, SPG page #24, FT_RAM_G #00C000
+- `releases/v024-2026-05-18-intro-preview-closing-skull-anim.spg`: baseline 646 KB
+
+## [2026-05-19 03:00] VDAC2 → VDC: PALETTED4444 ОЖИВЛЁН + frame strips ZX7 PALETTED4444
+
+Закрыт миф «PALETTED не работает на VDAC2 FT812». Три условия для PALETTED4444:
+1) palette ровно 512 байт (256×2 ARGB4), 2) формат записи ARGB4 LE
+((A4<<12)|(R4<<8)|(G4<<4)|B4), 3) адрес палитры выровнен на 4 байта.
+Все 3 — must, нарушение = серые шары/hang.
+
+Baseline v025 (HW verified): 192 KB atlas + 512B палитра, 32 spin phases,
+6 цветов native quantized. Экономия 192 KB vs original 384 KB ARGB4.
+Setup в 4 точках (chain, bullet, frog hand, frog back) c одним
+FT_PaletteSource per frame. Учебник Глава 26.
+
+Baseline v026 (2026-05-19): добавлен gameinterface frame через 4 PALETTED4444
+strip'а (top 640×44, bot 640×24, left/right 24×412) с общей 512B палитрой.
+Центр прозрачный (alpha=0), per-pixel alpha smooth feather на краях.
+Total RAM_G frame = 62.3 KB (вместо 225 KB full-frame DXT1-L4 не влезающего).
+Strip approach: пустой центр не хранится. Source 960×720 (4:3, юзер вручную
+обрезал из HD 1280×776). Z-order: cursor НАД фреймом.
+
+Также порезаны 6 UI sprites в Graphics/Original/sprites/: life_frog 38×37,
+progress_green/yellow 95×28 (HUD progress bars), menu_inactive/active/pressed
+118-119×39. Не загружаются ещё, ждут динамической отрисовки score+lives+menu.
+
+Файлы:
+- releases/v026-2026-05-19-frame-strips.spg
+- _baseline_v026_frame_strips/ (исходники)
+- Docs/uchebnik_tsconf_vdac2.md Глава 26 (PALETTED4444 setup + lessons).

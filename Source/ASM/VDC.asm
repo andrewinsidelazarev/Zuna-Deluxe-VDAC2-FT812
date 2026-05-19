@@ -12,8 +12,9 @@
 ;   - LastRenderPos НЕ хранится: при t<0 рендер skip. Trade-off: при cascade
 ;     rollback шары на спавне на 1-2 кадра становятся невидимыми. Можно добавить
 ;     потом как опциональный массив.
-;   - Без EXPLOSION_FRAMES анимации (Slots[lb..rb] сразу = GAP). Explosion
-;     отдельным TSU-слоем, как в v6/v7 360x288, добавится позже.
+;   - Match-3 has a visual explosion phase. Slots keep their color while
+;     VDC_ExplodeFrame > 0; after the timer expires the saved GAP marker is
+;     committed and normal VDC gap closing continues.
 ;
 ; API:
 ;   VDC_Init       — обнулить все массивы, Slots[] = GAP_STOP, RNG seed.
@@ -47,6 +48,18 @@ VDC_GAP_STEP_FRAMES    EQU VDC_CELL_SIZE
 VDC_DM3_OFFSET_GAP_MAX EQU 10                            ; ~CELL_SIZE/4
 VDC_BALLS_TARGET       EQU 85                            ; classic level 1: start 35 + repeat 50 = 85 (для воспроизведения cap-glitch в Z80-симуляторе)
 VDC_KZ_FRAMES          EQU 12
+VDC_EXPLOSION_FRAMES   EQU 15
+
+; VDC_GameState values
+VDC_STATE_PLAY     EQU 0                                  ; обычный gameplay
+VDC_STATE_ABSORB   EQU 1                                  ; balls движутся в killzone
+VDC_STATE_GAMEOVER EQU 2                                  ; GAME OVER screen
+VDC_STATE_INTRO    EQU 3                                  ; level intro (LEVEL 1-1 + dispname)
+VDC_STATE_PREVIEW  EQU 4                                  ; sparkle wave вдоль track перед спавном
+VDC_STATE_CLOSING  EQU 5                                  ; череп закрывается (frame 11→1)
+VDC_INTRO_TICKS    EQU 240                                ; ~4 сек @ 60Hz
+VDC_PREVIEW_TICKS  EQU 193                                ; (NumSamples+trail)/SPEED = (2774+112)/15 ≈ 192.4 → закрытие сразу после влёта последней звезды
+VDC_CLOSING_TICKS  EQU 22                                 ; ~0.37 сек closing anim (2 ticks per frame)
 
 ; ============================================================================
 ; VDC_Init — обнулить state, Slots[] = GAP_STOP. Должен быть вызван 1 раз
@@ -60,10 +73,10 @@ VDC_Init:
                 LD   (HL), VDC_GAP_STOP
                 LDIR
 
-                ; Offsets, Shot2 — все 0
+                ; Offsets, Shot2, ExplodeFrame, ExplodeMarker — все 0
                 LD   HL, VDC_Offsets
                 LD   DE, VDC_Offsets + 1
-                LD   BC, (VDC_MAX_SLOTS * 2) - 1
+                LD   BC, (VDC_MAX_SLOTS * 4) - 1
                 LD   (HL), 0
                 LDIR
 
@@ -76,10 +89,17 @@ VDC_Init:
                 LD   (VDC_GapStepCnt),         A
                 LD   (VDC_BallsSpawned),       A
                 LD   (VDC_MatchScanIdx),       A
-                LD   (VDC_GameState),          A
                 LD   (VDC_GameOverTick),       A
-                INC  A
+                LD   A, 11                            ; KzFrame=11 (skull mouth wide open) during intro/preview
                 LD   (VDC_KzFrame),            A
+                ; --- Intro state (3) → Preview (4) → Closing (5) → Play (0) ---
+                ; INTRO: LEVEL 1-1 + SPIRAL OF DOOM с fade-out
+                ; PREVIEW: sparkle wave вдоль track, череп OPEN
+                ; PLAY: транзишн КзFrame=1 (closed), шары спавнятся
+                LD   A, VDC_STATE_INTRO
+                LD   (VDC_GameState),          A
+                LD   A, VDC_INTRO_TICKS
+                LD   (VDC_IntroTick),          A
 
                 ; Запомнить TRACK_NUM_SLOTS (= NumSamples / CELL_SIZE - 1) —
                 ; используется как cap для HSA. NumSamples лежит в TrackData word.
@@ -158,10 +178,56 @@ ReadRTCSeconds:
 ; ============================================================================
 VDC_Update:
                 LD   A, (VDC_GameState)
-                CP   1
+                CP   VDC_STATE_INTRO
+                JR   Z, .upd_intro
+                CP   VDC_STATE_PREVIEW
+                JR   Z, .upd_preview
+                CP   VDC_STATE_CLOSING
+                JR   Z, .upd_closing
+                CP   VDC_STATE_ABSORB
                 JP   Z, VDC_UpdateAbsorb
-                CP   2
+                CP   VDC_STATE_GAMEOVER
                 RET  Z
+                JR   .upd_play
+.upd_intro:     ; tick countdown, на 0 → PREVIEW
+                LD   A, (VDC_IntroTick)
+                DEC  A
+                LD   (VDC_IntroTick), A
+                RET  NZ
+                LD   A, VDC_STATE_PREVIEW
+                LD   (VDC_GameState), A
+                LD   A, VDC_PREVIEW_TICKS
+                LD   (VDC_PreviewTick), A
+                RET
+.upd_preview:   ; tick countdown, на 0 → CLOSING
+                LD   A, (VDC_PreviewTick)
+                DEC  A
+                LD   (VDC_PreviewTick), A
+                RET  NZ
+                LD   A, VDC_STATE_CLOSING
+                LD   (VDC_GameState), A
+                LD   A, VDC_CLOSING_TICKS
+                LD   (VDC_KzCloseTick), A
+                RET
+.upd_closing:   ; анимация KzFrame 11→1 за 22 ticks (2 tick/frame), затем PLAY.
+                LD   A, (VDC_KzCloseTick)
+                SRL  A                                ; A = tick / 2 (0..11)
+                INC  A                                ; A = 1 + tick/2 (1..12)
+                CP   12
+                JR   C, .upd_closing_set
+                LD   A, 11
+.upd_closing_set:
+                LD   (VDC_KzFrame), A
+                LD   A, (VDC_KzCloseTick)
+                DEC  A
+                LD   (VDC_KzCloseTick), A
+                RET  NZ
+                XOR  A                                ; state = PLAY
+                LD   (VDC_GameState), A
+                INC  A                                ; KzFrame = 1 (closed default)
+                LD   (VDC_KzFrame), A
+                RET
+.upd_play:
                 CALL VDC_CheckKillzone
                 LD   A, (VDC_BallsSpawned)
                 CP   VDC_LEVEL_START_BALLS
@@ -456,6 +522,44 @@ VDC_MoveChain:
 ; После — ScanForNewMatch + UpdateStall.
 ; ============================================================================
 VDC_AnimateChain:
+                ; --- 0. Match-3 explosion animation.
+                LD   A, (VDC_SlotsLen)
+                OR   A
+                JR   Z, .ac_after_explode
+                LD   B, A
+                LD   HL, VDC_ExplodeFrame
+.ac_explode:
+                LD   A, (HL)
+                OR   A
+                JR   Z, .ac_explode_next
+                INC  A
+                CP   VDC_EXPLOSION_FRAMES + 1
+                JR   C, .ac_explode_save
+                XOR  A
+                LD   (HL), A
+                PUSH HL
+                PUSH BC
+                LD   A, (VDC_SlotsLen)
+                SUB  B
+                LD   H, 0 : LD L, A
+                LD   DE, VDC_ExplodeMarker
+                ADD  HL, DE
+                LD   C, (HL)
+                LD   A, (VDC_SlotsLen)
+                SUB  B
+                LD   H, 0 : LD L, A
+                LD   DE, VDC_Slots
+                ADD  HL, DE
+                LD   (HL), C
+                POP  BC
+                POP  HL
+                JR   .ac_explode_next
+.ac_explode_save:
+                LD   (HL), A
+.ac_explode_next:
+                INC  HL
+                DJNZ .ac_explode
+.ac_after_explode:
                 ; --- 1. decay offsets (rollback_counter не реализован — нет
                 ; кода который бы его выставлял; декай идёт сразу к 0).
                 LD   A, (VDC_SlotsLen)
@@ -518,7 +622,15 @@ VDC_DetectMatch3:
                 CP   (HL)
                 JP   NC, .dm3_no                       ; idx>=len
 
+                LD   H, 0 : LD L, A
+                LD   DE, VDC_ExplodeFrame
+                ADD  HL, DE
+                LD   A, (HL)
+                OR   A
+                JP   NZ, .dm3_no                       ; already exploding
+
                 ; color = Slots[idx]
+                LD   A, (VDC_TmpInsIdx)
                 LD   H, 0 : LD L, A
                 LD   DE, VDC_Slots
                 ADD  HL, DE
@@ -535,6 +647,14 @@ VDC_DetectMatch3:
                 OR   A
                 JR   Z, .dm3_l_done
                 DEC  A                                 ; A = B-1
+                LD   H, 0 : LD L, A
+                LD   DE, VDC_ExplodeFrame
+                ADD  HL, DE
+                LD   A, (HL)
+                OR   A
+                JR   NZ, .dm3_l_done
+                LD   A, B
+                DEC  A
                 LD   H, 0 : LD L, A
                 LD   DE, VDC_Slots
                 ADD  HL, DE
@@ -577,6 +697,14 @@ VDC_DetectMatch3:
                 LD   HL, VDC_SlotsLen
                 CP   (HL)
                 JR   NC, .dm3_r_done
+                LD   H, 0 : LD L, A
+                LD   DE, VDC_ExplodeFrame
+                ADD  HL, DE
+                LD   A, (HL)
+                OR   A
+                JR   NZ, .dm3_r_done
+                LD   A, C
+                INC  A
                 LD   H, 0 : LD L, A
                 LD   DE, VDC_Slots
                 ADD  HL, DE
@@ -652,6 +780,14 @@ VDC_CheckMatch3:
                 LD   A, (VDC_TmpML)
                 DEC  A
                 LD   H, 0 : LD L, A
+                LD   DE, VDC_ExplodeFrame
+                ADD  HL, DE
+                LD   A, (HL)
+                OR   A
+                JR   NZ, .m3_have_marker
+                LD   A, (VDC_TmpML)
+                DEC  A
+                LD   H, 0 : LD L, A
                 LD   DE, VDC_Slots
                 ADD  HL, DE
                 LD   C, (HL)                           ; C = Slots[lb-1]
@@ -659,6 +795,14 @@ VDC_CheckMatch3:
                 CP   VDC_NUM_COLORS
                 JR   NC, .m3_have_marker               ; gap → STOP
 
+                LD   A, (VDC_TmpMR)
+                INC  A
+                LD   H, 0 : LD L, A
+                LD   DE, VDC_ExplodeFrame
+                ADD  HL, DE
+                LD   A, (HL)
+                OR   A
+                JR   NZ, .m3_have_marker
                 LD   A, (VDC_TmpMR)
                 INC  A
                 LD   H, 0 : LD L, A
@@ -671,18 +815,31 @@ VDC_CheckMatch3:
                 JR   NZ, .m3_have_marker
                 LD   B, VDC_GAP_CASCADE
 .m3_have_marker:
-                ; Slots[lb..rb] = B, Offsets[lb..rb] = 0, Shot2[lb..rb] = 0
+                ; ExplodeFrame[lb..rb] = 1, ExplodeMarker[lb..rb] = B.
+                ; Slots stay as colors until VDC_AnimateChain finalizes them.
                 LD   A, (VDC_TmpML)
                 LD   H, 0 : LD L, A
-                LD   DE, VDC_Slots
+                LD   DE, VDC_ExplodeFrame
                 ADD  HL, DE
                 LD   A, (VDC_TmpMCount)
                 LD   C, A
-.m3_set_slots:
+.m3_set_expl_frames:
+                LD   (HL), 1
+                INC  HL
+                DEC  C
+                JR   NZ, .m3_set_expl_frames
+
+                LD   A, (VDC_TmpML)
+                LD   H, 0 : LD L, A
+                LD   DE, VDC_ExplodeMarker
+                ADD  HL, DE
+                LD   A, (VDC_TmpMCount)
+                LD   C, A
+.m3_set_expl_markers:
                 LD   (HL), B
                 INC  HL
                 DEC  C
-                JR   NZ, .m3_set_slots
+                JR   NZ, .m3_set_expl_markers
 
                 LD   A, (VDC_TmpML)
                 LD   H, 0 : LD L, A
@@ -729,14 +886,10 @@ VDC_CheckMatch3:
                 ADD  HL, DE
                 LD   (HL), 1
 .m3_no_right_shot2:
-                ; Instant gap_step — иначе chain motion в waiting period (до hsub=0)
-                ; двигает head вперёд, а должен стоять и ждать хвост. С первым
-                ; instant gap_step head получает +CS offset compensation сразу
-                ; → stationary до конца decay phase. Остальные markers ждут
-                ; следующего GAP_STEP_FRAMES (без hsub=0 constraint).
                 XOR  A
                 LD   (VDC_GapStepCnt), A
-                CALL VDC_DoGapStep
+                LD   A, VDC_EXPLOSION_FRAMES
+                LD   (VDC_ChainFreezeCnt), A
                 LD   A, 1
                 RET
 .m3_no:
@@ -869,7 +1022,7 @@ VDC_RemoveSlotAt:
                 LD   A, B
                 SUB  C
                 DEC  A                                 ; count = len - idx - 1
-                JR   Z, .rsa_no_shift                  ; idx == len-1 → ничего не двигать
+                JP   Z, .rsa_no_shift                  ; idx == len-1 -> nothing to shift
                 LD   E, A                              ; E = count
 
                 ; Shift Slots[idx+1..len-1] → Slots[idx..len-2]
@@ -910,6 +1063,40 @@ VDC_RemoveSlotAt:
                 INC  A
                 LD   H, 0 : LD L, A
                 LD   DE, VDC_Shot2
+                ADD  HL, DE
+                LD   D, H : LD E, L
+                DEC  DE
+                LD   A, (VDC_SlotsLen)
+                LD   B, A
+                LD   A, (VDC_TmpGapIdx)
+                LD   C, A
+                LD   A, B
+                SUB  C
+                DEC  A
+                LD   C, A : LD B, 0
+                LDIR
+
+                LD   A, (VDC_TmpGapIdx)
+                INC  A
+                LD   H, 0 : LD L, A
+                LD   DE, VDC_ExplodeFrame
+                ADD  HL, DE
+                LD   D, H : LD E, L
+                DEC  DE
+                LD   A, (VDC_SlotsLen)
+                LD   B, A
+                LD   A, (VDC_TmpGapIdx)
+                LD   C, A
+                LD   A, B
+                SUB  C
+                DEC  A
+                LD   C, A : LD B, 0
+                LDIR
+
+                LD   A, (VDC_TmpGapIdx)
+                INC  A
+                LD   H, 0 : LD L, A
+                LD   DE, VDC_ExplodeMarker
                 ADD  HL, DE
                 LD   D, H : LD E, L
                 DEC  DE
@@ -1230,6 +1417,10 @@ VDC_InsertAt:
 
                 ; Shot2
                 CALL VDC_ShiftRight_Shot2
+
+                ; Explosion state follows slot ownership.
+                CALL VDC_ShiftRight_ExplodeFrame
+                CALL VDC_ShiftRight_ExplodeMarker
 .ia_no_shift:
                 ; --- Slots[idx] = color, Offsets[idx] = new_off, Shot2[idx]=1 ---
                 LD   A, (VDC_TmpInsIdx)
@@ -1251,6 +1442,18 @@ VDC_InsertAt:
                 LD   DE, VDC_Shot2
                 ADD  HL, DE
                 LD   (HL), 1
+
+                LD   A, (VDC_TmpInsIdx)
+                LD   H, 0 : LD L, A
+                LD   DE, VDC_ExplodeFrame
+                ADD  HL, DE
+                LD   (HL), 0
+
+                LD   A, (VDC_TmpInsIdx)
+                LD   H, 0 : LD L, A
+                LD   DE, VDC_ExplodeMarker
+                ADD  HL, DE
+                LD   (HL), 0
 
                 ; SlotsLen++
                 LD   HL, VDC_SlotsLen
@@ -1357,6 +1560,12 @@ VDC_ShiftRight_Offsets:
                 JR   VDC_ShiftRight_Common
 VDC_ShiftRight_Shot2:
                 LD   IX, VDC_Shot2
+                JR   VDC_ShiftRight_Common
+VDC_ShiftRight_ExplodeFrame:
+                LD   IX, VDC_ExplodeFrame
+                JR   VDC_ShiftRight_Common
+VDC_ShiftRight_ExplodeMarker:
+                LD   IX, VDC_ExplodeMarker
                 ; fallthrough
 VDC_ShiftRight_Common:
                 ; src = Array + (len-1), dst = src+1, count = len - idx
@@ -1438,6 +1647,8 @@ VDC_RandomColor:
 VDC_Slots:        DS VDC_MAX_SLOTS
 VDC_Offsets:      DS VDC_MAX_SLOTS
 VDC_Shot2:        DS VDC_MAX_SLOTS
+VDC_ExplodeFrame: DS VDC_MAX_SLOTS
+VDC_ExplodeMarker: DS VDC_MAX_SLOTS
 
 VDC_HSA:           DEFB 0
 VDC_HSub:          DEFB 0
@@ -1447,8 +1658,11 @@ VDC_GapStepCnt:    DEFB 0
 VDC_BallsSpawned:  DEFB 0
 VDC_MatchScanIdx:  DEFB 0
 VDC_TrackNumSlots: DEFW 0
-VDC_GameState:     DEFB 0   ; 0=play, 1=absorb into killzone, 2=game over
+VDC_GameState:     DEFB 0   ; 0=play, 1=absorb, 2=game over, 3=intro, 4=preview, 5=closing
 VDC_GameOverTick:  DEFB 0
+VDC_IntroTick:     DEFB 0   ; intro countdown (frames until state→PREVIEW)
+VDC_PreviewTick:   DEFB 0   ; preview countdown (frames until state→CLOSING)
+VDC_KzCloseTick:   DEFB 0   ; closing countdown (skull 11→1 animation)
 VDC_KzFrame:       DEFB 0
 VDC_KzEndSub:      DEFB 0
 VDC_HeadAbsorbAlpha: DEFB 255 ; head-ball fade alpha во время state=1 (255→191→127→63→remove)

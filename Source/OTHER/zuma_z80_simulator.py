@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """zuma_z80_simulator.py — Z80 sandbox для отладки VDC chain logic.
 
-Загружает скомпилированные TSLib.bin (#1000) + Core.bin (#6000) в flat 64KB,
+Загружает TSLib.bin (#1000) + Core.bin/main0 (#5C00) + main1_play.bin (#C000) в flat 64KB,
 парсит zuma.sym для адресов VDC_*, даёт API:
 
   sim = ZumaZ80Sim(project_root)
@@ -67,8 +67,12 @@ class ZumaZ80Sim:
         self.cpu.set_input_callback(self._on_in)
         self.cpu.set_output_callback(self._on_out)
 
-        self._load_bin(os.path.join(project_root, 'TSLib.bin'), 0x1000)
-        self._load_bin(os.path.join(project_root, 'Core.bin'),  0x6000)
+        self._load_bin(os.path.join(project_root, 'TSLib.bin'),       0x1000)
+        self._load_bin(os.path.join(project_root, 'Core.bin'),        0x5C00)
+        # main1_play.bin = slot 3 page #04, ORG #C000. Симулятор плоский, оба
+        # сегмента одновременно видны. Real Z80 видит main1 через slot 3 mapping
+        # после Init_Core (SetPage3 #04).
+        self._load_bin(os.path.join(project_root, 'main1_play.bin'), 0xC000)
 
         # Stack как в spgbld_vdac2.ini: Stack=0x40F2
         self.cpu.sp = 0x40F2

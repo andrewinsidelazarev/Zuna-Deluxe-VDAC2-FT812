@@ -104,7 +104,14 @@ Frog_Update:      LD   A, (ZL_MouseMoved)
                   DEC  A
                   LD   (ZL_MotionGrace), A             ; tick down
 .fu_compute:      CALL Frog_ComputeAngle
-.fu_skip:         CALL Frog_RefilterCurrent            ; check & replace BallColor/NextBallColor если не в mask
+.fu_skip:         ; Refilter — это re-randomization которая дёргает LFSR seed и может
+                  ; спонтанно менять Frog_BallColor/NextBallColor. Только в PLAY!
+                  ; INTRO/PREVIEW/CLOSING/ABSORB/GAMEOVER → колайс жабы остаются стабильные.
+                  LD   A, (VDC_GameState)
+                  OR   A
+                  JR   NZ, .fu_skip_refilter
+                  CALL Frog_RefilterCurrent
+.fu_skip_refilter:
                   CALL Frog_HandleMouse
                   JP   Frog_TickRecoil
 
@@ -695,16 +702,17 @@ Frog_DrawBallNow:
                   ADD  HL, DE
                   LD   (Frog_TmpY), HL
 
-                  ; Dual handle. B-clobber fix 2026-05-18: re-read color из памяти после макросов.
+                  ; PALETTED4444 dual handle.
                   LD   A, (Frog_BallColor)
                   CP   4
                   LD   A, 0
                   JR   C, .fbm_h
                   LD   A, 9
 .fbm_h:           CALL ZL_EmitBallHandle
-                  FT_BitmapLayout FT_ARGB4, FROG_BALL_W * 2, FROG_BALL_W
+                  FT_PaletteSource BALLS_PALETTE_RAMG
+                  FT_BitmapLayout FT_PALETTED4444, FROG_BALL_W, FROG_BALL_W
                   FT_BitmapSize   FT_BILINEAR, FT_BORDER, FT_BORDER, FROG_BALL_DST_W, FROG_BALL_DST_W
-                  LD   A, (Frog_BallColor)               ; re-read (macros clobber B/C/D/E)
+                  LD   A, (Frog_BallColor)
                   AND  3
                   ADD  A, A : ADD A, A : ADD A, A : ADD A, A : ADD A, A    ; *32 = local cell
                   CALL FT.Coprocessor.Cell
@@ -743,16 +751,17 @@ Frog_DrawNextBall:
                   ADD  HL, DE
                   LD   (Frog_TmpY), HL
 
-                  ; Dual handle. B-clobber fix 2026-05-18: re-read color из памяти после макросов.
+                  ; PALETTED4444 dual handle.
                   LD   A, (Frog_NextBallColor)
                   CP   4
                   LD   A, 0
                   JR   C, .fbn_h
                   LD   A, 9
 .fbn_h:           CALL ZL_EmitBallHandle
-                  FT_BitmapLayout FT_ARGB4, FROG_BALL_W * 2, FROG_BALL_W
+                  FT_PaletteSource BALLS_PALETTE_RAMG
+                  FT_BitmapLayout FT_PALETTED4444, FROG_BALL_W, FROG_BALL_W
                   FT_BitmapSize   FT_BILINEAR, FT_BORDER, FT_BORDER, FROG_BALL_DST_W, FROG_BALL_DST_W
-                  LD   A, (Frog_NextBallColor)           ; re-read (macros clobber B/C/D/E)
+                  LD   A, (Frog_NextBallColor)
                   AND  3
                   ADD  A, A : ADD A, A : ADD A, A : ADD A, A : ADD A, A    ; *32 = local cell
                   CALL FT.Coprocessor.Cell

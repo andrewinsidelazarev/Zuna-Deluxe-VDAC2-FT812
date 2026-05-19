@@ -31,10 +31,15 @@ Bullet_Init:        XOR  A
 ; angle из Frog_Angle, spawn position из Frog_PosStartX/Y (центр лягушки).
 ; Velocity = BULLET_SPEED * (cos(angle), sin(angle)) / 128.
 ; ----------------------------------------------------------------------------
-Bullet_Spawn:       LD   A, (Bullet_Active)
+Bullet_Spawn:       ; Разрешено стрелять только в PLAY (=0): не во время INTRO/PREVIEW/CLOSING,
+                    ; ABSORB (шары улетают в killzone — стрельба бессмысленна), GAMEOVER.
+                    LD   A, (VDC_GameState)
+                    OR   A
+                    JR   NZ, .bs_block
+                    LD   A, (Bullet_Active)
                     OR   A
                     JR   Z, .bs_free
-                    SCF
+.bs_block:          SCF
                     RET
 .bs_free:
                     RET  NZ                           ; уже в полёте — single bullet MVP
@@ -132,6 +137,13 @@ Bullet_CheckCollision:
                     LD   C, 0                          ; C = i
 .bcc_loop:          PUSH BC
                     LD   A, C
+                    LD   H, 0 : LD L, A
+                    LD   DE, VDC_ExplodeFrame
+                    ADD  HL, DE
+                    LD   A, (HL)
+                    OR   A
+                    JR   NZ, .bcc_skip
+                    LD   A, C
                     CALL VDC_SlotPos                   ; BC=X, DE=Y, CF=skip
                     JR   C, .bcc_skip
 
@@ -225,11 +237,19 @@ Bullet_HemisphereTarget:
                     DEC  A
 .ht_prev_loop:      LD   (Bullet_TmpScan), A
                     LD   H, 0 : LD L, A
+                    LD   DE, VDC_ExplodeFrame
+                    ADD  HL, DE
+                    LD   A, (HL)
+                    OR   A
+                    JR   NZ, .ht_prev_continue
+                    LD   A, (Bullet_TmpScan)
+                    LD   H, 0 : LD L, A
                     LD   DE, VDC_Slots
                     ADD  HL, DE
                     LD   A, (HL)
                     CP   VDC_NUM_COLORS
                     JR   C, .ht_prev_found
+.ht_prev_continue:
                     LD   A, (Bullet_TmpScan)
                     OR   A
                     JR   Z, .ht_skip_prev              ; дошли до 0
@@ -252,11 +272,19 @@ Bullet_HemisphereTarget:
                     JR   Z, .ht_decide
 .ht_next_loop:      LD   A, (Bullet_TmpScan)
                     LD   H, 0 : LD L, A
+                    LD   DE, VDC_ExplodeFrame
+                    ADD  HL, DE
+                    LD   A, (HL)
+                    OR   A
+                    JR   NZ, .ht_next_continue
+                    LD   A, (Bullet_TmpScan)
+                    LD   H, 0 : LD L, A
                     LD   DE, VDC_Slots
                     ADD  HL, DE
                     LD   A, (HL)
                     CP   VDC_NUM_COLORS
                     JR   C, .ht_next_found
+.ht_next_continue:
                     LD   A, (Bullet_TmpScan)
                     INC  A
                     LD   (Bullet_TmpScan), A
@@ -371,20 +399,19 @@ Bullet_Draw:        LD   A, (Bullet_Active)
                     CALL ZL_EmitLoadId
                     CALL ZL_EmitSetMatrix
 
-                    ; Dual handle 6-color через helper. color<4: handle 0; color>=4: handle 9.
-                    ; B-clobber fix 2026-05-18: re-read Bullet_Color из памяти после
-                    ; макросов FT_BitmapLayout/Size (которые клобают BCDE), а не из B.
+                    ; PALETTED4444 dual handle (color<4 → handle 0, color>=4 → handle 9).
                     LD   A, (Bullet_Color)
                     CP   4
                     LD   A, 0
                     JR   C, .bullet_h
                     LD   A, 9
 .bullet_h:          CALL ZL_EmitBallHandle
-                    FT_BitmapLayout FT_ARGB4, 32 * 2, 32
+                    FT_PaletteSource BALLS_PALETTE_RAMG
+                    FT_BitmapLayout FT_PALETTED4444, 32, 32
                     FT_BitmapSize   FT_BILINEAR, FT_BORDER, FT_BORDER, 32, 32
-                    LD   A, (Bullet_Color)                 ; re-read color (B clobbered macros)
-                    AND  3                                 ; local color (0..3)
-                    ADD  A, A : ADD A, A : ADD A, A : ADD A, A : ADD A, A   ; *32 = local cell
+                    LD   A, (Bullet_Color)                ; re-read (macros clobber B/C/D/E)
+                    AND  3                                ; local color (0..3)
+                    ADD  A, A : ADD A, A : ADD A, A : ADD A, A : ADD A, A   ; *32 = local cell (spin 0)
                     CALL FT.Coprocessor.Cell
                     ; Vertex2f((X - 28) * 16, (Y - 28) * 16)
                     LD   HL, (Bullet_X)

@@ -124,11 +124,14 @@ ZL_SPIN_MASK               EQU ZL_ATLAS_PHASES - 1
 ; bucket = (tangent + step/2) / step mod N. step = 256/N BRAD.
 ZL_BUCKETS      EQU 32                                ; (dead-code legacy; per-ball replaced bucket loop 2026-05-18)
 
-; --- Dual BITMAP_HANDLE для 6 цветов (FT_Cell mask 0x7F → cells 128+ wrap'ятся).
-; Handle 0 source = BALLS_RAMG_ADDR (colors 0-3, cells 0..127).
-; Handle 9 source = BALLS_RAMG_ADDR + 128 * cell_stride (colors 4-5, cells 0..63).
-BALLS_HANDLE9_OFFSET EQU 128 * ZL_BALL_W * 2 * ZL_BALL_H
-
+; --- PALETTED4444 dual handle: 6×32 = 192 cells > 128 → split в 2 handle.
+; Handle 0 source = BALLS_RAMG_ADDR (cells 0..127).
+; Handle 9 source = BALLS_RAMG_ADDR + 128 × ZL_BALL_W × ZL_BALL_H (cells 0..63 = global 128..191).
+BALLS_HANDLE9_OFFSET EQU 128 * ZL_BALL_W * ZL_BALL_H        ; PALETTED = 1 byte/pixel cell
+ZL_DESTROY_HANDLE EQU 10
+ZL_DESTROY_W      EQU 64
+ZL_DESTROY_H      EQU 64
+ZL_DESTROY_HALF_DELTA EQU ((ZL_DESTROY_W - ZL_BALL_W) / 2) * 16
 ZL_BG_W         EQU 640                               ; DXT1_L4_RGB565 decoded output W
 ZL_BG_H         EQU 480                               ; DXT1_L4_RGB565 decoded output H
 ZL_BG_RAMG_ADDR EQU #010000                           ; raw = c0 + c1 + l2 in RAM_G
@@ -234,32 +237,29 @@ ZL_DrawFrame:
                 CALL Frog_DrawNextBall                 ; на спине, pos-28·dir
                 CALL Frog_DrawFaceOverlay              ; face overlay поверх всего
 
-                CALL Bullet_Draw                       ; летящий шар (если активен)
+                CALL Bullet_Draw                       ; flying ball, if active
 
                 ; ============================================================
-                ; Цепь шаров — DUAL HANDLE для обхода CELL>=128 wrap (FT812 limit).
-                ;   Handle 0: colors 0-3 (cells 0..127),  source = #050000
-                ;   Handle 9: colors 4-5 (cells 0..63),   source = #090000 (BALLS+0x40000)
-                ; Каждый цвет = 32 phases × 32×32 ARGB4 (stride 64, cell stride 2048).
-                ; Per-ball выбор handle по биту 7 global cell. После draw chain handle 0
-                ; остаётся выбранным (нужно для cursor/restore).
+                ; Цепь шаров — PALETTED4444 dual handle (cell<128 handle 0, ≥128 handle 9).
+                ; Palette ARGB4 (256 × 2 = 512 байт) в FT_RAM_G #080000.
+                ; FT_PaletteSource устанавливает указатель для текущей primitive.
                 ; ============================================================
+                FT_PaletteSource BALLS_PALETTE_RAMG
                 LD   A, 9
                 CALL ZL_EmitBallHandle
-                FT_BitmapLayout FT_ARGB4, ZL_BALL_W * 2, ZL_BALL_H
+                FT_BitmapLayout FT_PALETTED4444, ZL_BALL_W, ZL_BALL_H
                 FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, ZL_BALL_W, ZL_BALL_H
                 XOR  A
                 CALL ZL_EmitBallHandle
-                FT_BitmapLayout FT_ARGB4, ZL_BALL_W * 2, ZL_BALL_H
+                FT_BitmapLayout FT_PALETTED4444, ZL_BALL_W, ZL_BALL_H
                 FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, ZL_BALL_W, ZL_BALL_H
 
-                ; --- VDC chain rendering: group-by-tangent (32 buckets × 11.25°).
+                ; --- VDC chain rendering: per-ball tangent + grouped matrix emit.
                 ; Algorithm:
-                ;   Pre-pass: для каждого шара кэшируем (bucket, cell, Vx, Vy) — 6 байт.
-                ;   Outer (32 buckets): emit cmd_rotate(bucket*8) + setmatrix.
-                ;   Inner: scan кэш, emit Cell + Vertex2f для шаров текущего бакета.
-                ; Снижение cmd_rotate с N (per ball) до 32 (per frame), но с меньшим
-                ; угловым шагом, чтобы шары не дёргались на изгибах трека.
+                ;   Pre-pass: cache stable tangent, cell, Vx, Vy for each ball.
+                ;   Draw: quantize tangent to 8 BRAD and emit matrix only when it
+                ;   differs from the previous visible ball. This keeps per-slot
+                ;   tangent stability without the old bucket segment flicker.
                 LD   A, (VDC_SlotsLen)
                 LD   (ZL_BallCount), A
                 OR   A
@@ -304,7 +304,7 @@ ZL_DrawFrame:
                 LD   (ZL_TmpFrame), A
                 ; --- stable raw tangent (per-ball matrix замена bucket-loop 2026-05-18) ---
                 ; Hysteresis: меняем сохранённый tangent только если raw отличается на
-                ; ≥ THR (3 BRAD ≈ 4.2°). State address = #4100 + slot_idx (LOW=0 заведомо
+                ; ≥ THR (8 BRAD = bucket width). State address = #4100 + slot_idx (LOW=0 заведомо
                 ; → используем `LD H, #41 : LD L, slot` без ADD HL, DE — это сохраняет D).
                 LD   A, (VDC_LastTangent)
                 LD   D, A                             ; D = raw tangent (preserved)
@@ -380,13 +380,18 @@ ZL_DrawFrame:
 .ChainDraw:     LD   A, (ZL_BallCount)
                 OR   A
                 JP   Z, .ChainEnd
-                ; Init last-emitted-tangent sentinel (0x01 — never matches multiple-of-8).
+                ; Init sentinels: tangent (0x01 — never matches mod-8) и color (#FF — force first emit).
                 LD   A, #01
                 LD   (ZL_TmpLastTangent), A
+                LD   A, #FF
+                LD   (ZL_TmpLastColor), A
                 LD   A, (ZL_BallCount)
                 LD   B, A
+                LD   C, 0
                 LD   IX, ZL_BALL_CACHE_ADDR
-.PerBallLoop:   LD   A, (IX+1)                        ; cell (+1) — 0xFF = gap marker
+.PerBallLoop:   LD   A, C
+                LD   (ZL_TmpSlotIdx), A
+                LD   A, (IX+1)                        ; cell (+1) — 0xFF = gap marker
                 CP   #FF
                 JP   Z, .PBSkip                       ; (JR out of range — body grew)
                 PUSH BC
@@ -411,16 +416,38 @@ ZL_DrawFrame:
                 CALL ZL_EmitSetMatrix
 .PBNoMatrix:
                 ; --- dual handle: cell<128 → handle 0; cell>=128 → handle 9 ---
-                LD   A, (IX+1)                        ; cell
-                AND  #80                              ; bit 7 → 0 или 0x80
+                LD   A, (IX+1)                        ; cell (= color*32 + spin)
+                AND  #80
                 LD   A, 0
-                JR   Z, .PBHSet                       ; handle 0
-                LD   A, 9                             ; handle 9
+                JR   Z, .PBHSet
+                LD   A, 9
 .PBHSet:        CALL ZL_EmitBitmapHandle              ; clobbers BCDE
-                LD   A, (IX+1)                        ; re-read cell (IX preserved across helper)
+                LD   A, (IX+1)
                 AND  #7F                              ; local cell within handle
                 CALL FT.Coprocessor.Cell
+                ; Match-3 visual phase: draw the normal ball with hardware fade-out.
+                ; ColorA is persistent, so restore 255 immediately after this vertex.
+                LD   A, (ZL_TmpSlotIdx)
+                LD   H, 0 : LD L, A
+                LD   DE, VDC_ExplodeFrame
+                ADD  HL, DE
+                LD   A, (HL)
+                OR   A
+                JR   Z, .PBCheckHeadAbsorb
+                ADD  A, A : ADD A, A : ADD A, A : ADD A, A   ; frame * 16
+                LD   E, A
+                LD   A, 255
+                SUB  E
+                LD   E, A
+                CALL FT.Coprocessor.ColorA
+                LD   C, (IX+2) : LD B, (IX+3)
+                LD   E, (IX+4) : LD D, (IX+5)
+                CALL FT.Coprocessor.Vertex2f
+                LD   E, 255
+                CALL FT.Coprocessor.ColorA
+                JR   .PBDrawDone
                 ; ── HEAD ABSORB ALPHA WRAP ── (state=1 И slot 0)
+.PBCheckHeadAbsorb:
                 LD   A, (VDC_GameState)
                 CP   1
                 JR   NZ, .PBNormalDraw
@@ -444,14 +471,19 @@ ZL_DrawFrame:
                 LD   E, (IX+4) : LD D, (IX+5)         ; DE = Vy
                 CALL FT.Coprocessor.Vertex2f
 .PBDrawDone:    POP  BC
-.PBSkip:        LD   DE, 6
+.PBSkip:        INC  C
+                LD   DE, 6
                 ADD  IX, DE                            ; next record
                 DEC  B
                 JP   NZ, .PerBallLoop
+                CALL ZL_DrawExplosions
 .ChainEnd:
                 ; --- Reset BITMAP_TRANSFORM к identity для cursor + следующих кадров ---
                 CALL ZL_EmitLoadId
                 CALL ZL_EmitSetMatrix
+
+                ; --- Frame strips PALETTED4444 (рисуем ПОВЕРХ playfield, ПОД курсором) ---
+                CALL DrawFrameStrips
 
                 ; ============================================================
                 ; Cursor — деревянная стрелка 48×48 ARGB4 (handle 7).
@@ -491,8 +523,14 @@ ZL_DrawFrame:
                 CALL FT.Coprocessor.Vertex2f
 
                 LD   A, (VDC_GameState)
-                CP   2
+                CP   VDC_STATE_GAMEOVER
                 CALL Z, DrawGameOverText
+                LD   A, (VDC_GameState)
+                CP   VDC_STATE_INTRO
+                CALL Z, DrawIntroText
+                LD   A, (VDC_GameState)
+                CP   VDC_STATE_PREVIEW
+                CALL Z, DrawPreviewSparkles
 
                 ; ============================================================
                 ; SPI/GPU load indicator (temporary):
@@ -517,8 +555,8 @@ ZL_EmitBitmapHandle:
                 JP   FT.Coprocessor.Command_BCDE
 
 ; ZL_EmitBallHandle: setup ball atlas — emit BITMAP_HANDLE + BITMAP_SOURCE.
-;   In:  A = 0 (handle 0, colors 0-3) или 9 (handle 9, colors 4-5).
-;   Clobbers AF, BC, DE, HL. Caller follows up с BITMAP_LAYOUT/SIZE если нужно.
+;   In:  A = 0 (handle 0, cells 0..127) или 9 (handle 9, cells 128..191).
+;   Clobbers AF, BC, DE, HL.
 ZL_EmitBallHandle:
                 PUSH AF
                 CALL ZL_EmitBitmapHandle
@@ -531,6 +569,100 @@ ZL_EmitBallHandle:
 .ebh_src0:      LD   DE, BALLS_RAMG_ADDR & #FFFF
                 LD   BC, ((BALLS_RAMG_ADDR >> 16) & #FF) | (#01 << 8)
                 JP   FT.Coprocessor.Command_BCDE
+
+; ZL_EmitBallColorRGB: emit COLOR_RGB(table[A]) для tinting L8 ball.
+;   In: A = color index (0..5). Out: nothing. Clobbers AF, BC, DE, HL.
+ZL_EmitBallColorRGB:
+                AND  #07                              ; clamp 0..7
+                LD   E, A
+                ADD  A, A                             ; *2
+                ADD  A, E                             ; *3
+                LD   E, A : LD D, 0
+                LD   HL, ZL_BallColorRGB
+                ADD  HL, DE                            ; HL → entry
+                LD   C, (HL) : INC HL                 ; R
+                LD   D, (HL) : INC HL                 ; G — wait, ColorRGB ждёт C=R, D=G, E=B.
+                LD   E, (HL)                          ; B
+                ; FT.Coprocessor.ColorRGB: in C=R, D=G, E=B → emits COLOR_RGB
+                JP   FT.Coprocessor.ColorRGB
+
+ZL_BallColorRGB:
+                ; 6 цветов: classic Zuma. Tint значения >255 насыщения учитывают
+                ; что silver source имеет L_max ~230 (output = tint × L / 255).
+                DEFB 130, 200, 255           ; 0 BLUE  (light sky blue)
+                DEFB 60, 255, 80             ; 1 GREEN (vivid)
+                DEFB 255, 70, 60             ; 2 RED
+                DEFB 255, 230, 30            ; 3 YELLOW
+                DEFB 255, 90, 240            ; 4 PURPLE/PINK
+                DEFB 255, 255, 255           ; 5 WHITE
+
+; ZL_DrawExplosions — separate pass for match-3 destroy sprites.
+; Uses cached chain positions; draws 64x64 frames centered on the fading ball.
+ZL_DrawExplosions:
+                CALL ZL_EmitLoadId
+                CALL ZL_EmitSetMatrix
+                FT_BitmapHandle ZL_DESTROY_HANDLE
+                FT_BitmapSource DESTROY_RAMG_ADDR
+                FT_BitmapLayout FT_ARGB4, ZL_DESTROY_W * 2, ZL_DESTROY_H
+                FT_BitmapSize   FT_BILINEAR, FT_BORDER, FT_BORDER, ZL_DESTROY_W, ZL_DESTROY_H
+                LD   A, (ZL_BallCount)
+                OR   A
+                RET  Z
+                LD   B, A
+                LD   IX, ZL_BALL_CACHE_ADDR
+                LD   HL, VDC_ExplodeFrame
+.de_loop:       LD   A, (HL)
+                OR   A
+                JR   Z, .de_next
+                PUSH BC
+                PUSH HL
+                DEC  A
+                SRL  A
+                CP   7
+                JR   C, .de_cell_ok
+                LD   A, 6
+.de_cell_ok:    CALL FT.Coprocessor.Cell
+                LD   A, (IX+1)
+                AND  #E0
+                RRCA : RRCA : RRCA : RRCA : RRCA
+                CALL ZL_ExplosionColorRGB
+                LD   L, (IX+2) : LD H, (IX+3)
+                LD   DE, ZL_DESTROY_HALF_DELTA
+                AND  A
+                SBC  HL, DE
+                LD   B, H : LD C, L
+                LD   L, (IX+4) : LD H, (IX+5)
+                LD   DE, ZL_DESTROY_HALF_DELTA
+                AND  A
+                SBC  HL, DE
+                EX   DE, HL
+                CALL FT.Coprocessor.Vertex2f
+                POP  HL
+                POP  BC
+.de_next:       LD   DE, 6
+                ADD  IX, DE
+                INC  HL
+                DJNZ .de_loop
+                RET
+
+ZL_ExplosionColorRGB:
+                LD   E, A
+                ADD  A, A
+                ADD  A, E                              ; A = color * 3
+                LD   E, A
+                LD   D, 0
+                LD   HL, ZL_ExplosionRGBTable
+                ADD  HL, DE
+                LD   C, (HL)                           ; R
+                INC  HL
+                LD   D, (HL)                           ; G
+                INC  HL
+                LD   E, (HL)                           ; B
+                JP   FT.Coprocessor.ColorRGB
+
+ZL_ExplosionRGBTable:
+                DEFB 48,120,255, 64,255,80, 210,80,255
+                DEFB 255,72,48, 255,255,255, 255,220,0
 
 ZL_EmitLoadId:  LD   DE, FT_CMD_LOADIDENTITY & #FFFF
                 LD   BC, FT_CMD_LOADIDENTITY >> 16
@@ -780,8 +912,9 @@ ZL_CmdOverflow: DEFB 0                                ; sticky: 1 if command str
 ZL_BallCount:   DEFB 0                                ; cached VDC_SlotsLen для bucket prepass
 ZL_TmpBucket:   DEFB 0                                ; current bucket в outer loop (legacy)
 ZL_TmpLastTangent: DEFB 0                             ; per-ball loop: last emitted quantized tangent
+ZL_TmpLastColor:   DEFB 0xFF                          ; per-ball loop: last emitted COLOR_RGB color index (#FF = reset)
 ZL_CacheWPtr:   DEFW 0                                ; write ptr в prepass
-                ; Per-ball cache: bucket, cell, Vx_lo, Vx_hi, Vy_lo, Vy_hi = 6 байт.
+                ; Per-ball cache: stable tangent, cell, Vx_lo, Vx_hi, Vy_lo, Vy_hi = 6 bytes.
                 ; bucket = #FF → skip (gap/off-track).
                 ; Размещён в свободной зоне slot 1 ниже Core (page 5 #4000-#5FFF),
                 ; чтобы 1440 байт cache не раздували Core за границу 8 КБ (#7FFF).

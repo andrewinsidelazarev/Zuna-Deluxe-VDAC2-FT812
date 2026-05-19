@@ -184,6 +184,30 @@ class ZumaFullZ80Emulator:
 
     def step(self) -> int:
         pc0 = self.reg.PC
+        # Ring buffer of recent PCs for retro-analysis
+        rb = getattr(self, '_pc_ring', None)
+        if rb is not None:
+            rb.append(pc0)
+            if len(rb) > 4096:
+                rb.pop(0)
+        # Watchpoint for SetPage0 function entry — anything calling here
+        # silently overwrites slot 0 mapping via LD (#0410), A.
+        if pc0 == getattr(self, '_pc_watch', None):
+            sp = self.reg.SP
+            stk = []
+            for i in range(0, 16, 2):
+                w = self.mem.read((sp + i) & 0xFFFF) | (self.mem.read((sp + i + 1) & 0xFFFF) << 8)
+                stk.append(f'{w:04X}')
+            print(f"  [watch] PC=#{pc0:04X} entered  SP=#{sp:04X} stk=[{','.join(stk)}]  A={self.reg.A:#04x}")
+            if rb is not None:
+                # Filter sequential ranges; show only non-sequential transitions
+                print(f"  [ring] last {len(rb)} PCs (non-sequential transitions only):")
+                transitions = []
+                for i in range(1, len(rb)):
+                    if rb[i] != ((rb[i-1] + 1) & 0xFFFF) and rb[i] != ((rb[i-1] + 2) & 0xFFFF) and rb[i] != ((rb[i-1] + 3) & 0xFFFF):
+                        transitions.append((rb[i-1], rb[i]))
+                for prev, cur in transitions[-30:]:
+                    print(f"    #{prev:04X} -> #{cur:04X}")
         ins, args = False, ()
         try:
             while not ins:
@@ -292,6 +316,24 @@ class ZumaFullZ80Emulator:
             self.out_port(ref & 0xFFFF, value)
             self.ports_out.append((ref & 0xFFFF, value))
         else:
+            # FMADDR_REGS hook: when FT_EN active (MAPPING_REGISTERS mode),
+            # memory writes to #0410..#0413 mirror to PAGE0..PAGE3 ports.
+            # Real HW: TSLib SetPage* macros expand to LD (FMADDR_REGS+HIGH PAGEn), value.
+            # FMADDR_REGS = #0400, HIGH PAGEn = #10..#13.
+            if 0x0410 <= ref <= 0x0413:
+                slot = ref - 0x0410
+                old = self.mem.pages[slot]
+                self.mem.pages[slot] = value & 0xFF
+                if old != value and getattr(self, '_paging_trace', False):
+                    sp = self.reg.SP
+                    stk = []
+                    for i in range(0, 12, 2):
+                        try:
+                            w = self.mem.read((sp + i) & 0xFFFF) | (self.mem.read((sp + i + 1) & 0xFFFF) << 8)
+                            stk.append(f'{w:04X}')
+                        except Exception:
+                            stk.append('????')
+                    print(f"  [paging] PC=#{self.reg.PC:04X} SP=#{sp:04X} stk={','.join(stk)}  slot{slot}: {old:#04x} -> {value:#04x}")
             self.mem.write(ref, value)
 
     def in_port(self, port: int) -> int:

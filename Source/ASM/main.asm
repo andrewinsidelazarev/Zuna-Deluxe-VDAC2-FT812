@@ -12,8 +12,15 @@
                 DEVICE ZXSPECTRUM4096
                 define MAPPING_REGISTERS              ; реестры через FMADDR_REGS
 
+; ----------------------------------------------------------------------------
+; FT command buffer: TSLib дефолтит на #C000 (slot 3). После main0/main1 split
+; main1_play код живёт в slot 3 → буфер перекрывает код → corruption за кадр.
+; Перенесён в slot 1 free area после main0 (#5DA0..#7FFF = 8.5KB).
+; ----------------------------------------------------------------------------
+                define CMD_ADDRESS_PTR #5E00
+
 ; --- Адреса/EQU ----------------------------------------------------------
-EntryPoint           EQU #6000                        ; slot 1 (page 5)
+EntryPoint           EQU #5C00                        ; slot 1 (page 5), keep Core below #8000
 StackTop             EQU #40F2
 ResolutionWidthPtr   EQU #40F3                        ; куда FT_RESOLUTION пишет ширину (W word)
 ResolutionHeightPtr  EQU #40F5                        ; высоту (H word)
@@ -36,6 +43,67 @@ EVT_BBOX_HIT        EQU 2
 EVT_HEMI            EQU 3
 EVT_INSERT          EQU 4
 EVT_CASCADE_TRIGGER EQU 5
+
+; --- Text atlases (nativealien48 ARGB4, red-yellow gradient). Объявлены здесь
+; (ДО TSLib block) чтобы EQU были доступны во всех slot 0/1/3 функциях через
+; sjasmplus forward-resolve. FT_RAM_G #0000..#10000 = 64K free area (раньше
+; не использовалась, bg начинается с #010000). Размеры см. text_*.info.
+TEXT_GAMEOVER_PAGE     EQU #20
+TEXT_GAMEOVER_RAMG     EQU #000000
+TEXT_GAMEOVER_W        EQU 169
+TEXT_GAMEOVER_H        EQU 46
+
+; LEVEL 1-1 — source 36 px tall, hardware scale ×16/9 → 64 px на дисплее.
+TEXT_LEVEL11_PAGE      EQU #21
+TEXT_LEVEL11_RAMG      EQU #004000
+TEXT_LEVEL11_W         EQU 89
+TEXT_LEVEL11_H         EQU 36
+TEXT_LEVEL11_DRAW_W    EQU 158                          ; 89 * 16/9 = 158.2
+TEXT_LEVEL11_DRAW_H    EQU 64                           ; 36 * 16/9 = 64
+
+; SPIRAL OF DOOM — native 36 px, без scaling
+TEXT_SPIRALDOOM_PAGE   EQU #22
+TEXT_SPIRALDOOM_RAMG   EQU #008000
+TEXT_SPIRALDOOM_W      EQU 192
+TEXT_SPIRALDOOM_H      EQU 36
+
+TEXT_GAMEOVER_HANDLE   EQU 10
+TEXT_LEVEL11_HANDLE    EQU 11
+TEXT_SPIRALDOOM_HANDLE EQU 12
+
+; Sparkle/diamond — 24×24 ARGB4 для track-preview анимации в intro state.
+SPARKLE_PAGE           EQU #24
+SPARKLE_RAMG           EQU #00C000                       ; free area между spiraldoom и bg
+SPARKLE_W              EQU 24
+SPARKLE_H              EQU 24
+SPARKLE_HANDLE         EQU 13
+SPARKLE_COUNT          EQU 22                            ; sparkles вдоль track
+SPARKLE_HALF           EQU 12                            ; для центрирования Vertex2f
+
+; --- Frame strips PALETTED4444 (16K-aligned blocks для UnpackAndUploadPage) ---
+FRAME_PAL_PAGE       EQU #3F
+FRAME_PAL_RAMG       EQU #080200                         ; raw 512B после balls palette (4-byte aligned)
+FRAME_TOP_P0_PAGE    EQU #3A
+FRAME_TOP_P1_PAGE    EQU #3B
+FRAME_TOP_RAMG       EQU #084000                         ; 32K block (2×16K aligned)
+FRAME_TOP_W          EQU 640
+FRAME_TOP_H          EQU 44
+FRAME_BOT_PAGE       EQU #3C
+FRAME_BOT_RAMG       EQU #08C000                         ; 16K block
+FRAME_BOT_W          EQU 640
+FRAME_BOT_H          EQU 24
+FRAME_LEFT_PAGE      EQU #3D
+FRAME_LEFT_RAMG      EQU #090000                         ; 16K block
+FRAME_LEFT_W         EQU 24
+FRAME_LEFT_H         EQU 412
+FRAME_RIGHT_PAGE     EQU #3E
+FRAME_RIGHT_RAMG     EQU #094000                         ; 16K block (next free until #098000)
+FRAME_RIGHT_W        EQU 24
+FRAME_RIGHT_H        EQU 412
+FRAME_TOP_HANDLE     EQU 14
+FRAME_BOT_HANDLE     EQU 15
+FRAME_LEFT_HANDLE    EQU 16
+FRAME_RIGHT_HANDLE   EQU 17
 
 ; --- Frog RTC entropy state (slot 1 free RAM, между GAMELOG и Core @ #6000) ---
 ; Каждый 128-й вызов Frog_NewNextColor взводит FLAG; picker (Frog_FilteredRandomColor)
@@ -263,12 +331,12 @@ KZ_DEFAULT_X       EQU 211
 KZ_DEFAULT_Y       EQU 217
 
 DrawKillzoneDual:
-                ; Idle (KzFrame=1) и финальный Game Over (KzFrame=0) — закрытый
-                ; череп уже запечён в bg, overlay не нужен.  Рисуем только когда
-                ; KzFrame>=2 (animation opening / absorb).
+                ; Idle (KzFrame=1) = закрытый череп уже запечён в bg, overlay
+                ; не нужен. Для KzFrame=0 (open black hole во время INTRO/PREVIEW
+                ; и Game Over) ИЛИ KzFrame>=2 (animation opening / absorb) рисуем.
                 LD   A, (Core.VDC_KzFrame)
-                CP   2
-                RET  C
+                CP   1
+                RET  Z
                 CALL Core.ZL_EmitLoadId
                 CALL Core.ZL_EmitSetMatrix
                 FT_BitmapHandle 3
@@ -290,17 +358,211 @@ DrawKillzoneDual:
                 LD   DE, (KZ_DEFAULT_Y - 32) * 16
                 JP   FT.Coprocessor.Vertex2f
 
+; ----------------------------------------------------------------------------
+; DrawGameOverText — рисует "GAME OVER" в nativealien48 шрифте, центр X
+; (320 - W/2 = 320 - 66 = 254), Y = 72 (как было с cmd_text).
+; ----------------------------------------------------------------------------
 DrawGameOverText:
-                LD   C, 255 : LD D, 214 : LD E, 64
-                CALL FT.Coprocessor.ColorRGB
-                FT_Text 320, 72, 30, FT_OPT_CENTER
-                FT_String GameOverText, GameOverText.Size
                 LD   C, 255 : LD D, 255 : LD E, 255
-                JP   FT.Coprocessor.ColorRGB
+                CALL FT.Coprocessor.ColorRGB                ; tint = white (gradient уже в bitmap)
+                FT_BitmapHandle TEXT_GAMEOVER_HANDLE
+                FT_BitmapSource TEXT_GAMEOVER_RAMG
+                FT_BitmapLayout FT_ARGB4, TEXT_GAMEOVER_W * 2, TEXT_GAMEOVER_H
+                FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, TEXT_GAMEOVER_W, TEXT_GAMEOVER_H
+                XOR  A : CALL FT.Coprocessor.Cell           ; Cell 0
+                LD   BC, (320 - TEXT_GAMEOVER_W / 2) * 16   ; X centered
+                LD   DE, 72 * 16
+                JP   FT.Coprocessor.Vertex2f
 
-GameOverText:
-                BYTE "GAME OVER", 0, 0, 0
-.Size           EQU $ - GameOverText
+; ----------------------------------------------------------------------------
+; DrawIntroText — нижний правый угол: LEVEL 1-1 (большой, 64 px via cmd_scale)
+; + SPIRAL OF DOOM (36 px native). Используется когда VDC_GameState == INTRO.
+; Layout (640×480 screen, 30 px margin от правой/нижней рамки):
+;   LEVEL 1-1: X=452, Y=320 (158×64 displayed, BILINEAR scale ×16/9 from 89×36)
+;   SPIRAL OF DOOM: X=418, Y=414 (192×36 native)
+; ----------------------------------------------------------------------------
+; ----------------------------------------------------------------------------
+; DrawPreviewSparkles — sparkle wave анимация по track (state=PREVIEW).
+; Параметры:
+;   N=20 sparkles, head_sample = elapsed * SPEED, trail spacing 60 samples
+;   SPEED = 24, PREVIEW_TICKS = 120 → head_sample reaches NumSamples (~2774)
+; Sparkle skipped если sample < 0 или sample >= NumSamples (head ещё не дошёл / уже прошёл).
+; Tint: warm gold. Caller восстановит белый ColorRGB.
+; TrackData в slot 2 page 6 (default mapping).
+; ----------------------------------------------------------------------------
+; Comet: 8 sparkles spaced 16 samples = ~128 samples trail (короткая «очередь»),
+; head advances 30 samples/tick → ~92 ticks для прохода 2774 samples (вместо 120).
+PREVIEW_SPARKLE_COUNT   EQU 8
+PREVIEW_SPARKLE_SPEED   EQU 15
+PREVIEW_SPARKLE_SPACING EQU 16
+
+DrawPreviewSparkles:
+                LD   C, 255 : LD D, 220 : LD E, 80
+                CALL FT.Coprocessor.ColorRGB
+                FT_BitmapHandle SPARKLE_HANDLE
+                FT_BitmapSource SPARKLE_RAMG
+                FT_BitmapLayout FT_ARGB4, SPARKLE_W * 2, SPARKLE_H
+                FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, SPARKLE_W, SPARKLE_H
+                XOR  A : CALL FT.Coprocessor.Cell
+
+                ; head_sample = elapsed * PREVIEW_SPARKLE_SPEED
+                ; where elapsed = PREVIEW_TICKS - VDC_PreviewTick
+                LD   A, Core.VDC_PREVIEW_TICKS
+                LD   HL, Core.VDC_PreviewTick
+                SUB  (HL)                              ; A = elapsed
+                LD   H, 0 : LD L, A
+                LD   D, H : LD E, L                    ; DE = elapsed
+                LD   HL, 0
+                LD   B, PREVIEW_SPARKLE_SPEED
+.dps_mul:       ADD  HL, DE
+                DJNZ .dps_mul
+                LD   (.dps_sample), HL
+
+                LD   A, PREVIEW_SPARKLE_COUNT
+                LD   (.dps_count), A
+.dps_loop:      LD   HL, (.dps_sample)
+                ; sample >= 0?
+                BIT  7, H
+                JR   NZ, .dps_advance
+                ; sample < NumSamples?
+                LD   DE, (Core.TrackData)              ; word at #8000 = NumSamples
+                AND  A
+                SBC  HL, DE
+                JR   NC, .dps_advance                  ; sample >= NumSamples
+                ADD  HL, DE                            ; restore sample
+                ; addr = TrackData + 2 + sample*5
+                LD   D, H : LD E, L
+                ADD  HL, HL : ADD HL, HL               ; *4
+                ADD  HL, DE                            ; *5
+                LD   DE, Core.TrackData + 2
+                ADD  HL, DE
+                ; Read X word, Y word
+                LD   E, (HL) : INC HL
+                LD   D, (HL) : INC HL                  ; DE = X
+                LD   (.dps_xword), DE
+                LD   E, (HL) : INC HL
+                LD   D, (HL)                           ; DE = Y
+                LD   (.dps_yword), DE
+                ; BC = (X-12) * 16
+                LD   DE, (.dps_xword)
+                LD   HL, -SPARKLE_HALF
+                ADD  HL, DE
+                ADD  HL, HL : ADD HL, HL : ADD HL, HL : ADD HL, HL
+                LD   B, H : LD C, L
+                ; DE = (Y-12) * 16
+                LD   DE, (.dps_yword)
+                LD   HL, -SPARKLE_HALF
+                ADD  HL, DE
+                ADD  HL, HL : ADD HL, HL : ADD HL, HL : ADD HL, HL
+                EX   DE, HL
+                CALL FT.Coprocessor.Vertex2f
+.dps_advance:
+                LD   HL, (.dps_sample)
+                LD   DE, -PREVIEW_SPARKLE_SPACING
+                ADD  HL, DE
+                LD   (.dps_sample), HL
+                LD   A, (.dps_count)
+                DEC  A
+                LD   (.dps_count), A
+                JR   NZ, .dps_loop
+                RET
+.dps_sample:    DW 0
+.dps_count:     DB 0
+.dps_xword:     DW 0
+.dps_yword:     DW 0
+
+; ----------------------------------------------------------------------------
+; DrawFrameStrips — 4 PALETTED4444 strip'а вокруг прозрачного centra.
+; Каждая strip имеет свой handle и BITMAP_SOURCE; общая FT_PaletteSource.
+; Z-order: рисуется поверх playfield, под курсором. Native 640×480 (no scale).
+; ----------------------------------------------------------------------------
+DrawFrameStrips:
+                LD   C, 255 : LD D, 255 : LD E, 255
+                CALL FT.Coprocessor.ColorRGB
+                LD   E, 255
+                CALL FT.Coprocessor.ColorA
+                FT_PaletteSource FRAME_PAL_RAMG
+                ; --- TOP 640×44 at (0, 0) ---
+                FT_BitmapHandle FRAME_TOP_HANDLE
+                FT_BitmapSource FRAME_TOP_RAMG
+                FT_BitmapLayout FT_PALETTED4444, FRAME_TOP_W, FRAME_TOP_H
+                FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, FRAME_TOP_W, FRAME_TOP_H
+                XOR  A : CALL FT.Coprocessor.Cell
+                LD   BC, 0
+                LD   DE, 0
+                CALL FT.Coprocessor.Vertex2f
+                ; --- BOTTOM 640×24 at (0, 480-24) ---
+                FT_BitmapHandle FRAME_BOT_HANDLE
+                FT_BitmapSource FRAME_BOT_RAMG
+                FT_BitmapLayout FT_PALETTED4444, FRAME_BOT_W, FRAME_BOT_H
+                FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, FRAME_BOT_W, FRAME_BOT_H
+                XOR  A : CALL FT.Coprocessor.Cell
+                LD   BC, 0
+                LD   DE, (480 - FRAME_BOT_H) * 16
+                CALL FT.Coprocessor.Vertex2f
+                ; --- LEFT 24×412 at (0, 44) ---
+                FT_BitmapHandle FRAME_LEFT_HANDLE
+                FT_BitmapSource FRAME_LEFT_RAMG
+                FT_BitmapLayout FT_PALETTED4444, FRAME_LEFT_W, FRAME_LEFT_H
+                FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, FRAME_LEFT_W, FRAME_LEFT_H
+                XOR  A : CALL FT.Coprocessor.Cell
+                LD   BC, 0
+                LD   DE, FRAME_TOP_H * 16
+                CALL FT.Coprocessor.Vertex2f
+                ; --- RIGHT 24×412 at (640-24, 44) ---
+                FT_BitmapHandle FRAME_RIGHT_HANDLE
+                FT_BitmapSource FRAME_RIGHT_RAMG
+                FT_BitmapLayout FT_PALETTED4444, FRAME_RIGHT_W, FRAME_RIGHT_H
+                FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, FRAME_RIGHT_W, FRAME_RIGHT_H
+                XOR  A : CALL FT.Coprocessor.Cell
+                LD   BC, (640 - FRAME_RIGHT_W) * 16
+                LD   DE, FRAME_TOP_H * 16
+                JP   FT.Coprocessor.Vertex2f
+
+DrawIntroText:
+                ; --- Fade-out alpha: VDC_IntroTick 240→0; last 60 ticks fade ---
+                ; alpha = (tick<60) ? tick*4 : 255
+                LD   A, (Core.VDC_IntroTick)
+                CP   60
+                JR   NC, .dit_full_alpha
+                ADD  A, A
+                ADD  A, A                              ; A = tick*4 (max 4*59=236)
+                JR   .dit_alpha_set
+.dit_full_alpha:
+                LD   A, 255
+.dit_alpha_set:
+                LD   E, A
+                CALL FT.Coprocessor.ColorA
+
+                LD   C, 255 : LD D, 255 : LD E, 255
+                CALL FT.Coprocessor.ColorRGB
+
+                ; --- LEVEL 1-1 — apply hardware scale ×16/9 (1.7778) ---
+                CALL Core.ZL_EmitLoadId
+                FT_CMD_BUF FT_CMD_SCALE
+                FT_CMD_BUF #0001C71C                   ; sx = 16/9 ≈ 1.7778 (16.16)
+                FT_CMD_BUF #0001C71C                   ; sy = same
+                CALL Core.ZL_EmitSetMatrix
+                FT_BitmapHandle TEXT_LEVEL11_HANDLE
+                FT_BitmapSource TEXT_LEVEL11_RAMG
+                FT_BitmapLayout FT_ARGB4, TEXT_LEVEL11_W * 2, TEXT_LEVEL11_H
+                FT_BitmapSize   FT_BILINEAR, FT_BORDER, FT_BORDER, TEXT_LEVEL11_DRAW_W, TEXT_LEVEL11_DRAW_H
+                XOR  A : CALL FT.Coprocessor.Cell
+                LD   BC, (640 - TEXT_LEVEL11_DRAW_W - 30) * 16
+                LD   DE, (480 - TEXT_LEVEL11_DRAW_H - 90) * 16
+                CALL FT.Coprocessor.Vertex2f
+
+                ; --- Reset matrix to identity для SPIRAL (no scale) ---
+                CALL Core.ZL_EmitLoadId
+                CALL Core.ZL_EmitSetMatrix
+                FT_BitmapHandle TEXT_SPIRALDOOM_HANDLE
+                FT_BitmapSource TEXT_SPIRALDOOM_RAMG
+                FT_BitmapLayout FT_ARGB4, TEXT_SPIRALDOOM_W * 2, TEXT_SPIRALDOOM_H
+                FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, TEXT_SPIRALDOOM_W, TEXT_SPIRALDOOM_H
+                XOR  A : CALL FT.Coprocessor.Cell
+                LD   BC, (640 - TEXT_SPIRALDOOM_W - 30) * 16
+                LD   DE, (480 - TEXT_SPIRALDOOM_H - 30) * 16
+                JP   FT.Coprocessor.Vertex2f
 
 VDC_UpdateAbsorb:
                 LD   A, (Core.VDC_GameOverTick)
@@ -639,6 +901,160 @@ VDC_Random8:
                 XOR  H                                 ; 8-bit uniform
                 RET
 
+; ----------------------------------------------------------------------------
+; ZX7 Turbo decompressor (Einar Saukas / Urusergi). HL = compressed src,
+; DE = destination. Восстановлен из ~/Desktop/Zuma Deluxe (src/ASM,
+; zuma_new_spg.asm:4466). Размер ~62 байта. Не корраптит I, IX, IY.
+; Используется через UnpackZX7Page wrapper. На входе HL/DE должны указывать
+; в WRITABLE области (исходник можно в slot 2 ROM-like, dest в RAM).
+; ----------------------------------------------------------------------------
+Dzx7Turbo:
+                LD   A, #80
+.zx7_copy_byte_loop:
+                LDI
+.zx7_main_loop:
+                ADD  A, A
+                CALL Z, .zx7_load_bits
+                JR   NC, .zx7_copy_byte_loop
+                PUSH DE
+                LD   BC, 1
+                LD   D, B
+.zx7_len_size_loop:
+                INC  D
+                ADD  A, A
+                CALL Z, .zx7_load_bits
+                JR   NC, .zx7_len_size_loop
+                JP   .zx7_len_value_start
+.zx7_len_value_loop:
+                ADD  A, A
+                CALL Z, .zx7_load_bits
+                RL   C
+                RL   B
+                JR   C, .zx7_exit
+.zx7_len_value_start:
+                DEC  D
+                JR   NZ, .zx7_len_value_loop
+                INC  BC
+                LD   E, (HL)
+                INC  HL
+                DB   #CB, #33                          ; SLL E / SLS E (undoc)
+                JR   NC, .zx7_offset_end
+                ADD  A, A
+                CALL Z, .zx7_load_bits
+                RL   D
+                ADD  A, A
+                CALL Z, .zx7_load_bits
+                RL   D
+                ADD  A, A
+                CALL Z, .zx7_load_bits
+                RL   D
+                ADD  A, A
+                CALL Z, .zx7_load_bits
+                CCF
+                JR   C, .zx7_offset_end
+                INC  D
+.zx7_offset_end:
+                RR   E
+                EX   (SP), HL
+                PUSH HL
+                SBC  HL, DE
+                POP  DE
+                LDIR
+.zx7_exit:
+                POP  HL
+                JP   NC, .zx7_main_loop
+                RET
+.zx7_load_bits:
+                LD   A, (HL)
+                INC  HL
+                RLA
+                RET
+
+; ----------------------------------------------------------------------------
+; SCRATCH_PAGE — свободная SPG page для decomp output. Используется
+; UnpackAndUploadPage в Initialize между bg/balls/frog uploads.
+; Page #01 не задействован ни одним Block в spgbld_vdac2.ini — безопасно.
+; ----------------------------------------------------------------------------
+SCRATCH_PAGE    EQU #01
+
+; ----------------------------------------------------------------------------
+; UnpackAndUploadPage: расжать compressed src page A → SCRATCH_PAGE,
+; залить 16K из SCRATCH_PAGE в FT_RAM_G по адресу (Core.BgRamH:BgRamL),
+; продвинуть указатель FT_RAM_G на +#4000.
+;
+; In:  A = compressed source SPG page; Core.BgRamH/L = FT_RAM_G dest 24-bit
+; Out: Core.BgRamH/L advanced by 16K
+; Slots после RET: slot 2 = src (не восстановлен), slot 3 = SCRATCH (не восст.).
+;                  Caller обязан восстановить SetPage2 6 / SetPage3 #04 после
+;                  серии вызовов.
+; ----------------------------------------------------------------------------
+UnpackAndUploadPage:
+                DI
+                LD   (.uaup_src), A
+                LD   (.uaup_saved_sp), SP
+                LD   SP, .uaup_temp_stack_top
+
+                ; slot 2 = compressed src
+                LD   A, (.uaup_src) : LD BC, PAGE2 : OUT (C), A
+                ; slot 3 = scratch (decomp dest)
+                LD   A, SCRATCH_PAGE : LD BC, PAGE3 : OUT (C), A
+
+                ; Dzx7Turbo: HL=src, DE=dst
+                LD   HL, #8000
+                LD   DE, #C000
+                CALL Dzx7Turbo
+
+                ; FT.WriteMem(HL=#C000 in slot 3, BC=16384, A:DE=FT_RAM_G addr)
+                LD   HL, #C000
+                LD   BC, 16384
+                LD   A, (Core.BgRamH)
+                LD   DE, (Core.BgRamL)
+                CALL FT.WriteMem
+
+                ; Advance Core.BgRamL/H by 16K
+                LD   HL, (Core.BgRamL)
+                LD   DE, #4000
+                ADD  HL, DE
+                LD   (Core.BgRamL), HL
+                JR   NC, .uaup_no_carry
+                LD   A, (Core.BgRamH) : INC A : LD (Core.BgRamH), A
+.uaup_no_carry:
+                LD   SP, (.uaup_saved_sp)
+                EI
+                RET
+.uaup_src:        DB 0
+.uaup_saved_sp:   DW 0
+.uaup_temp_stack: DEFS 64
+.uaup_temp_stack_top:
+
+; ----------------------------------------------------------------------------
+; UnpackZX7Page: расжать compressed page A → dest page B.
+; Source = slot 2 (#8000), dest = slot 3 (#C000). После RET слоты восстановлены:
+; slot 2 → page 6 (TrackData), slot 3 → page #04 (main1_play).
+; Stack пересажен на uzx7_temp_stack чтобы LDIR в slot 3 не зацепил наш стек.
+; ----------------------------------------------------------------------------
+UnpackZX7Page:
+                DI
+                LD   (.uzx7_src), A
+                LD   A, B  : LD (.uzx7_dst), A
+                LD   (.uzx7_saved_sp), SP
+                LD   SP, .uzx7_temp_stack_top
+                LD   A, (.uzx7_src) : LD BC, PAGE2 : OUT (C), A
+                LD   A, (.uzx7_dst) : LD BC, PAGE3 : OUT (C), A
+                LD   HL, #8000
+                LD   DE, #C000
+                CALL Dzx7Turbo
+                LD   A, 6   : LD BC, PAGE2 : OUT (C), A   ; restore slot 2 = TrackData page
+                LD   A, #04 : LD BC, PAGE3 : OUT (C), A   ; restore slot 3 = main1_play page
+                LD   SP, (.uzx7_saved_sp)
+                EI
+                RET
+.uzx7_src:        DB 0
+.uzx7_dst:        DB 0
+.uzx7_saved_sp:   DW 0
+.uzx7_temp_stack: DEFS 64
+.uzx7_temp_stack_top:
+
 LOG_BLOCK_END:
 
 TSLIB_TOTAL_SIZE EQU LOG_BLOCK_END - TSLIB_Start
@@ -715,25 +1131,23 @@ Initialize:     CALL Init_Core
                 LD   B, BALLS_PAGE_COUNT
 .UploadBalls:   PUSH BC
                 LD   A, (BgPg)
-                SetPage2_A
-                LD   HL, #8000
-                LD   BC, 16384
-                LD   A, (BgRamH)
-                LD   DE, (BgRamL)
-                CALL FT.WriteMem
+                CALL UnpackAndUploadPage              ; decomp ZX7 page → SCRATCH, FT.WriteMem 16K, advance BgRamH/L
                 POP  BC
-                LD   HL, (BgRamL)
-                LD   DE, #4000
-                ADD  HL, DE
-                LD   (BgRamL), HL
-                JR   NC, .NoCarryB
-                LD   A, (BgRamH)
-                INC  A
-                LD   (BgRamH), A
-.NoCarryB:      LD   A, (BgPg)
+                LD   A, (BgPg)
                 INC  A
                 LD   (BgPg), A
                 DJNZ .UploadBalls
+
+                ; Palette ARGB4 СТРОГО 512 байт → FT_RAM_G #080000 (PALETTED4444).
+                ; Размер ровно 512: FT812 при больших значениях считывает мусор за
+                ; концом палитры; при меньшем зависает (out-of-range index).
+                LD   A, BALLS_PALETTE_PAGE
+                SetPage2_A
+                LD   HL, #8000
+                LD   BC, 512                          ; ARGB4 = 256 × 2 bytes
+                LD   A, (BALLS_PALETTE_RAMG >> 16) & 0xFF
+                LD   DE, BALLS_PALETTE_RAMG & 0xFFFF
+                CALL FT.WriteMem
 
                 ; Залить frog body / plate / tongue / face-overlay в RAM_G.
                 ; Layout (FROG_TOTAL_PAGES=7 pages подряд от FROG_PAGE):
@@ -756,27 +1170,14 @@ Initialize:     CALL Init_Core
                 LD   B, FROG_TOTAL_PAGES
 .UploadFrog:    PUSH BC
                 LD   A, (BgPg)
-                SetPage2_A
-                LD   HL, #8000
-                LD   BC, 16384
-                LD   A, (BgRamH)
-                LD   DE, (BgRamL)
-                CALL FT.WriteMem
+                CALL UnpackAndUploadPage              ; decomp ZX7 page → SCRATCH, FT.WriteMem
                 POP  BC
-                LD   HL, (BgRamL)
-                LD   DE, #4000
-                ADD  HL, DE
-                LD   (BgRamL), HL
-                JR   NC, .NoCarryF
-                LD   A, (BgRamH)
-                INC  A
-                LD   (BgRamH), A
-.NoCarryF:      LD   A, (BgPg)
+                LD   A, (BgPg)
                 INC  A
                 LD   (BgPg), A
                 DJNZ .UploadFrog
 
-                ; Залить killzone atlas 12×64×64 ARGB4 в RAM_G KZ_RAMG_ADDR.
+                ; Залить killzone + match-3 explosion atlases contiguous в RAM_G.
                 LD   A, KZ_PAGE
                 LD   (BgPg), A
                 LD   HL, KZ_RAMG_ADDR & 0xFFFF
@@ -786,39 +1187,85 @@ Initialize:     CALL Init_Core
                 LD   B, KZ_PAGE_COUNT
 .UploadKz:      PUSH BC
                 LD   A, (BgPg)
-                SetPage2_A
-                LD   HL, #8000
-                LD   BC, 16384
-                LD   A, (BgRamH)
-                LD   DE, (BgRamL)
-                CALL FT.WriteMem
+                CALL UnpackAndUploadPage              ; decomp ZX7 page → SCRATCH, FT.WriteMem
                 POP  BC
-                LD   HL, (BgRamL)
-                LD   DE, #4000
-                ADD  HL, DE
-                LD   (BgRamL), HL
-                JR   NC, .NoCarryKz
-                LD   A, (BgRamH)
-                INC  A
-                LD   (BgRamH), A
-.NoCarryKz:     LD   A, (BgPg)
+                LD   A, (BgPg)
                 INC  A
                 LD   (BgPg), A
                 DJNZ .UploadKz
 
-                ; Залить cursor 24×24 ARGB4 (1152 байт) в RAM_G CURSOR_RAMG_ADDR.
-                ; Single page 0x5A. Padding в page безопасен (RAM_G #0BC000+1152..
-                ; #0C0000 = пустая зона, никто не читает).
+                ; Залить cursor (page #5A, compressed ZX7) в RAM_G CURSOR_RAMG_ADDR.
+                ; UnpackAndUploadPage заливает 16K — последние ~15K = zeros (padding),
+                ; не страшно потому что #0D0000+1152..#0D4000 пустая зона
+                ; (killzone начинается с #0D4000 и уже залит).
+                LD   HL, CURSOR_RAMG_ADDR & 0xFFFF
+                LD   (BgRamL), HL
+                LD   A, (CURSOR_RAMG_ADDR >> 16) & 0xFF
+                LD   (BgRamH), A
                 LD   A, CURSOR_PAGE
+                CALL UnpackAndUploadPage
+
+                ; Залить text atlases (GAME OVER + LEVEL 1-1 + SPIRAL OF DOOM)
+                ; в FT_RAM_G #0..#10000 (свободная зона до bg).
+                LD   HL, TEXT_GAMEOVER_RAMG & 0xFFFF
+                LD   (BgRamL), HL
+                LD   A, (TEXT_GAMEOVER_RAMG >> 16) & 0xFF
+                LD   (BgRamH), A
+                LD   A, TEXT_GAMEOVER_PAGE
+                CALL UnpackAndUploadPage
+
+                LD   HL, TEXT_LEVEL11_RAMG & 0xFFFF
+                LD   (BgRamL), HL
+                LD   A, (TEXT_LEVEL11_RAMG >> 16) & 0xFF
+                LD   (BgRamH), A
+                LD   A, TEXT_LEVEL11_PAGE
+                CALL UnpackAndUploadPage
+
+                LD   HL, TEXT_SPIRALDOOM_RAMG & 0xFFFF
+                LD   (BgRamL), HL
+                LD   A, (TEXT_SPIRALDOOM_RAMG >> 16) & 0xFF
+                LD   (BgRamH), A
+                LD   A, TEXT_SPIRALDOOM_PAGE
+                CALL UnpackAndUploadPage
+
+                ; Sparkle (24×24 ARGB4) для intro track preview
+                LD   HL, SPARKLE_RAMG & 0xFFFF
+                LD   (BgRamL), HL
+                LD   A, (SPARKLE_RAMG >> 16) & 0xFF
+                LD   (BgRamH), A
+                LD   A, SPARKLE_PAGE
+                CALL UnpackAndUploadPage
+
+                ; --- Frame strips: palette raw + 5 strip pages ZX7 (16K-aligned blocks) ---
+                ; Palette 512 байт raw → FRAME_PAL_RAMG.
+                LD   A, FRAME_PAL_PAGE
                 SetPage2_A
                 LD   HL, #8000
-                LD   BC, CURSOR_W * CURSOR_H * 2
-                LD   A, (CURSOR_RAMG_ADDR >> 16) & 0xFF
-                LD   DE, CURSOR_RAMG_ADDR & 0xFFFF
+                LD   BC, 512
+                LD   A, (FRAME_PAL_RAMG >> 16) & 0xFF
+                LD   DE, FRAME_PAL_RAMG & 0xFFFF
                 CALL FT.WriteMem
+                ; 5 ZX7-compressed strips through UnpackAndUploadPage (each 16K block).
+                ; Setup BgRamH/L to FRAME_TOP_RAMG, then loop через 5 страниц подряд.
+                LD   HL, FRAME_TOP_RAMG & 0xFFFF
+                LD   (BgRamL), HL
+                LD   A, (FRAME_TOP_RAMG >> 16) & 0xFF
+                LD   (BgRamH), A
+                LD   A, FRAME_TOP_P0_PAGE
+                CALL UnpackAndUploadPage              ; #084000 ← top_p0 (16K)
+                LD   A, FRAME_TOP_P1_PAGE
+                CALL UnpackAndUploadPage              ; #088000 ← top_p1 (11.5K + junk)
+                LD   A, FRAME_BOT_PAGE
+                CALL UnpackAndUploadPage              ; #08C000 ← bot
+                LD   A, FRAME_LEFT_PAGE
+                CALL UnpackAndUploadPage              ; #090000 ← left
+                LD   A, FRAME_RIGHT_PAGE
+                CALL UnpackAndUploadPage              ; #094000 ← right
 
-                ; Восстановить slot 2 на TrackData (page 6)
+                ; Восстановить слоты после серии compressed uploads:
+                ; slot 2 = TrackData (page 6), slot 3 = main1_play (page #04).
                 SetPage2 6
+                SetPage3 #04
 
                 ; --- VDC physics init (TrackData уже доступен в slot 2) ---
                 CALL VDC_Init
@@ -830,9 +1277,11 @@ Initialize:     CALL Init_Core
 BG_FIRST_PAGE      EQU 7
 BG_PAGE_COUNT      EQU 15                                ; DXT1_L4 640×480 (c0|c1|L4 = 230400 bytes, 15 × 16K pages, last padded)
 BG_RAMG_ADDR       EQU #010000                         ; bg в RAM_G FT812
-BALLS_FIRST_PAGE   EQU #2D                             ; balls_atlas pages 0x2D..0x44 (24 pages)
-BALLS_PAGE_COUNT   EQU 24                              ; 6 colors x 32 phases x 32x32 ARGB4 = 384 KB
+BALLS_FIRST_PAGE   EQU #2D                             ; balls_atlas paletted pages 0x2D..0x38 (12 pages)
+BALLS_PAGE_COUNT   EQU 12                              ; PALETTED4444: 6×32×32×32 1bpp = 192 KB
 BALLS_RAMG_ADDR    EQU #050000                         ; сразу после bg+padding (#04C000)
+BALLS_PALETTE_PAGE EQU #39                             ; palette ARGB4 СТРОГО 512 байт (256 entries × 2 bytes)
+BALLS_PALETTE_RAMG EQU #080000                         ; FT_RAM_G — после balls (192K=#080000), 4-byte aligned
 FROG_PAGE          EQU #52                             ; spgbld first page (frog body)
 FROG_PAGE_COUNT    EQU 2                                ; 122×122 ARGB4 = 2 pages each
 FROG_TOTAL_PAGES   EQU FROG_PAGE_COUNT * 4              ; body+plate+tongue+overlay = 8 pages
@@ -841,8 +1290,10 @@ PLATE_RAMG_ADDR    EQU FROG_RAMG_ADDR + #4000 * FROG_PAGE_COUNT     ; #0A4000
 TONGUE_RAMG_ADDR   EQU PLATE_RAMG_ADDR + #4000 * FROG_PAGE_COUNT    ; #0AC000
 OVERLAY_RAMG_ADDR  EQU TONGUE_RAMG_ADDR + #4000 * FROG_PAGE_COUNT   ; #0B4000
 KZ_PAGE            EQU #16
-KZ_PAGE_COUNT      EQU 6                               ; 12 cells 64x64 ARGB4
+KZ_PAGE_COUNT      EQU 10                              ; killzone 6 pages + destroy 4 pages
 KZ_RAMG_ADDR       EQU #0D4000                         ; after cursor page, below RAM_G 1 MB limit
+DESTROY_PAGE       EQU #1C
+DESTROY_RAMG_ADDR  EQU #0EC000                         ; after killzone atlas, below RAM_G 1 MB limit
 
 ; --- Cursor 24×24 ARGB4 (1 page) ---
 CURSOR_PAGE        EQU #5A
@@ -859,9 +1310,9 @@ BgRamH:         DEFB 0
 Init_Core:      FMapAddrInit                          ; FT_EN, MEM_WO, page0=TSLibPage
                 System_Setting SYS_ZCLK14 | SYS_CACHEEN
                 Cache_Setting  EN_0000 | EN_4000 | EN_8000
-                SetPage1 5                            ; #4000 → Core code page
+                SetPage1 5                            ; #4000 → Core code page (main0 resident)
                 SetPage2 6                            ; #8000 → TrackData (track_640.bin)
-                SetPage3 8
+                SetPage3 #04                          ; #C000 → main1_play (scene-specific code)
                 RET
 
 TrackData       EQU #8000                             ; в slot 2 (page 6)
@@ -882,19 +1333,24 @@ Init_Int:       ; Стандартная IM2 + frame INT инициализац�
 
 INT_Handler:    EI
                 RET
+Main0_End:                                            ; MUST be after ALL main0 code (Init_Core/Init_Int/INT_Handler)
 
-                ; ----- Init_Video, VDC и MainLoop из отдельных файлов -----
+                ; ----- main1_play (slot 3, page #04) — scene-specific code -----
+                SLOT 3 : PAGE #04 : ORG #C000
+Main1_Start:
                 include "Init_Video.asm"
                 include "VDC.asm"
                 include "Frog.asm"
                 include "Bullet.asm"
                 include "MainLoop.asm"
-
-End:
+Main1_End:
                 endmodule
 
-Core_Size        EQU Core.End - Core.Start
-                display "Core:     \t", /A, Core.Start, " size=", /D, Core_Size, " bytes"
-                SAVEBIN "Core.bin", Core.Start, Core_Size
+Main0_Size       EQU Core.Main0_End - Core.Start
+Main1_Size       EQU Core.Main1_End - Core.Main1_Start
+                display "Main0:    \t", /A, Core.Start,       " size=", /D, Main0_Size, " bytes (slot 1 page 5)"
+                display "Main1:    \t", /A, Core.Main1_Start, " size=", /D, Main1_Size, " bytes (slot 3 page #04)"
+                SAVEBIN "Core.bin",        Core.Start,       Main0_Size
+                SAVEBIN "main1_play.bin",  Core.Main1_Start, Main1_Size
 
                 END EntryPoint

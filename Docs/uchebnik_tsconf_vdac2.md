@@ -2446,3 +2446,342 @@ RET
 - `releases/baseline_2026-05-18_pre_per_ball_6_colors/` — pre-change snapshot
   для отката.
 - FT81x PG §4.7 — BITMAP_TRANSFORM_A..F state, persistent across vertex2f.
+
+## Глава 25. Расщепление Core на main0 + main1 (slot 1 + slot 3) и невидимая ловушка CMD_ADDRESS_PTR (2026-05-18)
+
+### 25.1 Проблема: лимит "считать байты Core" 9216
+
+К v020 в Core (slot 1 page 5, ORG #5C00) набралось 9210 байт из 9216 — 6 байт
+запаса. Каждая новая фича режется на размере: match-3 explode pass добавили
+с трудом, шрифт "GAME OVER" вкручен между функциями, ring log переехал в
+slot 0 ещё раньше. Дальше расти некуда — а впереди 22 уровня + стартовый
+экран + level select + сжатие данных.
+
+### 25.2 Архитектура split
+
+В соседнем TS-Conf проекте `~/Desktop/Zuma Deluxe` уже работает паттерн
+**main0 / main1**:
+
+| Сегмент | Что | Где | Зачем |
+|---|---|---|---|
+| **main0** | резидент: bootstrap, IM2, paging-helpers, общие helpers | slot 1 page 5 (ORG #5C00, до #7FFF = 9.2K) | всегда в памяти |
+| **main1** | сценовый код (Init_Video + VDC + Frog + Bullet + MainLoop) | slot 3 page #04 (ORG #C000, до #FFFF = 16K) | можно иметь несколько разных main1 страниц под разные сцены и свапать через SetPage3 |
+
+В VDAC2 main0 на 2026-05-18 ужался до **415 байт** (Start + Initialize + Init_Core +
+Init_Int + INT_Handler), main1_play занял **8795 байт** в 16K window'е. Лимит
+"считать байты Core" снят — теперь есть ~7.5K запаса в main1 и ~8.8K в main0.
+
+```asm
+                ; main0 (slot 1 page 5)
+                ORG EntryPoint                         ; #5C00
+                module Core
+Start:          LD SP, StackTop
+                CALL Initialize
+                JP MainLoop                            ; target #C000+ in slot 3 — works
+                                                       ; once Init_Core sets slot 3 = page 4
+
+Initialize:     CALL Init_Core
+                ...
+
+Init_Core:      FMapAddrInit
+                SetPage1 5                             ; slot 1 -> main0 page
+                SetPage2 6                             ; slot 2 -> TrackData
+                SetPage3 #04                           ; slot 3 -> main1_play page
+                RET
+
+Init_Int:       ...                                    ; IM2 setup + first INT wait
+INT_Handler:    EI : RET
+Main0_End:                                             ; ОБЯЗАТЕЛЬНО после всего main0 кода
+
+                ; main1_play (slot 3 page #04)
+                SLOT 3 : PAGE #04 : ORG #C000
+Main1_Start:
+                include "Init_Video.asm"
+                include "VDC.asm"
+                include "Frog.asm"
+                include "Bullet.asm"
+                include "MainLoop.asm"
+Main1_End:
+                endmodule
+
+                SAVEBIN "Core.bin",       Core.Start,       Core.Main0_End - Core.Start
+                SAVEBIN "main1_play.bin", Core.Main1_Start, Core.Main1_End - Core.Main1_Start
+```
+
+В `spgbld_vdac2.ini` добавляется блок:
+```
+Block = #C000, #04, main1_play.bin
+```
+
+### 25.3 Cross-slot CALL работает без thunks
+
+Z80 видит slot 1 (#4000..#7FFF) и slot 3 (#C000..#FFFF) **одновременно** — они
+разные адресные диапазоны, оба маппятся через TS-Conf mapping регистры.
+Когда `CALL Init_Video` (target #C000+) делается из main0 (#5C00+), Z80
+толкает return-addr в стек (стек в slot 1, #40F2) и прыгает в slot 3.
+Main1 код выполняется, делает RET — return-addr из стека → возвращаемся в
+slot 1. **Никаких thunks не нужно**, пока сцена одна.
+
+Thunks потребуются позже, когда добавим Title/LevelSelect: тогда main0
+будет свапать slot 3 на разные main1-страницы и JP в общую entry-точку
+сцены.
+
+### 25.4 Ловушка 1: Main0_End в неправильном месте
+
+В первой попытке split метка `Main0_End:` стояла сразу после `RET` функции
+`Init_Core`. Но `Init_Int:` и `INT_Handler:` определены ниже в файле —
+**между** Init_Core и SLOT 3 директивой. `SAVEBIN "Core.bin", ..., Main0_End - Start`
+покрыл только #5C00..#5D89 = 393 байта и **обрезал Init_Int + INT_Handler**.
+
+На железе:
+1. SPG-loader загружает Core.bin (393 байта) в page 5 → #5C00..#5D89
+2. Остальная page 5 (#5D89..#7FFF) — нули (initialized)
+3. Z80 на `CALL Init_Int` прыгает в #5D89 → читает 0 = NOP
+4. NOPит через всю slot 1 → входит в slot 2 (#8000+) = TrackData
+5. На байте 0xFF в TrackData выполняется `RST 38` → прыжок в #0038 (RST vector)
+6. NOPит из #0038 до #1000 (4040 NOP-ов)
+7. На #1000 в TSLib живёт **функция** `SetPage0:` (`LD (FMADDR_REGS+0x10), A : RET`)
+8. A = 8 (последнее значение из upload loops) → slot 0 переключается на page 8 = bg_l4_p01
+9. TSLib исчезает → следующая инструкция читается из bg-картинки = chaos → виснет
+
+**Урок:** `Main0_End:` ВСЕГДА последняя строчка main0 секции. Любая код-строка
+ниже неё (но выше SLOT 3 директивы) выпадает из SAVEBIN.
+
+### 25.5 Ловушка 2: TSLib CMD_ADDRESS_PTR = #C000 молча затирает main1
+
+После исправления Main0_End игра запустилась — frog/bg/cursor видны.
+Но **цепочки шаров не появляются, фрог не стреляет, при попытке выстрела
+полностью виснет**.
+
+В эмуляторе VDC_TrySpawn и Bullet_Spawn работают идеально на изолированных
+вызовах. Регресс физики PASS. То есть код ОК. Проблема — где-то между
+кадрами.
+
+Дамп с реального железа показал: содержимое #C000 — это **FT812 display
+list команды** (CLEAR_COLOR_RGB, VERTEX_FORMAT, CLEAR), а не main1_play код.
+
+Источник в TSLib: `Docs/TSLib/Include/FT/Coprocessor/Buffer.asm:5-7`:
+```asm
+                ifndef CMD_ADDRESS_PTR
+                define CMD_ADDRESS_PTR #C000
+                endif
+```
+
+`FT_CMD_Start` макрос делает `LD HL, CMD_ADDRESS_PTR : LD (BufferPtr), HL`.
+Каждый `FT_CMD_BUF` пишет 4 байта на `BufferPtr++`. За кадр накапливается до
+`ZL_CMD_WARN_BYTES = #0E00` ≈ 3.5 KB DL-команд **поверх main1_play кода**.
+
+До split этот буфер тоже жил на #C000, но slot 3 содержал бесполезный
+bg_l4_p01 (или что было default). Buffer перезаписывал данные, которые
+никто не читал. Безобидно.
+
+После split slot 3 = main1_play → буфер переписывает VDC_Update, Bullet_*,
+ZL_DrawFrame и т.д. Первый кадр успевает отрендериться (потому что
+buffer ещё не достиг этих адресов), второй — VDC функций нет, цепь не
+спавнится, при выстреле Bullet функция уже мусор, Z80 уходит в random код,
+виснет.
+
+**Fix.** Перед `include "FT/Coprocessor/Include.inc"` в main.asm:
+
+```asm
+                ; FT command buffer: TSLib дефолтит на #C000 (slot 3). После
+                ; main0/main1 split main1_play код живёт в slot 3 → буфер
+                ; перекрывает код. Перенесён в slot 1 free area после main0.
+                define CMD_ADDRESS_PTR #5E00
+```
+
+`#5E00` — slot 1 page 5 после main0 (415 байт = ends at #5D9F). До конца
+slot 1 (#7FFF) → 8.5 KB запаса, в избытке для 3.5 KB буфера.
+
+### 25.6 Чек-лист split-проекта
+
+Любой split, в котором код переезжает в slot 3 (#C000+), должен пройти:
+
+1. **`Main0_End:` метка** — строго после всего main0 кода, перед `SLOT 3` директивой.
+   `SAVEBIN "main0.bin", Start, Main0_End - Start` гарантирует что вся
+   main0-логика попадает в bin.
+
+2. **Override `CMD_ADDRESS_PTR`** — перед TSLib include-ами. Любое значение
+   в writable RAM области, минимум 4 KB до границы window-а. Не #C000.
+
+3. **Init_Core SetPage3 на main1-страницу** — например `SetPage3 #04` если
+   main1_play лежит на page 4 в SPG.
+
+4. **`spgbld_vdac2.ini` Block** — `Block = #C000, #04, main1_play.bin`.
+
+5. **Cross-slot CALL без thunks** — JP MainLoop из main0 в #C000 работает
+   после Init_Core. Внутри одной сцены никаких thunks не нужно.
+
+6. **Paged simulator с FMADDR_REGS hook** — `zuma_full_z80_emulator.py`
+   ловит memory writes в #0410..#0413 (mapping registers) и обновляет
+   pages map. Без этого hook-а эмулятор не воспроизводит SetPage* в режиме
+   MAPPING_REGISTERS. Также полезны: ring buffer 4096 PC + PC watchpoint
+   на #1000 (SetPage0 функция) — за минуты находят misjumps.
+
+7. **Дамп после F12 — RESET, не data.** В Unreal F12 = RESET. Содержимое
+   после F12 не отражает состояние во время виса. Для диагностики hang-а —
+   F12 не подходит, нужен paged simulator или hardware-marker.
+
+### 25.7 Запас на будущее
+
+После v021 split (2026-05-18):
+
+- main0: 8801 байт свободно (415/9216)
+- main1_play: 7589 байт свободно (8795/16384)
+- На каждую новую сцену (Title, LevelSelect, разные уровни) можно
+  выделить свою 16K страницу под main1_<scene>.bin без касания main0
+- FT command buffer 4 KB в slot 1 (#5E00..#7FFF) — запас в 4.5 KB
+
+Следующий шаг: подключение Dzx7Turbo из TS-Conf проекта для сжатия
+per-level данных (15 страниц bg L4 × 22 уровня = 330 страниц без сжатия,
+с ZX7 ~245 страниц).
+
+### Источники
+
+- `Source/ASM/main.asm` — main0/main1 split + CMD_ADDRESS_PTR override.
+- `Docs/TSLib/Include/FT/Coprocessor/Buffer.asm:5-7` — CMD_ADDRESS_PTR дефолт.
+- `Source/OTHER/zuma_full_z80_emulator.py` — FMADDR_REGS hook + ring buffer + watchpoint.
+- `~/Desktop/Zuma Deluxe/src/ASM/zuma_new_spg.asm` — main0/main1 паттерн в TS-Conf.
+- `releases/v021-2026-05-18-main0-main1-split.spg` — рабочий baseline.
+
+
+## Глава 26. Экономия RAM_G шаров: путь к PALETTED4444 (v025)
+
+### 26.1 Постановка задачи
+
+Изначальный atlas шаров — 6 цветов × 32 spin-фазы × 32×32 px ARGB4
+(2 байта/пиксель) = **384 KB**. Из 1 MB RAM_G на FT812 после bg, frog,
+killzone, destroy, text, cursor, sparkle остаётся ~530 KB. Добавление
+UI-фрейма (gameinterface) требует ещё ~80 KB, остаётся 65 KB — впритык.
+
+Цель: ужать atlas минимум вдвое, **сохранив**: 6 цветов, 32 spin-фазы,
+native цвета из source PNG, per-pixel alpha (anti-aliased силуэт).
+
+### 26.2 Опции форматов FT812
+
+| Формат | Bytes/px | 6×32×32×32 atlas | Alpha |
+|---|---|---|---|
+| ARGB4 | 2 | 384 KB | прямой 4-bit per px |
+| RGB565 | 2 | 384 KB | нет |
+| L8 | 1 | 192 KB | **= alpha mask** (не intensity!) |
+| L4 | 0.5 | 96 KB | = alpha mask |
+| PALETTED8 | 1 | 192 KB | 1024B RGBA8 палитра |
+| PALETTED565 | 1 | 192 KB | нет |
+| PALETTED4444 | 1 | 192 KB | 512B ARGB4 палитра |
+
+L4/L8 на FT812 — alpha mask: output = `tint × pixel/255`. Это
+«силуэт + tint», тело шара теряется. Не годится для многоцветных балов
+с собственным shading.
+
+### 26.3 Неудачные попытки (mid-may 2026)
+
+**Попытка 1: MONO ARGB4 + COLOR_RGB tint (64 KB).** Один atlas
+silver-шара (R=G=B=L, A=alpha) + tint per ball. Maya-faces на всех
+цветах одинаковые (из silver-источника), нет белого specular highlight
+(silver L_max ≈ 230). Tint не работает для многоцветного shading.
+
+**Попытка 2: L8 + tint (32 KB).** L8 на FT812 — alpha mask, не intensity.
+Шары полупрозрачные.
+
+**Попытка 3: PALETTED8 с BGRA byte order (192 KB + 1024B).** FT812
+читает палитру как RGBA, не BGRA. Все шары серые.
+
+**Попытка 4: PALETTED8 с RGBA byte order (192 KB + 1024B).** На этом
+конкретном FT812 — по-прежнему серые. PALETTED8 трактуется как L8
+(chip-revision quirk). Вывод после 4-х неудач — «PALETTED не работает».
+**Этот вывод был ложным.**
+
+### 26.4 PALETTED4444: три условия
+
+User-инсайт: PALETTED4444 (формат = 15) использует палитру **СТРОГО
+512 байт** (256 × 2 ARGB4). Прошлые попытки попадали в одну из трёх
+ловушек:
+
+1. **Размер палитры ≠ 512.** При 1024 (RGBA8) FT812 читает байты 512+
+   как PIXEL data за палитрой → corruption / hang. При меньшем размере →
+   out-of-range index → hang.
+
+2. **Формат записи ≠ ARGB4 LE.** Корректно:
+   ```python
+   word = (a4 << 12) | (r4 << 8) | (g4 << 4) | b4   # 16-bit LE
+   pal_bytes += word.to_bytes(2, "little")
+   ```
+   1024-байтная RGBA8 палитра ляжет как 256 пар бессмысленных ARGB4 →
+   все цвета серые.
+
+3. **Адрес не выровнен на 4 байта.** FT_PaletteSource берёт младшие
+   22 бита; FT812 требует 4-byte aligned. Невыровненный → junk.
+
+### 26.5 Setup PALETTED4444 (baseline v025)
+
+Palette generation (Python):
+```python
+fake_q = Image.fromarray(opaque_rgb.reshape(-1, 1, 3), "RGB")               .quantize(colors=255, method=Image.Quantize.MEDIANCUT)
+pal = bytearray()
+pal += b"    "           # idx 0 = transparent
+for i in range(255):
+    r, g, b = pal_rgb_flat[i*3:i*3+3]
+    a4 = 0xF
+    word = (a4 << 12) | ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4)
+    pal += word.to_bytes(2, "little")
+assert len(pal) == 512                  # СТРОГО
+```
+
+main.asm — upload:
+```asm
+BALLS_PALETTE_RAMG EQU #080000          ; 16K-aligned (4-byte aligned тоже)
+
+LD A, BALLS_PALETTE_PAGE
+SetPage2_A
+LD HL, #8000
+LD BC, 512                              ; ← не 1024!
+LD A, (BALLS_PALETTE_RAMG >> 16) & 0xFF
+LD DE, BALLS_PALETTE_RAMG & 0xFFFF
+CALL FT.WriteMem
+```
+
+MainLoop.asm — render:
+```asm
+FT_PaletteSource BALLS_PALETTE_RAMG      ; опкод 0x2A
+LD A, 9 : CALL ZL_EmitBallHandle         ; dual handle (192 cells > 128)
+FT_BitmapLayout FT_PALETTED4444, ZL_BALL_W, ZL_BALL_H
+FT_BitmapSize FT_NEAREST, FT_BORDER, FT_BORDER, ZL_BALL_W, ZL_BALL_H
+XOR A : CALL ZL_EmitBallHandle           ; handle 0
+FT_BitmapLayout FT_PALETTED4444, ZL_BALL_W, ZL_BALL_H
+FT_BitmapSize FT_NEAREST, FT_BORDER, FT_BORDER, ZL_BALL_W, ZL_BALL_H
+```
+
+### 26.6 Результаты v025 (HW-verified)
+
+| Аспект | v019 (original) | v025 (PALETTED4444) |
+|---|---|---|
+| Atlas | 384 KB | 192 KB + 512B палитра |
+| Spin phases | 32 | 32 |
+| Colors | 6 | 6 (256 quantized) |
+| HW status | works | works (юзер: «ничего не глючит») |
+
+Экономия **192 KB**. 4 точки в коде (chain, bullet, frog hand, frog
+back) используют один FT_PaletteSource per frame.
+
+### 26.7 Урок: «не работает» ≠ «формат не поддерживается»
+
+Из 4-х неудач легко сделать вывод «PALETTED unsupported». Прежде:
+
+1. Точно ли palette size совпадает со спекой формата? (565 = 512,
+   4444 = 512, 8 = 1024).
+2. Точно ли byte order совпадает? FT81x: little-endian 16-bit для
+   565/4444, 32-bit для 8.
+3. Выровнен ли адрес на 4 байта?
+4. FT_PaletteSource эмитнут ДО Vertex2f в Begin BITMAPS?
+
+Если 3 пункта проверены и **всё равно** не работает — попробовать
+другой PALETTED-вариант (4444 vs 8 — оказалось решением). На разных
+chip revisions FT812 поведение PALETTED8 / 4444 различается.
+
+### Источники
+
+- `Source/OTHER/make_balls_atlas_paletted.py` — atlas + RGBA8 palette.
+- `Graphics/Converted/balls_palette_argb4.bin` — 512 байт ARGB4 LE.
+- `Source/ASM/{main.asm, MainLoop.asm, Bullet.asm, Frog.asm}` — 4 точки.
+- `releases/v025-2026-05-19-paletted4444-fix.spg` + sources в
+  `_baseline_v025_paletted4444_fix/`.

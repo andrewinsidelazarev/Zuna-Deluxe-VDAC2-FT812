@@ -73,3 +73,15 @@ CLAUDE+.md
 /cursor_debug.png
 /spgbld.ini
 /z80_python_simulator_guide.md
+_baseline_v0*/
+
+# Local-only baseline backups (not for GitHub)
+_baseline_v0*/
+_pre_split_v0*/
+_fonts/
+
+# More build artifacts
+main1_play.bin
+
+# Audit/local notes
+аудит*.txt
