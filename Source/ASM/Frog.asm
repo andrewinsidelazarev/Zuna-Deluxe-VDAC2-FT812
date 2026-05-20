@@ -20,6 +20,7 @@
 ;   recoil < 0 → end: tongueExpand=24, ballExpand=32, pos=posStart, isFire=0.
 ;
 ; FT812 BITMAP_HANDLE: 2=body, 4=plate, 5=tongue.
+; Frog layer format is selected by FROG_ARGB4_ENABLED in main.asm.
 ; ============================================================================
 
 FROG_SPR_W        EQU 122
@@ -83,7 +84,6 @@ Frog_Init:        XOR  A
                   CALL VDC_RandomColor
                   LD   (Frog_BallColor), A
                   CALL VDC_RandomColor
-                  AND  3                                ; 0..3 (HD: nextBallColor 4 colors)
                   LD   (Frog_NextBallColor), A
                   RET
 
@@ -275,6 +275,17 @@ Frog_FireKeyboard:
 ; HD: при первом нажатии (was=0, now=1) и !isFire — start fire.
 ; ----------------------------------------------------------------------------
 Frog_HandleMouse:
+                  LD   A, (VDC_HudPointerBlock)
+                  OR   A
+                  JR   Z, .fh_mouse_free
+                  LD   A, Input.Mouse.SVK_LBUTTON
+                  CALL Input.Mouse.KeyState
+                  LD   A, 0
+                  JR   Z, .fh_block_save
+                  LD   A, 1
+.fh_block_save:   LD   (Frog_PrevMouseLeft), A
+                  RET
+.fh_mouse_free:
                   ; Fire = только LMB (стабильно работает). RMB/SPACE/Kempston —
                   ; видимо в этом Unreal phantom-pressed (port reads bit clear
                   ; постоянно) → блокировали edge-rise.
@@ -485,9 +496,16 @@ Frog_Mul8x8u:     LD   A, D
 ; Перед вызовом ожидается matrix = identity.  Plate matrix не трогает.
 ; ----------------------------------------------------------------------------
 Frog_DrawPlate:   FT_BitmapHandle 4
+                  if !FROG_ARGB4_ENABLED
+                  FT_PaletteSource PLATE_PALETTE_RAMG
+                  endif
                   FT_BitmapSource PLATE_RAMG_ADDR
+                  if FROG_ARGB4_ENABLED
                   FT_BitmapLayout FT_ARGB4, FROG_SPR_W * 2, FROG_SPR_W
-                  FT_BitmapSize   FT_BILINEAR, FT_BORDER, FT_BORDER, FROG_SPR_W, FROG_SPR_W
+                  else
+                  FT_BitmapLayout FT_PALETTED4444, FROG_SPR_W, FROG_SPR_W
+                  endif
+                  FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, FROG_SPR_W, FROG_SPR_W
                   CALL Frog_EmitVertex2f_PosCentered
                   RET
 
@@ -501,9 +519,16 @@ Frog_DrawBody:    LD   A, (Frog_Angle)
                   ADD  A, 192                          ; body: -64 BRAD (south native)
                   CALL Frog_EmitFrogMatrix
                   FT_BitmapHandle 2
+                  if !FROG_ARGB4_ENABLED
+                  FT_PaletteSource FROG_PALETTE_RAMG
+                  endif
                   FT_BitmapSource FROG_RAMG_ADDR
+                  if FROG_ARGB4_ENABLED
                   FT_BitmapLayout FT_ARGB4, FROG_SPR_W * 2, FROG_SPR_W
-                  FT_BitmapSize   FT_BILINEAR, FT_BORDER, FT_BORDER, FROG_SPR_W, FROG_SPR_W
+                  else
+                  FT_BitmapLayout FT_PALETTED4444, FROG_SPR_W, FROG_SPR_W
+                  endif
+                  FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, FROG_SPR_W, FROG_SPR_W
                   CALL Frog_EmitVertex2f_PosCentered
                   RET
 
@@ -561,9 +586,16 @@ Frog_DrawTongue:
                   CALL ZL_EmitSetMatrix
 
                   FT_BitmapHandle 5
+                  if !FROG_ARGB4_ENABLED
+                  FT_PaletteSource TONGUE_PALETTE_RAMG
+                  endif
                   FT_BitmapSource TONGUE_RAMG_ADDR
+                  if FROG_ARGB4_ENABLED
                   FT_BitmapLayout FT_ARGB4, FROG_TONGUE_W * 2, FROG_TONGUE_H
-                  FT_BitmapSize   FT_BILINEAR, FT_BORDER, FT_BORDER, FROG_TONGUE_SCR_W, FROG_TONGUE_SCR_H
+                  else
+                  FT_BitmapLayout FT_PALETTED4444, FROG_TONGUE_W, FROG_TONGUE_H
+                  endif
+                  FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, FROG_TONGUE_SCR_W, FROG_TONGUE_SCR_H
 
                   ; Vertex2f((TmpX - 48) * 16, (TmpY - 48) * 16)
                   LD   HL, (Frog_TmpX)
@@ -599,9 +631,16 @@ Frog_DrawFaceOverlay:
                   ADD  A, 192                            ; body native = south
                   CALL Frog_EmitFrogMatrix
                   FT_BitmapHandle 6
+                  if !FROG_ARGB4_ENABLED
+                  FT_PaletteSource OVERLAY_PALETTE_RAMG
+                  endif
                   FT_BitmapSource OVERLAY_RAMG_ADDR
+                  if FROG_ARGB4_ENABLED
                   FT_BitmapLayout FT_ARGB4, FROG_SPR_W * 2, FROG_SPR_W
-                  FT_BitmapSize   FT_BILINEAR, FT_BORDER, FT_BORDER, FROG_SPR_W, FROG_SPR_W
+                  else
+                  FT_BitmapLayout FT_PALETTED4444, FROG_SPR_W, FROG_SPR_W
+                  endif
+                  FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, FROG_SPR_W, FROG_SPR_W
                   ; Сбросить cell в 0: предыдущий next-ball оставил Cell=NextBallColor*8.
                   ; Cell — persistent DL state; без сброса Vertex2f читает overlay с
                   ; offset cell*29768 байт от OVERLAY_RAMG_ADDR — попадает за пределы
@@ -702,6 +741,10 @@ Frog_DrawBallNow:
                   ADD  HL, DE
                   LD   (Frog_TmpY), HL
 
+                  ; --- Emit rotation matrix matching frog aim (LUT) ---
+                  LD   A, (Frog_Angle)
+                  CALL ZL_EmitBallMatrixFromBRAD
+
                   ; PALETTED4444 dual handle.
                   LD   A, (Frog_BallColor)
                   CP   4
@@ -711,12 +754,16 @@ Frog_DrawBallNow:
 .fbm_h:           CALL ZL_EmitBallHandle
                   FT_PaletteSource BALLS_PALETTE_RAMG
                   FT_BitmapLayout FT_PALETTED4444, FROG_BALL_W, FROG_BALL_W
-                  FT_BitmapSize   FT_BILINEAR, FT_BORDER, FT_BORDER, FROG_BALL_DST_W, FROG_BALL_DST_W
+                  FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, FROG_BALL_DST_W, FROG_BALL_DST_W
                   LD   A, (Frog_BallColor)
                   AND  3
                   ADD  A, A : ADD A, A : ADD A, A : ADD A, A : ADD A, A    ; *32 = local cell
                   CALL FT.Coprocessor.Cell
                   CALL Frog_EmitVertex2f_Tmp_BallCentred
+
+                  ; Reset matrix → identity для последующих ops.
+                  CALL ZL_EmitLoadId
+                  CALL ZL_EmitSetMatrix
                   RET
 
 
@@ -760,7 +807,7 @@ Frog_DrawNextBall:
 .fbn_h:           CALL ZL_EmitBallHandle
                   FT_PaletteSource BALLS_PALETTE_RAMG
                   FT_BitmapLayout FT_PALETTED4444, FROG_BALL_W, FROG_BALL_W
-                  FT_BitmapSize   FT_BILINEAR, FT_BORDER, FT_BORDER, FROG_BALL_DST_W, FROG_BALL_DST_W
+                  FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, FROG_BALL_DST_W, FROG_BALL_DST_W
                   LD   A, (Frog_NextBallColor)
                   AND  3
                   ADD  A, A : ADD A, A : ADD A, A : ADD A, A : ADD A, A    ; *32 = local cell

@@ -35,6 +35,7 @@ EVT_NAMES = {
     3: "HEMI",
     4: "INSERT",
     5: "CASCADE",
+    6: "MATCH3",
 }
 
 
@@ -115,6 +116,13 @@ def print_entries(entries):
             hsub = (e['d2'] >> 8) & 0xFF
             d1str = f"len={slots_len} HSA={hsa}"
             d2str = f"off={off} HSub={hsub}"
+        elif e["type"] == 6:  # MATCH3: ctx=color, d1=lb|rb, d2=count|TmpInsIdx
+            lb = e['d1'] & 0xFF
+            rb = (e['d1'] >> 8) & 0xFF
+            count = e['d2'] & 0xFF
+            tmp_ins = (e['d2'] >> 8) & 0xFF
+            d1str = f"lb={lb} rb={rb}"
+            d2str = f"count={count} ins_idx={tmp_ins}"
         else:
             d1str = f"d1=0x{e['d1']:04X}"
             d2str = f"d2=0x{e['d2']:04X}"

@@ -43,11 +43,13 @@ EVT_BBOX_HIT        EQU 2
 EVT_HEMI            EQU 3
 EVT_INSERT          EQU 4
 EVT_CASCADE_TRIGGER EQU 5
+EVT_MATCH3          EQU 6
 
 ; --- Text atlases (nativealien48 ARGB4, red-yellow gradient). Объявлены здесь
 ; (ДО TSLib block) чтобы EQU были доступны во всех slot 0/1/3 функциях через
 ; sjasmplus forward-resolve. FT_RAM_G #0000..#10000 = 64K free area (раньше
 ; не использовалась, bg начинается с #010000). Размеры см. text_*.info.
+FROG_ARGB4_ENABLED    EQU 1
 TEXT_GAMEOVER_PAGE     EQU #20
 TEXT_GAMEOVER_RAMG     EQU #000000
 TEXT_GAMEOVER_W        EQU 169
@@ -104,6 +106,85 @@ FRAME_TOP_HANDLE     EQU 14
 FRAME_BOT_HANDLE     EQU 15
 FRAME_LEFT_HANDLE    EQU 16
 FRAME_RIGHT_HANDLE   EQU 17
+LIFE_FROG_HANDLE     EQU 18
+
+; --- HUD top bar lives counter ---
+;   life_frog 20×20 PALETTED4444 (raw upload, 400 bytes).
+;   Shared HUD palette 512 bytes ARGB4 LE (room for future menu/progress sprites).
+;   Размещение в RAM_G: после dialog frame (#0AC000..#0CC000), до cursor (#0D0000).
+LIFE_FROG_PAGE       EQU #5B
+LIFE_FROG_RAMG       EQU #0CC000                         ; 4-byte aligned, free slot
+LIFE_FROG_W          EQU 20
+LIFE_FROG_H          EQU 20
+LIFE_FROG_BYTES      EQU 400                             ; W * H для PALETTED4444 8bpp
+HUD_PALETTE_PAGE     EQU #5C
+HUD_PALETTE_RAMG     EQU #0CC200                         ; 4-byte aligned, 512 байт
+HUD_MENU_PAGE        EQU #5E
+HUD_MENU_RAMG        EQU #0CC800                         ; 3 cells 79×25, free before cursor
+HUD_MENU_W           EQU 79
+HUD_MENU_H           EQU 26
+HUD_MENU_BYTES       EQU HUD_MENU_W * HUD_MENU_H * 3
+HUD_PROGRESS_PAGE    EQU #5F
+HUD_PROGRESS_RAMG    EQU #0CE400                         ; 2 cells 63×19
+HUD_PROGRESS_W       EQU 63
+HUD_PROGRESS_H       EQU 19
+HUD_PROGRESS_BYTES   EQU HUD_PROGRESS_W * HUD_PROGRESS_H * 2
+
+; --- Dialog FRAME (Maya stone border + skull, 400×327 PALETTED4444) ---
+;   130800 bytes raw → 8 чанков ZX7 по 16K, страницы #60..#67, RAM_G #0AC000..#0CC000.
+;   Shared dialog_palette на #5D → RAM_G #0CC400.
+DIALOG_PALETTE_PAGE     EQU #5D
+DIALOG_PALETTE_RAMG     EQU #0CC400                       ; 4-byte aligned, 512 байт
+DIALOG_FRAME_PAGE_BASE  EQU #60
+DIALOG_FRAME_NUM_PAGES  EQU 8
+DIALOG_FRAME_RAMG       EQU #0AC000                        ; after Cancun8 font, before HUD area
+DIALOG_FRAME_W          EQU 400
+DIALOG_FRAME_H          EQU 327
+DIALOG_FRAME_HANDLE     EQU 21
+DIALOG_FRAME_X          EQU (640 - DIALOG_FRAME_W) / 2     ; 120
+DIALOG_FRAME_Y          EQU 60
+DIALOG_OK_PAGE          EQU #6D
+DIALOG_OK_RAMG          EQU #02D800                        ; gap after BG palette, before frog ARGB4
+DIALOG_OK_W             EQU 300
+DIALOG_OK_H             EQU 34
+DIALOG_OK_BYTES         EQU DIALOG_OK_W * DIALOG_OK_H
+DIALOG_OK_HANDLE        EQU 24
+
+; --- Native alien font atlas (ARGB4, A-Z+0-9+:.) ---
+;   643×24 = 30864 bytes raw, ZX7 в 2 SPG чанках #68..#69, RAM_G #098000.
+;   Используется через DrawString runtime glyph-blit. Per-char metadata в font_native_meta.inc.
+FONT_NATIVE_PAGE_BASE   EQU #68
+FONT_NATIVE_NUM_PAGES   EQU 2                            ; nativealien48 compact atlas, 2×16K
+FONT_NATIVE_RAMG        EQU #098000                       ; 4-byte aligned, free zone (96K)
+FONT_NATIVE_HANDLE      EQU 22
+
+; --- Cancun8 small font (HD-ref button text style) ---
+;   689×21 = 28938 байт raw, 2 ZX7 чанка, RAM_G #0A4000.
+FONT_CANCUN10_STATS_PAGE EQU #6A
+FONT_CANCUN10_STATS_RAMG EQU #0A0000
+FONT_CANCUN10_STATS_HANDLE EQU 25
+FONT_CANCUN8_PAGE_BASE  EQU #6B
+FONT_CANCUN8_NUM_PAGES_VDAC EQU 2
+FONT_CANCUN8_RAMG       EQU #0A4000
+FONT_CANCUN8_HANDLE     EQU 23
+
+; --- HUD lives counter geometry (sock на frame_top.png, замеренная Python'ом) ---
+;   Sock interior: x=26..103 (78 px), y=3..25 (22 px на 640×480 frame).
+;   3 жабы 20×20 центрируются: margin=(78-60)/2=9, start_x=26+9=35, y=4.
+LIFE_SOCK_X          EQU 35
+LIFE_SOCK_Y          EQU 4
+LIFE_STEP            EQU 20                            ; step между жабами (= sprite width)
+LIFE_MAX_DRAW        EQU 3                             ; clamp displayed count (sock 78px fits 3×20)
+HUD_MENU_X           EQU 539                           ; measured on frame_top.png MENU socket
+HUD_MENU_Y           EQU 3                             ; -1px to align with baked socket
+HUD_PROGRESS_X       EQU 407                           ; measured on frame_top.png right red gauge socket
+HUD_PROGRESS_Y       EQU 1
+; HUD_GAUGE_TARGET: оригинальный lvl1 = 3000 (юзер 2026-05-20 проверил в оригинале:
+; «при 3000 очков прогресс-бар в первом уровне становится зеленым»).
+; HD-ref levels.xml имеет 1000 для lvl11/lvl12, но это другая нумерация (lvl11 = level 1-1).
+; Пока оставлено 1000 для удобства тестирования; TODO поднять до 3000 (синхронизировать
+; и /125 → /375 в DrawHudProgress, или сделать generic Div16x16).
+HUD_GAUGE_TARGET     EQU 1000
 
 ; --- Frog RTC entropy state (slot 1 free RAM, между GAMELOG и Core @ #6000) ---
 ; Каждый 128-й вызов Frog_NewNextColor взводит FLAG; picker (Frog_FilteredRandomColor)
@@ -261,6 +342,26 @@ LogInsert:                                             ; in: nothing (reads VDC_
                 POP  HL
                 RET
 
+LogMatch3:                                             ; MATCH3: ctx=color, d1=lb|rb, d2=count|marker
+                PUSH HL
+                PUSH AF
+                LD   A, EVT_MATCH3
+                LD   (LOG_TMP_TYPE_ADDR), A
+                LD   A, (Core.VDC_TmpMC_Color)
+                LD   (LOG_TMP_CTX_ADDR), A
+                LD   A, (Core.VDC_TmpML)
+                LD   (LOG_TMP_DATA_ADDR), A             ; lb
+                LD   A, (Core.VDC_TmpMR)
+                LD   (LOG_TMP_DATA_ADDR+1), A           ; rb
+                LD   A, (Core.VDC_TmpMCount)
+                LD   (LOG_TMP_DATA_ADDR+2), A           ; count
+                LD   A, (Core.VDC_TmpInsIdx)
+                LD   (LOG_TMP_DATA_ADDR+3), A           ; TmpInsIdx (откуда был triggered)
+                CALL LogEvent
+                POP  AF
+                POP  HL
+                RET
+
 LogCascadeTrigger:                                     ; CASCADE_TRIGGER: ctx=gap_idx, d1=len|HSA, d2=offset|HSub
                 PUSH HL
                 PUSH DE
@@ -329,33 +430,34 @@ ClampOffsetOrder:                                      ; Prevent positive tail o
 ; ============================================================================
 KZ_DEFAULT_X       EQU 211
 KZ_DEFAULT_Y       EQU 217
+KZ_SPR_W           EQU 88
+KZ_SPR_H           EQU 88
+KZ_SPR_HALF        EQU 44
 
 DrawKillzoneDual:
-                ; Idle (KzFrame=1) = закрытый череп уже запечён в bg, overlay
-                ; не нужен. Для KzFrame=0 (open black hole во время INTRO/PREVIEW
-                ; и Game Over) ИЛИ KzFrame>=2 (animation opening / absorb) рисуем.
-                LD   A, (Core.VDC_KzFrame)
-                CP   1
-                RET  Z
+                ; Draw every frame. With 400x300 PALETTED4444 bg the baked
+                ; kill-zone area is visibly degraded, so the overlay must also
+                ; cover idle KzFrame=1.
                 CALL Core.ZL_EmitLoadId
                 CALL Core.ZL_EmitSetMatrix
                 FT_BitmapHandle 3
+                FT_PaletteSource Core.KZ_PALETTE_RAMG
                 FT_BitmapSource Core.KZ_RAMG_ADDR
-                FT_BitmapLayout FT_ARGB4, 64 * 2, 64
-                FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, 64, 64
+                FT_BitmapLayout FT_PALETTED4444, KZ_SPR_W, KZ_SPR_H
+                FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, KZ_SPR_W, KZ_SPR_H
                 ; FT.Coprocessor.Cell корраптит BC/DE → загружаем coords ПОСЛЕ Cell.
-                ; top-left = (KZ_DEFAULT_X - 32, KZ_DEFAULT_Y - 32) in 1/16 px.
+                ; top-left = (KZ_DEFAULT_X/Y - half) in 1/16 px.
                 ; --- pass 1: hole (Cell 0) ---
                 XOR  A
                 CALL FT.Coprocessor.Cell
-                LD   BC, (KZ_DEFAULT_X - 32) * 16
-                LD   DE, (KZ_DEFAULT_Y - 32) * 16
+                LD   BC, (KZ_DEFAULT_X - KZ_SPR_HALF) * 16
+                LD   DE, (KZ_DEFAULT_Y - KZ_SPR_HALF) * 16
                 CALL FT.Coprocessor.Vertex2f
                 ; --- pass 2: skull frame (Cell = VDC_KzFrame) ---
                 LD   A, (Core.VDC_KzFrame)
                 CALL FT.Coprocessor.Cell
-                LD   BC, (KZ_DEFAULT_X - 32) * 16
-                LD   DE, (KZ_DEFAULT_Y - 32) * 16
+                LD   BC, (KZ_DEFAULT_X - KZ_SPR_HALF) * 16
+                LD   DE, (KZ_DEFAULT_Y - KZ_SPR_HALF) * 16
                 JP   FT.Coprocessor.Vertex2f
 
 ; ----------------------------------------------------------------------------
@@ -373,6 +475,133 @@ DrawGameOverText:
                 LD   BC, (320 - TEXT_GAMEOVER_W / 2) * 16   ; X centered
                 LD   DE, 72 * 16
                 JP   FT.Coprocessor.Vertex2f
+
+; ============================================================================
+; UpdateDialog — диалог game-over обработка click anywhere → restart.
+; Вызывается каждый кадр ДО Frog_Update (чтобы dialog click не триггерил bullet).
+; ============================================================================
+UpdateDialog:
+                LD   A, (Core.VDC_DialogState)
+                OR   A
+                RET  Z                                  ; диалог не показан
+                LD   A, 1
+                LD   (Core.VDC_HudPointerBlock), A      ; dialog consumes LMB for this frame
+
+                ; --- Fire key (SPACE port #7FFE bit 0 OR Kempston FIRE) — bypasses hit-test ---
+                LD   BC, #7FFE
+                IN   A, (C)
+                BIT  0, A
+                JR   Z, .udlg_fire_check_edge          ; SPACE pressed (active LOW)
+                LD   A, Input.VK_KEMPSTON_B
+                CALL Input.Kempston.KeyState
+                JR   NZ, .udlg_fire_check_edge         ; Kempston FIRE pressed
+                ; Fire released — reset debounce
+                XOR  A
+                LD   (DialogFirePrev), A
+                JR   .udlg_check_lmb
+.udlg_fire_check_edge:
+                LD   A, (DialogFirePrev)
+                OR   A
+                JR   NZ, .udlg_check_lmb               ; уже было pressed → no edge
+                LD   A, 1
+                LD   (DialogFirePrev), A
+                JP   .udlg_action                       ; rising edge → trigger
+
+.udlg_check_lmb:
+                ; --- Read mouse LMB state, detect falling edge (release = click) ---
+                LD   A, Input.Mouse.SVK_LBUTTON
+                CALL Input.Mouse.KeyState               ; Z=released, NZ=pressed
+                LD   A, 0
+                JR   Z, .udlg_lmb_set
+                INC  A
+.udlg_lmb_set:  LD   C, A                               ; C = current LMB (0/1)
+                LD   A, (Core.VDC_PrevMouseL)
+                LD   B, A                               ; B = previous LMB
+                LD   A, C
+                LD   (Core.VDC_PrevMouseL), A           ; save for next frame
+                ; Falling edge: was pressed (B=1) AND now released (C=0) → CLICK
+                LD   A, B
+                OR   A
+                RET  Z                                  ; не было pressed → нет клика
+                LD   A, C
+                OR   A
+                RET  NZ                                 ; ещё pressed → нет клика
+                ; --- Hit-test: курсор должен быть в bounds OK button ---
+                LD   HL, (Input.Mouse.PositionX)
+                LD   DE, DLG_OK_X
+                AND  A
+                SBC  HL, DE
+                RET  C
+                LD   HL, (Input.Mouse.PositionX)
+                LD   DE, DLG_OK_X + DIALOG_OK_W
+                AND  A
+                SBC  HL, DE
+                RET  NC
+                LD   HL, (Input.Mouse.PositionY)
+                LD   DE, DLG_OK_Y
+                AND  A
+                SBC  HL, DE
+                RET  C
+                LD   HL, (Input.Mouse.PositionY)
+                LD   DE, DLG_OK_Y + DIALOG_OK_H
+                AND  A
+                SBC  HL, DE
+                RET  NC
+
+.udlg_action:   ; Mouse click in OK bounds OR Fire key pressed
+                LD   A, (Core.VDC_DialogState)
+                CP   3
+                JR   NZ, .udlg_restart
+                XOR  A
+                LD   (Core.VDC_DialogState), A          ; PAUSE → resume
+                RET
+.udlg_restart:
+                JP   RestartLevel
+
+DialogFirePrev: DEFB 0                                  ; SPACE/Fire debounce для dialog OK
+
+RestartLevel:
+                XOR  A
+                LD   (Core.VDC_DialogState), A          ; скрыть диалог
+                ; Если lives=0 → reset до 3 (full restart)
+                LD   A, (Core.VDC_Lives)
+                OR   A
+                JR   NZ, .rl_keep_lives
+                LD   A, 3
+                LD   (Core.VDC_Lives), A
+.rl_keep_lives:
+                CALL Core.VDC_Init                      ; chain reset, state=INTRO
+                CALL Core.Frog_Init
+                CALL Core.Bullet_Init
+                RET
+
+; ============================================================================
+; DrawRetryDialog — рендер диалога: frame + title + 5 stat lines.
+; ============================================================================
+DrawRetryDialog:
+                LD   A, (Core.VDC_DialogState)
+                OR   A
+                RET  Z
+
+                ; --- Dialog frame (400×327 PALETTED4444) ---
+                LD   C, 255 : LD D, 255 : LD E, 255
+                CALL FT.Coprocessor.ColorRGB
+                LD   E, 255
+                CALL FT.Coprocessor.ColorA
+                FT_PaletteSource DIALOG_PALETTE_RAMG
+                FT_BitmapHandle DIALOG_FRAME_HANDLE
+                FT_BitmapSource DIALOG_FRAME_RAMG
+                FT_BitmapLayout FT_PALETTED4444, DIALOG_FRAME_W, DIALOG_FRAME_H
+                FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, DIALOG_FRAME_W, DIALOG_FRAME_H
+                XOR  A : CALL FT.Coprocessor.Cell
+                LD   BC, DIALOG_FRAME_X * 16
+                LD   DE, DIALOG_FRAME_Y * 16
+                CALL FT.Coprocessor.Vertex2f
+
+                ; --- Title + 5 stat lines (native font glyph blit) ---
+                ; Pick title string по VDC_Lives, центруется DrawStringCentered.
+                CALL DrawDialogContent
+                RET
 
 ; ----------------------------------------------------------------------------
 ; DrawIntroText — нижний правый угол: LEVEL 1-1 (большой, 64 px via cmd_scale)
@@ -519,6 +748,221 @@ DrawFrameStrips:
                 LD   DE, FRAME_TOP_H * 16
                 JP   FT.Coprocessor.Vertex2f
 
+; ----------------------------------------------------------------------------
+; DrawLivesCounter — рендерит N жаб-иконок (20×20 PALETTED4444) в life sock
+; верхней рамки.  N = min(VDC_Lives, LIFE_MAX_DRAW).  Per-frame call after
+; DrawFrameStrips (поверх sock'а), но под cursor'ом.
+; ----------------------------------------------------------------------------
+DrawLivesCounter:
+                LD   A, (Core.VDC_Lives)
+                OR   A
+                RET  Z                                  ; 0 жизней → ничего не рисуем
+                CP   LIFE_MAX_DRAW + 1
+                JR   C, .lc_count_ok
+                LD   A, LIFE_MAX_DRAW                   ; clamp displayed count
+.lc_count_ok:   LD   (LifeDrawCnt), A
+
+                LD   C, 255 : LD D, 255 : LD E, 255
+                CALL FT.Coprocessor.ColorRGB
+                LD   E, 255
+                CALL FT.Coprocessor.ColorA
+                FT_PaletteSource HUD_PALETTE_RAMG
+                FT_Begin FT_BITMAPS
+                FT_BitmapHandle LIFE_FROG_HANDLE
+                FT_BitmapSource LIFE_FROG_RAMG
+                FT_BitmapLayout FT_PALETTED4444, LIFE_FROG_W, LIFE_FROG_W
+                FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, LIFE_FROG_W, LIFE_FROG_H
+                XOR  A : CALL FT.Coprocessor.Cell
+
+                LD   HL, LIFE_SOCK_X * 16               ; HL = текущий x в 1/16 px
+                LD   A, (LifeDrawCnt)
+                LD   B, A                               ; B = loop counter
+.lc_loop:       PUSH HL
+                PUSH BC
+                LD   B, H : LD C, L                     ; BC = x*16
+                LD   DE, LIFE_SOCK_Y * 16
+                CALL FT.Coprocessor.Vertex2f
+                POP  BC
+                POP  HL
+                LD   DE, LIFE_STEP * 16
+                ADD  HL, DE                             ; advance x на 20*16
+                DJNZ .lc_loop
+                RET
+
+LifeDrawCnt:    DEFB 0                                  ; temp clamped lives count
+
+; ----------------------------------------------------------------------------
+; UpdateHudMenu — hover/press state for top-right MENU button.
+; Also raises VDC_HudPointerBlock while pointer is over the button, so the frog
+; does not fire when the player clicks the HUD.
+; ----------------------------------------------------------------------------
+UpdateHudMenu:
+                LD   A, (Core.VDC_DialogState)
+                OR   A
+                JR   Z, .uhm_check
+                XOR  A
+                LD   (Core.VDC_HudMenuState), A
+                INC  A
+                LD   (Core.VDC_HudPointerBlock), A
+                RET
+.uhm_check:
+                ; X in [HUD_MENU_X, HUD_MENU_X + HUD_MENU_W)
+                LD   HL, (Input.Mouse.PositionX)
+                LD   DE, HUD_MENU_X
+                AND  A
+                SBC  HL, DE
+                JR   C, .uhm_out
+                LD   HL, (Input.Mouse.PositionX)
+                LD   DE, HUD_MENU_X + HUD_MENU_W
+                AND  A
+                SBC  HL, DE
+                JR   NC, .uhm_out
+                ; Y in [HUD_MENU_Y, HUD_MENU_Y + HUD_MENU_H)
+                LD   HL, (Input.Mouse.PositionY)
+                LD   DE, HUD_MENU_Y
+                AND  A
+                SBC  HL, DE
+                JR   C, .uhm_out
+                LD   HL, (Input.Mouse.PositionY)
+                LD   DE, HUD_MENU_Y + HUD_MENU_H
+                AND  A
+                SBC  HL, DE
+                JR   NC, .uhm_out
+                LD   A, 1
+                LD   (Core.VDC_HudPointerBlock), A
+                LD   A, (Core.VDC_HudMenuState)
+                LD   B, A                              ; previous state
+                LD   A, Input.Mouse.SVK_LBUTTON
+                CALL Input.Mouse.KeyState
+                LD   A, 1                              ; hover
+                JR   Z, .uhm_store
+                INC  A                                 ; pressed
+.uhm_store:     LD   (Core.VDC_HudMenuState), A
+                LD   C, A                              ; current state
+                LD   A, B
+                CP   2
+                RET  NZ                                ; was not pressed
+                LD   A, C
+                CP   1
+                RET  NZ                                ; release must happen over button
+                LD   A, 3                              ; PAUSE dialog
+                LD   (Core.VDC_DialogState), A
+                RET
+.uhm_out:       XOR  A
+                LD   (Core.VDC_HudMenuState), A
+                LD   (Core.VDC_HudPointerBlock), A
+                RET
+
+; ----------------------------------------------------------------------------
+; DrawHudProgress — original Zuma bar sprites in top HUD.
+; Baked red socket is empty. Yellow fills by score; green means gauge full.
+; ----------------------------------------------------------------------------
+DrawHudProgress:
+                LD   C, 255 : LD D, 255 : LD E, 255
+                CALL FT.Coprocessor.ColorRGB
+                LD   E, 255
+                CALL FT.Coprocessor.ColorA
+                FT_PaletteSource HUD_PALETTE_RAMG
+                FT_Begin FT_BITMAPS
+                FT_BitmapHandle 19
+                FT_BitmapSource HUD_PROGRESS_RAMG
+                FT_BitmapLayout FT_PALETTED4444, HUD_PROGRESS_W, HUD_PROGRESS_H
+                FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, HUD_PROGRESS_W, HUD_PROGRESS_H
+                LD   A, (Core.VDC_GaugeFull)
+                OR   A
+                JR   Z, .dhp_yellow
+                FT_ScissorXY HUD_PROGRESS_X, HUD_PROGRESS_Y
+                FT_ScissorSize HUD_PROGRESS_W, HUD_PROGRESS_H
+                XOR  A                                 ; green fill
+                JR   .dhp_draw
+.dhp_yellow:
+                LD   HL, (Core.VDC_GaugeShown)          ; animated value, smooth fill
+                LD   A, H
+                OR   L
+                RET  Z                                  ; empty: baked red socket remains
+                ; Exact formula: fill_px = (GaugeScore * HUD_PROGRESS_W) / HUD_GAUGE_TARGET
+                ; HUD_GAUGE_TARGET = 1000 = 8 × 125 → делим в два прохода
+                ; (нет Div16x16, но есть VDC_DivHLbyA для /125 и shift для /8).
+                ; GaugeScore < HUD_GAUGE_TARGET (GaugeFull=0 на этой ветке), max
+                ; multiplication 999 × 63 = 62937 — влезает в 16-bit без overflow.
+                LD   A, HUD_PROGRESS_W                  ; 63
+                CALL Core.ZL_Mul16x8                    ; HL = score × 63
+                SRL  H : RR  L
+                SRL  H : RR  L
+                SRL  H : RR  L                          ; HL /= 8
+                LD   A, 125
+                CALL Core.VDC_DivHLbyA                  ; HL = HL / 125 = score × 63 / 1000
+                LD   A, L
+                OR   A
+                JR   NZ, .dhp_clamp_check
+                INC  A                                  ; min visible 1 px если score>0
+.dhp_clamp_check:
+                CP   HUD_PROGRESS_W
+                JR   C, .dhp_have_width_a
+                LD   A, HUD_PROGRESS_W
+.dhp_have_width_a:
+                LD   (DhpFillPx), A                     ; B/BC клобается FT_ScissorXY ниже,
+                                                        ; поэтому fill_px храним в памяти
+.dhp_have_width:
+                FT_ScissorXY HUD_PROGRESS_X, HUD_PROGRESS_Y
+                LD   A, (DhpFillPx)                     ; restore fill_px после FT_ScissorXY
+                CALL EmitScissorSizeAProgress
+                LD   A, 1                               ; yellow fill
+.dhp_draw:
+                CALL FT.Coprocessor.Cell
+                LD   BC, HUD_PROGRESS_X * 16
+                LD   DE, HUD_PROGRESS_Y * 16
+                CALL FT.Coprocessor.Vertex2f
+                FT_ScissorXY 0, 0
+                FT_ScissorSize 640, 480
+                RET
+
+DhpFillPx:      DEFB 0                                  ; scratch для DrawHudProgress fill_px
+
+EmitScissorSizeAProgress:
+                AND  #7F
+                LD   L, A
+                AND  #0F
+                RLCA
+                RLCA
+                RLCA
+                RLCA
+                LD   D, A
+                LD   E, HUD_PROGRESS_H
+                LD   A, L
+                SRL  A
+                SRL  A
+                SRL  A
+                SRL  A
+                LD   C, A
+                LD   B, #1C
+                JP   FT.Coprocessor.Command_BCDE
+
+; ----------------------------------------------------------------------------
+; DrawHudMenu — top-right MENU button, cells: 1=hover/2=pressed.
+; Idle state (=0) уже baked в frame_top.png — не рисуем чтобы не тратить
+; FT812 pixel-clock + DL bytes впустую.
+; ----------------------------------------------------------------------------
+DrawHudMenu:
+                LD   A, (Core.VDC_HudMenuState)
+                OR   A
+                RET  Z                                  ; idle — baked, skip draw
+                LD   C, 255 : LD D, 255 : LD E, 255
+                CALL FT.Coprocessor.ColorRGB
+                LD   E, 255
+                CALL FT.Coprocessor.ColorA
+                FT_PaletteSource HUD_PALETTE_RAMG
+                FT_Begin FT_BITMAPS
+                FT_BitmapHandle 20
+                FT_BitmapSource HUD_MENU_RAMG
+                FT_BitmapLayout FT_PALETTED4444, HUD_MENU_W, HUD_MENU_H
+                FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, HUD_MENU_W, HUD_MENU_H
+                LD   A, (Core.VDC_HudMenuState)
+                CALL FT.Coprocessor.Cell
+                LD   BC, HUD_MENU_X * 16
+                LD   DE, HUD_MENU_Y * 16
+                JP   FT.Coprocessor.Vertex2f
+
 DrawIntroText:
                 ; --- Fade-out alpha: VDC_IntroTick 240→0; last 60 ticks fade ---
                 ; alpha = (tick<60) ? tick*4 : 255
@@ -563,6 +1007,609 @@ DrawIntroText:
                 LD   BC, (640 - TEXT_SPIRALDOOM_W - 30) * 16
                 LD   DE, (480 - TEXT_SPIRALDOOM_H - 30) * 16
                 JP   FT.Coprocessor.Vertex2f
+
+; ============================================================================
+; DrawDialogContent — title + 5 stat lines, glyph blit using nativealien font.
+; ============================================================================
+DLG_TITLE_Y     EQU 160                                 ; внутри felt'а (frame top=60, skull+border=80→140)
+DLG_STATS_Y    EQU 208
+DLG_STATS_X_L  EQU 165                                 ; левая колонка X (внутри felt'а)
+DLG_STATS_X_R  EQU 356                                 ; правая колонка X (-3 cancun10 chars)
+DLG_LINE_H     EQU 18                                  ; spacing между строками (native cancun10 11px tall)
+DLG_OK_X       EQU 170
+DLG_OK_Y       EQU 315                                  ; moved up 20px — felt area кончается ~Y=360, OK теперь 315..349
+DLG_OK_W       EQU DIALOG_OK_W
+DLG_OK_H       EQU DIALOG_OK_H
+
+DrawDialogContent:
+                ; --- Tint white ONCE ---
+                LD   C, 255 : LD D, 255 : LD E, 255
+                CALL FT.Coprocessor.ColorRGB
+                LD   E, 255
+                CALL FT.Coprocessor.ColorA
+
+                ; --- Setup native font (title) ---
+                CALL SetFontNative
+                LD   A, (Core.VDC_DialogState)
+                CP   3
+                JR   NZ, .dc_not_pause
+                LD   HL, str_paused
+                LD   BC, 260 * 16
+                LD   DE, DLG_TITLE_Y * 16
+                CALL DrawString
+                CALL SetFontCancun8
+                LD   HL, str_click_resume
+                LD   BC, 235 * 16
+                LD   DE, (DLG_STATS_Y + DLG_LINE_H) * 16
+                CALL DrawString
+                RET
+.dc_not_pause:
+
+                ; --- Title по VDC_Lives ---
+                LD   A, (Core.VDC_Lives)
+                CP   2
+                JR   Z, .dc_title_2
+                CP   1
+                JR   Z, .dc_title_1
+                LD   HL, str_game_over
+                JR   .dc_title_draw
+.dc_title_2:    LD   HL, str_2_lives
+                JR   .dc_title_draw
+.dc_title_1:    LD   HL, str_1_lives
+.dc_title_draw:
+                ; Центруем по ширине — вычислим width строки сначала
+                CALL StrWidth                            ; HL ptr → DE width
+                LD   HL, 320
+                AND  A
+                SBC  HL, DE                              ; HL = 320 - W/2 ? нет, надо /2
+                ; Actually: x = 320 - W/2. Compute via SRL on DE first.
+                LD   A, D : SRL A : LD D, A
+                LD   A, E : RRA : LD E, A                ; DE = W/2
+                LD   HL, 320
+                AND  A
+                SBC  HL, DE
+                ADD  HL, HL : ADD HL, HL : ADD HL, HL : ADD HL, HL  ; x*16
+                LD   B, H : LD C, L
+                LD   DE, DLG_TITLE_Y * 16
+                ; Reload string ptr (clobbered)
+                LD   A, (Core.VDC_Lives)
+                CP   2
+                JR   Z, .dc_title_2b
+                CP   1
+                JR   Z, .dc_title_1b
+                LD   HL, str_game_over
+                JR   .dc_title_draw2
+.dc_title_2b:   LD   HL, str_2_lives
+                JR   .dc_title_draw2
+.dc_title_1b:   LD   HL, str_1_lives
+.dc_title_draw2:
+                CALL DrawString
+
+                ; --- Stats use a separate cancun10 atlas. Do not touch the
+                ; pixel-tuned cancun8 menu/HUD font.
+                CALL SetFontCancun10Stats
+
+                ; --- Stats line 1: TIME M:SS ---
+                LD   HL, str_time
+                LD   BC, DLG_STATS_X_L * 16
+                LD   DE, DLG_STATS_Y * 16
+                CALL DrawString
+                CALL DrawTimeValue
+
+                ; --- Stats line 2: COMBOS N ---
+                LD   HL, str_combos
+                LD   BC, DLG_STATS_X_L * 16
+                LD   DE, (DLG_STATS_Y + DLG_LINE_H) * 16
+                CALL DrawString
+                LD   A, (Core.VDC_StatCombos)
+                CALL DrawByteValue
+
+                ; --- Stats line 3: COINS N ---
+                LD   HL, str_coins
+                LD   BC, DLG_STATS_X_L * 16
+                LD   DE, (DLG_STATS_Y + DLG_LINE_H * 2) * 16
+                CALL DrawString
+                LD   A, (Core.VDC_StatCoins)
+                CALL DrawByteValue
+
+                ; --- Stats line 4 (right col, top): SCORE N ---
+                LD   HL, str_score_label
+                LD   BC, DLG_STATS_X_R * 16
+                LD   DE, DLG_STATS_Y * 16
+                CALL DrawString
+                LD   HL, (Core.VDC_PlayerScore)
+                CALL DrawWordValue
+
+                ; --- Stats line 5 (right col): MAX CHAIN N ---
+                LD   HL, str_max_chain
+                LD   BC, DLG_STATS_X_R * 16
+                LD   DE, (DLG_STATS_Y + DLG_LINE_H) * 16
+                CALL DrawString
+                LD   A, (Core.VDC_StatMaxChain)
+                CALL DrawByteValue
+
+                ; --- Stats line 6 (right col): MAX COMBO N ---
+                LD   HL, str_max_combo
+                LD   BC, DLG_STATS_X_R * 16
+                LD   DE, (DLG_STATS_Y + DLG_LINE_H * 2) * 16
+                CALL DrawString
+                LD   A, (Core.VDC_StatMaxCombo)
+                CALL DrawByteValue
+                ; OK button рисуем для state=1 (SHOW_RETRY, lives>0) и state=2
+                ; (GAME_OVER_FINAL, lives=0). НЕ рисуем для state=3 (PAUSE).
+                LD   A, (Core.VDC_DialogState)
+                CP   3
+                CALL C, DrawDialogOkButton              ; state < 3 → draw OK
+                RET
+
+DrawDialogOkButton:
+                LD   C, 255 : LD D, 255 : LD E, 255
+                CALL FT.Coprocessor.ColorRGB
+                LD   E, 255
+                CALL FT.Coprocessor.ColorA
+                FT_PaletteSource DIALOG_PALETTE_RAMG
+                FT_Begin FT_BITMAPS
+                FT_BitmapHandle DIALOG_OK_HANDLE
+                FT_BitmapSource DIALOG_OK_RAMG
+                FT_BitmapLayout FT_PALETTED4444, DIALOG_OK_W, DIALOG_OK_H
+                FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, DIALOG_OK_W, DIALOG_OK_H
+                XOR  A
+                CALL FT.Coprocessor.Cell
+                LD   BC, DLG_OK_X * 16
+                LD   DE, DLG_OK_Y * 16
+                JP   FT.Coprocessor.Vertex2f
+
+; --- Title strings: lowercase т.к. nativealienextended18 lowercase = декоративный uppercase ---
+str_game_over:  DB "GAME OVER",0
+str_2_lives:    DB "2 LIVES LEFT",0
+str_1_lives:    DB "1 LIFE LEFT",0
+str_paused:      DB "PAUSED",0
+; --- Stats labels: UPPERCASE т.к. cancun8 содержит ТОЛЬКО uppercase A-Z + digits + symbols ---
+str_time:       DB "TIME ",0
+str_combos:     DB "COMBOS ",0
+str_coins:      DB "COINS ",0
+str_max_chain:  DB "MAX CHAIN ",0
+str_max_combo:  DB "MAX COMBO ",0
+str_score_label: DB "SCORE ",0
+str_click_resume: DB "CLICK TO RESUME",0
+str_hud_score:  DB "SCORE",0
+
+
+; ============================================================================
+; SetFontNative / SetFontCancun8 — переключение текущего шрифта.
+;   Устанавливают FontPtr* state vars + emit BITMAP_HANDLE + BITMAP_LAYOUT.
+;   Per-glyph DrawString потом эмитит BITMAP_SOURCE + SIZE.
+; ============================================================================
+SetFontNative:
+                LD   HL, font_native_glyph_x
+                LD   (FontPtrGlyphX), HL
+                LD   HL, font_native_glyph_w
+                LD   (FontPtrGlyphW), HL
+                LD   HL, font_native_advance
+                LD   (FontPtrAdvance), HL
+                LD   HL, FONT_NATIVE_RAMG & 0xFFFF
+                LD   (FontAtlasLo), HL
+                LD   A, (FONT_NATIVE_RAMG >> 16) & 0xFF
+                LD   (FontAtlasHi), A
+                LD   A, FONT_NATIVE_H
+                LD   (FontHeight), A
+                FT_BitmapHandle FONT_NATIVE_HANDLE
+                FT_BitmapLayout FT_ARGB4, FONT_NATIVE_STRIDE, FONT_NATIVE_H
+                RET
+
+SetFontCancun8:
+                LD   HL, font_cancun8_glyph_x
+                LD   (FontPtrGlyphX), HL
+                LD   HL, font_cancun8_glyph_w
+                LD   (FontPtrGlyphW), HL
+                LD   HL, font_cancun8_advance
+                LD   (FontPtrAdvance), HL
+                LD   HL, FONT_CANCUN8_RAMG & 0xFFFF
+                LD   (FontAtlasLo), HL
+                LD   A, (FONT_CANCUN8_RAMG >> 16) & 0xFF
+                LD   (FontAtlasHi), A
+                LD   A, FONT_CANCUN8_H
+                LD   (FontHeight), A
+                FT_BitmapHandle FONT_CANCUN8_HANDLE
+                FT_BitmapLayout FT_ARGB4, FONT_CANCUN8_STRIDE, FONT_CANCUN8_H
+                RET
+
+SetFontCancun10Stats:
+                LD   HL, font_cancun10_stats_glyph_x
+                LD   (FontPtrGlyphX), HL
+                LD   HL, font_cancun10_stats_glyph_w
+                LD   (FontPtrGlyphW), HL
+                LD   HL, font_cancun10_stats_advance
+                LD   (FontPtrAdvance), HL
+                LD   HL, FONT_CANCUN10_STATS_RAMG & 0xFFFF
+                LD   (FontAtlasLo), HL
+                LD   A, (FONT_CANCUN10_STATS_RAMG >> 16) & 0xFF
+                LD   (FontAtlasHi), A
+                LD   A, FONT_CANCUN10_STATS_H
+                LD   (FontHeight), A
+                FT_BitmapHandle FONT_CANCUN10_STATS_HANDLE
+                FT_BitmapLayout FT_ARGB4, FONT_CANCUN10_STATS_STRIDE, FONT_CANCUN10_STATS_H
+                RET
+
+FontPtrGlyphX:  DEFW 0
+FontPtrGlyphW:  DEFW 0
+FontPtrAdvance: DEFW 0
+FontAtlasLo:    DEFW 0
+FontAtlasHi:    DEFB 0
+FontHeight:     DEFB 0
+
+; ============================================================================
+; DrawString — glyph-blit zero-terminated string в TEKUЩЕМ шрифте.
+;   In:  HL = string ptr, BC = start x*16, DE = y*16. Font state из FontPtr*.
+;   Out: (DrawStr_CurX) = end x*16
+;   Clobbers all.
+; ============================================================================
+DrawString:
+                LD   (DrawStr_Ptr), HL
+                LD   (DrawStr_CurX), BC
+                LD   (DrawStr_Y), DE
+.ds_loop:       LD   HL, (DrawStr_Ptr)
+                LD   A, (HL)
+                INC  HL
+                LD   (DrawStr_Ptr), HL
+                OR   A
+                RET  Z                                  ; конец строки
+                CP   128
+                JR   NC, .ds_loop                       ; non-ASCII skip
+
+                ; --- Lookup glyph metadata: BC = char index (0..127) ---
+                LD   C, A
+                LD   B, 0
+
+                ; advance := (FontPtrAdvance)[A]
+                LD   HL, (FontPtrAdvance)
+                ADD  HL, BC
+                LD   A, (HL)
+                OR   A
+                JR   Z, .ds_loop                        ; advance=0 → неизвестный char, skip
+                LD   (DrawStr_Adv), A
+
+                ; glyph_w := (FontPtrGlyphW)[A]
+                LD   HL, (FontPtrGlyphW)
+                ADD  HL, BC
+                LD   A, (HL)
+                OR   A
+                JR   Z, .ds_advance_only                ; w=0 (space) → только advance
+
+                ; --- Emit BITMAP_SIZE (NEAREST/BORDER, w, FontHeight) ---
+                LD   H, 0
+                LD   L, A                               ; HL = w
+                ADD  HL, HL : ADD HL, HL : ADD HL, HL   ; <<3
+                ADD  HL, HL : ADD HL, HL : ADD HL, HL   ; <<6
+                ADD  HL, HL : ADD HL, HL : ADD HL, HL   ; <<9 (w << 9)
+                LD   A, (FontHeight)
+                LD   E, A : LD D, 0
+                ADD  HL, DE                             ; HL = (w<<9)|H
+                LD   B, #08
+                LD   C, 0
+                LD   D, H : LD E, L
+                CALL FT.Coprocessor.Command_BCDE
+
+                ; --- Emit BITMAP_SOURCE = atlas_base + glyph_x * 2 ---
+                LD   HL, (DrawStr_Ptr)
+                DEC  HL                                  ; back to current char
+                LD   A, (HL)
+                LD   C, A : LD B, 0
+                LD   HL, (FontPtrGlyphX)
+                ADD  HL, BC : ADD HL, BC                ; *2 (word table)
+                LD   E, (HL) : INC HL
+                LD   D, (HL)                             ; DE = glyph_x (pixels)
+                EX   DE, HL
+                ADD  HL, HL                              ; HL = glyph_x_bytes
+                LD   DE, (FontAtlasLo)
+                ADD  HL, DE                              ; HL = low 16 of full addr
+                LD   A, (FontAtlasHi)
+                JR   NC, .ds_no_carry
+                INC  A
+.ds_no_carry:
+                LD   B, #01
+                LD   C, A
+                LD   D, H : LD E, L
+                CALL FT.Coprocessor.Command_BCDE
+
+                ; --- Emit Cell 0 + Vertex2f(CurX, Y) ---
+                XOR  A : CALL FT.Coprocessor.Cell
+                LD   BC, (DrawStr_CurX)
+                LD   DE, (DrawStr_Y)
+                CALL FT.Coprocessor.Vertex2f
+
+.ds_advance_only:
+                ; CurX += advance * 16
+                LD   A, (DrawStr_Adv)
+                LD   H, 0 : LD L, A
+                ADD  HL, HL : ADD HL, HL : ADD HL, HL : ADD HL, HL   ; *16
+                LD   DE, (DrawStr_CurX)
+                ADD  HL, DE
+                LD   (DrawStr_CurX), HL
+                JP   .ds_loop
+
+DrawStr_Ptr:    DEFW 0
+DrawStr_CurX:   DEFW 0
+DrawStr_Y:      DEFW 0
+DrawStr_Adv:    DEFB 0
+
+; ============================================================================
+; DrawHudTopText — верхний HUD: clock + cumulative score.
+; ============================================================================
+DrawHudTopText:
+                CALL SetFontCancun8
+                LD   C, 255 : LD D, 242 : LD E, 168
+                CALL FT.Coprocessor.ColorRGB
+                LD   E, 255
+                CALL FT.Coprocessor.ColorA
+                FT_Begin FT_BITMAPS
+
+                ; Left red socket: centered game clock HH:MM:SS.
+                ;   Sock interior x=169..229 (cx=199, w=61), y=2..18 (h=17).
+                ;   Cancun8 inked rows y=6..16 — при Y=0 центрируется в соке.
+                CALL FormatHudClock
+                LD   HL, DrawNumBuf
+                CALL StrWidth
+                LD   HL, 194                            ; center of left red socket (shifted -5)
+                LD   A, E
+                SRL  A                                  ; half width
+                LD   E, A : LD D, 0
+                AND  A
+                SBC  HL, DE
+                ADD  HL, HL : ADD HL, HL : ADD HL, HL : ADD HL, HL
+                LD   B, H : LD C, L
+                LD   DE, 1 * 16                         ; Y=1 (shifted +1 down)
+                LD   HL, DrawNumBuf
+                CALL DrawString
+
+                ; Black score socket: label pinned left, number pinned right.
+                ;   Sock interior x=273..367 (w=95). Padding 2px each side.
+                LD   HL, str_hud_score
+                LD   BC, 271 * 16                       ; SCORE label pinned left (shifted -4)
+                LD   DE, 1 * 16                         ; Y=1 (shifted +1 down)
+                CALL DrawString
+
+                LD   HL, (Core.VDC_PlayerScore)
+                CALL FormatWordToBuf
+                LD   HL, DrawNumBuf
+                CALL StrWidth
+                LD   HL, 361                            ; number right edge (shifted -4)
+                AND  A
+                SBC  HL, DE
+                ADD  HL, HL : ADD HL, HL : ADD HL, HL : ADD HL, HL
+                LD   B, H : LD C, L
+                LD   DE, 1 * 16                         ; Y=1 (shifted +1 down)
+                LD   HL, DrawNumBuf
+                CALL DrawString
+
+                LD   C, 255 : LD D, 255 : LD E, 255
+                JP   FT.Coprocessor.ColorRGB
+
+; ============================================================================
+; StrWidth — посчитать ширину строки в пикселях (sum of advances).
+;   In:  HL = string ptr (zero-terminated)
+;   Out: DE = width (pixels)
+;   Clobbers AF, BC, HL.
+; ============================================================================
+StrWidth:
+                LD   DE, 0
+.sw_loop:       LD   A, (HL)
+                INC  HL
+                OR   A
+                RET  Z
+                CP   128
+                JR   NC, .sw_loop
+                PUSH HL
+                LD   C, A : LD B, 0
+                LD   HL, (FontPtrAdvance)
+                ADD  HL, BC
+                LD   A, (HL)
+                LD   H, 0 : LD L, A
+                ADD  HL, DE
+                EX   DE, HL
+                POP  HL
+                JR   .sw_loop
+
+; ============================================================================
+; DrawByteValue — нарисовать байт (0..255) как до-3-х цифр после строки.
+;   In: A = byte value. Cursor берётся из DrawStr_CurX.
+;   Clobbers all.
+; ============================================================================
+DrawByteValue:
+                LD   (DrawNumBuf+3), A                  ; временно сохраним A
+                LD   HL, DrawNumBuf
+                ; convert: hundreds, tens, units
+                LD   A, (DrawNumBuf+3)
+                LD   B, '0' - 1
+.dbv_h:         INC  B
+                SUB  100
+                JR   NC, .dbv_h
+                ADD  A, 100
+                LD   (HL), B : INC HL
+                LD   B, '0' - 1
+.dbv_t:         INC  B
+                SUB  10
+                JR   NC, .dbv_t
+                ADD  A, 10
+                LD   (HL), B : INC HL
+                ADD  A, '0'
+                LD   (HL), A : INC HL
+                LD   (HL), 0                            ; null term
+                ; Strip leading zeros (replace with space which has w=0)
+                LD   HL, DrawNumBuf
+                LD   A, (HL)
+                CP   '0'
+                JR   NZ, .dbv_draw
+                LD   (HL), ' '
+                INC  HL
+                LD   A, (HL)
+                CP   '0'
+                JR   NZ, .dbv_draw
+                LD   (HL), ' '
+.dbv_draw:
+                LD   HL, DrawNumBuf
+                LD   BC, (DrawStr_CurX)
+                LD   DE, (DrawStr_Y)
+                JP   DrawString
+
+; ============================================================================
+; DrawWordValue — нарисовать 16-bit unsigned как 1..5 цифр после строки.
+;   In: HL = value. Cursor берётся из DrawStr_CurX.
+; ============================================================================
+FormatWordToBuf:
+                LD   (DrawWordTmp), HL
+                LD   HL, DrawNumBuf
+                LD   (DrawWordOut), HL
+                LD   IX, DrawWordDivs
+                LD   DE, DrawNumBuf
+                LD   B, 5
+.dwv_digit:
+                LD   HL, (DrawWordTmp)
+                LD   C, '0' - 1
+                LD   A, (IX+0)
+                LD   (DrawWordDiv), A
+                LD   A, (IX+1)
+                LD   (DrawWordDiv+1), A
+.dwv_sub:
+                INC  C
+                LD   DE, (DrawWordDiv)
+                AND  A
+                SBC  HL, DE
+                JR   NC, .dwv_sub
+                ADD  HL, DE
+                LD   (DrawWordTmp), HL
+                LD   A, C
+                LD   HL, (DrawWordOut)
+                LD   (HL), A
+                INC  HL
+                LD   (DrawWordOut), HL
+                INC  IX
+                INC  IX
+                DJNZ .dwv_digit
+                XOR  A
+                LD   HL, (DrawWordOut)
+                LD   (HL), A
+                RET
+
+DrawWordValue:
+                CALL FormatWordToBuf
+                LD   HL, DrawNumBuf
+                LD   BC, (DrawStr_CurX)
+                LD   DE, (DrawStr_Y)
+                JP   DrawString
+
+DrawWordDivs:   DEFW 10000, 1000, 100, 10, 1
+DrawWordTmp:    DEFW 0
+DrawWordDiv:    DEFW 0
+DrawWordOut:    DEFW DrawNumBuf
+
+; ============================================================================
+; FormatHudClock — DrawNumBuf = "HH:MM:SS" from RTC-based VDC_GameSeconds.
+; ============================================================================
+FormatHudClock:
+                LD   HL, (Core.VDC_GameSeconds)
+                LD   B, 0                              ; hours
+.fhc_hour:      LD   DE, 3600
+                AND  A
+                SBC  HL, DE
+                JR   C, .fhc_hour_done
+                INC  B
+                JR   .fhc_hour
+.fhc_hour_done: ADD  HL, DE
+                LD   C, 0                              ; minutes
+.fhc_min:       LD   DE, 60
+                AND  A
+                SBC  HL, DE
+                JR   C, .fhc_min_done
+                INC  C
+                JR   .fhc_min
+.fhc_min_done:  ADD  HL, DE                            ; L = seconds 0..59
+                LD   A, B
+                LD   (HudClockHour), A
+                LD   A, C
+                LD   (HudClockMin), A
+                LD   A, L
+                LD   (HudClockSec), A
+
+                LD   HL, DrawNumBuf
+                LD   A, (HudClockHour)
+                CALL FormatTwoDigits
+                LD   (HL), ':'
+                INC  HL
+                LD   A, (HudClockMin)
+                CALL FormatTwoDigits
+                LD   (HL), ':'
+                INC  HL
+                LD   A, (HudClockSec)
+                CALL FormatTwoDigits
+                LD   (HL), 0
+                RET
+
+FormatTwoDigits:
+                LD   B, '0' - 1
+.ftd_tens:      INC  B
+                SUB  10
+                JR   NC, .ftd_tens
+                ADD  A, 10
+                LD   (HL), B
+                INC  HL
+                ADD  A, '0'
+                LD   (HL), A
+                INC  HL
+                RET
+
+HudClockHour:   DEFB 0
+HudClockMin:    DEFB 0
+HudClockSec:    DEFB 0
+
+; ============================================================================
+; DrawTimeValue — нарисовать "M:SS" из VDC_GameSeconds (RTC-based).
+;   Раньше делили StatTimeFrames/60, но при 74Hz видеорежиме это давало
+;   неверное время. Теперь берём VDC_GameSeconds (уже в секундах).
+; ============================================================================
+DrawTimeValue:
+                ; HL = VDC_GameSeconds (total seconds, RTC-based, pause excluded).
+                ; Divide by 60: HL → BC=minutes, remainder=seconds.
+                LD   HL, (Core.VDC_GameSeconds)
+                LD   DE, 60
+                LD   BC, 0
+.dt_div2:       AND  A
+                SBC  HL, DE
+                JR   C, .dt_minutes_done
+                INC  BC
+                JR   .dt_div2
+.dt_minutes_done:
+                ADD  HL, DE                             ; восстановить HL = remainder = seconds (0..59)
+                ; BC = minutes, HL_low = seconds. Format "M:SS"
+                LD   A, C
+                ADD  A, '0'                             ; minute digit (0..9)
+                LD   (DrawNumBuf), A
+                LD   A, ':'                             ; cancun8 имеет colon
+                LD   (DrawNumBuf+1), A
+                LD   A, L                               ; seconds 0..59
+                LD   B, '0' - 1
+.dt_s10:        INC  B
+                SUB  10
+                JR   NC, .dt_s10
+                ADD  A, 10
+                LD   C, A                                ; save units
+                LD   A, B
+                LD   (DrawNumBuf+2), A                   ; tens digit
+                LD   A, C
+                ADD  A, '0'
+                LD   (DrawNumBuf+3), A                   ; units digit
+                XOR  A
+                LD   (DrawNumBuf+4), A                   ; null terminator
+                LD   HL, DrawNumBuf
+                LD   BC, (DrawStr_CurX)
+                LD   DE, (DrawStr_Y)
+                JP   DrawString
+
+DrawNumBuf:     DEFS 10
+
+                include "font_native_meta.inc"
+                include "font_cancun10_stats_meta.inc"
+                include "font_cancun8_meta.inc"
 
 VDC_UpdateAbsorb:
                 LD   A, (Core.VDC_GameOverTick)
@@ -621,6 +1668,23 @@ VDC_UpdateAbsorb:
                 LD   (Core.VDC_GameOverTick), A
                 LD   A, 255
                 LD   (Core.VDC_HeadAbsorbAlpha), A
+                ; --- Decrement lives once при переходе в GAMEOVER ---
+                ; .ua_done вызывается ровно один раз (когда SlotsLen достигла 0).
+                ; Clamp на 0 — отрицательных жизней не бывает.
+                LD   A, (Core.VDC_Lives)
+                OR   A
+                JR   Z, .ua_set_final          ; уже 0 → final
+                DEC  A
+                LD   (Core.VDC_Lives), A
+                OR   A
+                JR   Z, .ua_set_final          ; стало 0 → final
+                LD   A, 1                       ; SHOW_RETRY (есть ещё жизни)
+                JR   .ua_set_dlg
+.ua_set_final:  LD   A, 2                       ; GAME_OVER_FINAL (lives=0)
+.ua_set_dlg:    LD   (Core.VDC_DialogState), A
+                XOR  A
+                LD   (Core.VDC_PrevMouseL), A           ; sentinel: ждать пока пользователь
+                                                        ; нажмёт+отпустит mouse (avoid auto-restart)
                 RET
 .ua_save_hsub:  LD   (Core.VDC_HSub), A
                 RET
@@ -714,7 +1778,7 @@ Frog_FilteredRandomColor:                              ; in A: 0xFF=force fresh;
                 PUSH HL
                 LD   B, A                              ; B = input color (0xFF=force fresh)
                 ; --- Build mask in D from VDC_Slots[0..SlotsLen-1] ---
-                LD   D, 0                              ; D = mask (bits 0..3 = colors present)
+                LD   D, 0                              ; D = mask (bits 0..VDC_NUM_COLORS-1 = colors present)
                 LD   A, (Core.VDC_SlotsLen)
                 OR   A
                 JP   Z, .frc_fb_in                     ; empty chain → fallback (JP — JR диапазон превысился после exclude block)
@@ -891,7 +1955,7 @@ VDC_Random8:
                 LD   A, L
                 AND  1
                 SRL  H : RR L
-                JR   Z, .r8_no_xor
+                JR   NC, .r8_no_xor
                 LD   D, #B4 : LD E, 0
                 LD   A, H : XOR D : LD H, A
                 LD   A, L : XOR E : LD L, A
@@ -1080,15 +2144,8 @@ Initialize:     CALL Init_Core
                 DI
                 INT_Setting 0
 
-                ; Залить bg_level01 (640x480 RGB565, 38 страниц 7..44) в RAM_G
-                ; начиная с #010000. Каждая страница = 16384 байт по адресу #8000
-                ; в slot 2.
-                ; ВАЖНО: bg грузится ПЕРВЫМ. 38×16384=622592 байт реально пишется в
-                ; #010000..#0A8000, тогда как реальный bg — 614400 байт (#010000..#0A0000),
-                ; последние 8192 байт = padding zeros последней spgbld page. Если atlas
-                ; (#0A6000..) залить до bg — bg-padding затрёт первые 8 КБ atlas
-                ; = Cell 0 + начало Cell 1 → невидимый шар. Поэтому: bg первым,
-                ; atlas вторым (atlas-padding потом уходит в свободную область после #0F2000).
+                ; Залить bg_level01 400x300 PALETTED4444 (8 страниц #07..#0E)
+                ; в RAM_G #010000, затем 512-байтную ARGB4 palette.
                 LD   A, BG_FIRST_PAGE
                 LD   (BgPg), A
                 LD   HL, BG_RAMG_ADDR & 0xFFFF
@@ -1118,10 +2175,15 @@ Initialize:     CALL Init_Core
                 INC  A
                 LD   (BgPg), A
                 DJNZ .UploadBg
+                LD   A, BG_PALETTE_PAGE
+                SetPage2_A
+                LD   HL, #8000
+                LD   BC, 512
+                LD   A, (BG_PALETTE_RAMG >> 16) & 0xFF
+                LD   DE, BG_PALETTE_RAMG & 0xFFFF
+                CALL FT.WriteMem
 
-                ; Залить balls_atlas (6 colors × 8 frames × 56×56 ARGB4 = 301 056 байт)
-                ; в RAM_G #0A6000. Atlas грузится ПОСЛЕ bg чтобы перезаписать
-                ; bg-padding в #0A6000..#0A8000 реальными sprite-данными. Handle 0 в DL.
+                ; Залить balls_atlas PALETTED4444.
                 LD   A, BALLS_FIRST_PAGE
                 LD   (BgPg), A
                 LD   HL, BALLS_RAMG_ADDR & 0xFFFF
@@ -1150,17 +2212,7 @@ Initialize:     CALL Init_Core
                 CALL FT.WriteMem
 
                 ; Залить frog body / plate / tongue / face-overlay в RAM_G.
-                ; Layout (FROG_TOTAL_PAGES=7 pages подряд от FROG_PAGE):
-                ;   pages 0x52..0x53 — body    (2 pages, 122×122 ARGB4)
-                ;   pages 0x54..0x55 — plate   (2 pages)
-                ;   page  0x56       — tongue  (1 page tight 32×80, padding 11 КБ
-                ;                                перезаписывается next overlay
-                ;                                upload, но overlay начинается at
-                ;                                OVERLAY_RAMG_ADDR = #0F8000 — gap
-                ;                                #0F5000..#0F8000 остаётся zeros)
-                ;   pages 0x57..0x58 — overlay (2 pages, HD blink frame 0)
-                ; Loop пишет 16 КБ на page и advance RAM_G на #4000 — для tongue
-                ; padding zeros (11 КБ) ложится в gap до overlay (no harm).
+                ; FROG_ARGB4_ENABLED: 122×122×2 = 29768 bytes, 2 pages per sprite.
                 LD   A, FROG_PAGE
                 LD   (BgPg), A
                 LD   HL, FROG_RAMG_ADDR & 0xFFFF
@@ -1176,6 +2228,20 @@ Initialize:     CALL Init_Core
                 INC  A
                 LD   (BgPg), A
                 DJNZ .UploadFrog
+                if !FROG_ARGB4_ENABLED
+                LD   A, FROG_PALETTE_PAGE
+                LD   HL, FROG_PALETTE_RAMG & 0xFFFF
+                CALL UploadFrogPalette
+                LD   A, PLATE_PALETTE_PAGE
+                LD   HL, PLATE_PALETTE_RAMG & 0xFFFF
+                CALL UploadFrogPalette
+                LD   A, TONGUE_PALETTE_PAGE
+                LD   HL, TONGUE_PALETTE_RAMG & 0xFFFF
+                CALL UploadFrogPalette
+                LD   A, OVERLAY_PALETTE_PAGE
+                LD   HL, OVERLAY_PALETTE_RAMG & 0xFFFF
+                CALL UploadFrogPalette
+                endif
 
                 ; Залить killzone + match-3 explosion atlases contiguous в RAM_G.
                 LD   A, KZ_PAGE
@@ -1262,6 +2328,110 @@ Initialize:     CALL Init_Core
                 LD   A, FRAME_RIGHT_PAGE
                 CALL UnpackAndUploadPage              ; #094000 ← right
 
+                ; --- HUD: life_frog 20×20 PALETTED4444 + shared HUD palette ---
+                ; Raw upload (no ZX7): первые 400 байт страницы #5B → LIFE_FROG_RAMG.
+                LD   A, LIFE_FROG_PAGE
+                SetPage2_A
+                LD   HL, #8000
+                LD   BC, LIFE_FROG_BYTES
+                LD   A, (LIFE_FROG_RAMG >> 16) & 0xFF
+                LD   DE, LIFE_FROG_RAMG & 0xFFFF
+                CALL FT.WriteMem
+                ; HUD palette 512 байт raw → HUD_PALETTE_RAMG.
+                LD   A, HUD_PALETTE_PAGE
+                SetPage2_A
+                LD   HL, #8000
+                LD   BC, 512
+                LD   A, (HUD_PALETTE_RAMG >> 16) & 0xFF
+                LD   DE, HUD_PALETTE_RAMG & 0xFFFF
+                CALL FT.WriteMem
+                ; HUD menu button atlas (inactive/hover/pressed), raw PALETTED4444.
+                LD   A, HUD_MENU_PAGE
+                SetPage2_A
+                LD   HL, #8000
+                LD   BC, HUD_MENU_BYTES
+                LD   A, (HUD_MENU_RAMG >> 16) & 0xFF
+                LD   DE, HUD_MENU_RAMG & 0xFFFF
+                CALL FT.WriteMem
+                ; HUD progress bar atlas (green/yellow), raw PALETTED4444.
+                LD   A, HUD_PROGRESS_PAGE
+                SetPage2_A
+                LD   HL, #8000
+                LD   BC, HUD_PROGRESS_BYTES
+                LD   A, (HUD_PROGRESS_RAMG >> 16) & 0xFF
+                LD   DE, HUD_PROGRESS_RAMG & 0xFFFF
+                CALL FT.WriteMem
+
+                ; --- Dialog palette 512 байт raw → DIALOG_PALETTE_RAMG ---
+                LD   A, DIALOG_PALETTE_PAGE
+                SetPage2_A
+                LD   HL, #8000
+                LD   BC, 512
+                LD   A, (DIALOG_PALETTE_RAMG >> 16) & 0xFF
+                LD   DE, DIALOG_PALETTE_RAMG & 0xFFFF
+                CALL FT.WriteMem
+                ; Final dialog wide OK button, raw PALETTED4444.
+                LD   A, DIALOG_OK_PAGE
+                SetPage2_A
+                LD   HL, #8000
+                LD   BC, DIALOG_OK_BYTES
+                LD   A, (DIALOG_OK_RAMG >> 16) & 0xFF
+                LD   DE, DIALOG_OK_RAMG & 0xFFFF
+                CALL FT.WriteMem
+
+                ; --- Dialog FRAME 8 chunks → #0AC000..#0CC000 (Maya stone+skull) ---
+                LD   HL, DIALOG_FRAME_RAMG & 0xFFFF
+                LD   (BgRamL), HL
+                LD   A, (DIALOG_FRAME_RAMG >> 16) & 0xFF
+                LD   (BgRamH), A
+                LD   A, DIALOG_FRAME_PAGE_BASE
+                LD   B, DIALOG_FRAME_NUM_PAGES
+.UploadDFrame:  PUSH BC
+                PUSH AF
+                CALL UnpackAndUploadPage                ; auto-advances RAM_G +16K
+                POP  AF
+                INC  A                                  ; next SPG page
+                POP  BC
+                DJNZ .UploadDFrame
+
+                ; --- Native font atlas: 3 ZX7 chunks → #098000..#0A4000 ---
+                LD   HL, FONT_NATIVE_RAMG & 0xFFFF
+                LD   (BgRamL), HL
+                LD   A, (FONT_NATIVE_RAMG >> 16) & 0xFF
+                LD   (BgRamH), A
+                LD   A, FONT_NATIVE_PAGE_BASE
+                LD   B, FONT_NATIVE_NUM_PAGES
+.UploadFont:    PUSH BC
+                PUSH AF
+                CALL UnpackAndUploadPage                ; advances RAM_G +16K
+                POP  AF
+                INC  A
+                POP  BC
+                DJNZ .UploadFont
+
+                ; --- Cancun10 stats font: 1 ZX7 chunk → #0A0000..#0A4000 ---
+                LD   HL, FONT_CANCUN10_STATS_RAMG & 0xFFFF
+                LD   (BgRamL), HL
+                LD   A, (FONT_CANCUN10_STATS_RAMG >> 16) & 0xFF
+                LD   (BgRamH), A
+                LD   A, FONT_CANCUN10_STATS_PAGE
+                CALL UnpackAndUploadPage
+
+                ; --- Cancun8 font atlas: 2 ZX7 chunks → #0A4000..#0AC000 ---
+                LD   HL, FONT_CANCUN8_RAMG & 0xFFFF
+                LD   (BgRamL), HL
+                LD   A, (FONT_CANCUN8_RAMG >> 16) & 0xFF
+                LD   (BgRamH), A
+                LD   A, FONT_CANCUN8_PAGE_BASE
+                LD   B, FONT_CANCUN8_NUM_PAGES_VDAC
+.UploadFontC:   PUSH BC
+                PUSH AF
+                CALL UnpackAndUploadPage
+                POP  AF
+                INC  A
+                POP  BC
+                DJNZ .UploadFontC
+
                 ; Восстановить слоты после серии compressed uploads:
                 ; slot 2 = TrackData (page 6), slot 3 = main1_play (page #04).
                 SetPage2 6
@@ -1274,24 +2444,51 @@ Initialize:     CALL Init_Core
                 CALL Log_Init                          ; circular RAM log для F12-dump
                 RET
 
+UploadFrogPalette:
+                PUSH HL                                ; input HL = low 16 bits of RAM_G palette addr
+                SetPage2_A
+                POP  DE
+                LD   HL, #8000
+                LD   BC, 512
+                LD   A, #0C                            ; all frog palettes live at #0C0000..#0C07FF
+                JP   FT.WriteMem
+
 BG_FIRST_PAGE      EQU 7
-BG_PAGE_COUNT      EQU 15                                ; DXT1_L4 640×480 (c0|c1|L4 = 230400 bytes, 15 × 16K pages, last padded)
+BG_PAGE_COUNT      EQU 8                               ; 400×300 PALETTED4444 = 120000 bytes, 8 × 16K pages
 BG_RAMG_ADDR       EQU #010000                         ; bg в RAM_G FT812
+BG_PALETTE_PAGE    EQU #0F
+BG_PALETTE_RAMG    EQU #02D500                         ; 4-byte aligned, after useful 400×300 bitmap
 BALLS_FIRST_PAGE   EQU #2D                             ; balls_atlas paletted pages 0x2D..0x38 (12 pages)
 BALLS_PAGE_COUNT   EQU 12                              ; PALETTED4444: 6×32×32×32 1bpp = 192 KB
 BALLS_RAMG_ADDR    EQU #050000                         ; сразу после bg+padding (#04C000)
 BALLS_PALETTE_PAGE EQU #39                             ; palette ARGB4 СТРОГО 512 байт (256 entries × 2 bytes)
 BALLS_PALETTE_RAMG EQU #080000                         ; FT_RAM_G — после balls (192K=#080000), 4-byte aligned
-FROG_PAGE          EQU #52                             ; spgbld first page (frog body)
-FROG_PAGE_COUNT    EQU 2                                ; 122×122 ARGB4 = 2 pages each
-FROG_TOTAL_PAGES   EQU FROG_PAGE_COUNT * 4              ; body+plate+tongue+overlay = 8 pages
-FROG_RAMG_ADDR     EQU #0B0000                         ; after 24-page balls atlas (#050000..#0AFFFF)
-PLATE_RAMG_ADDR    EQU FROG_RAMG_ADDR + #4000 * FROG_PAGE_COUNT     ; #0A4000
-TONGUE_RAMG_ADDR   EQU PLATE_RAMG_ADDR + #4000 * FROG_PAGE_COUNT    ; #0AC000
-OVERLAY_RAMG_ADDR  EQU TONGUE_RAMG_ADDR + #4000 * FROG_PAGE_COUNT   ; #0B4000
+FROG_PAGE          EQU #52                             ; body, plate, tongue, overlay pages
+                if FROG_ARGB4_ENABLED
+FROG_TOTAL_PAGES   EQU 8                               ; 4 × 122×122 ARGB4 blocks, 2 pages each
+FROG_RAMG_ADDR     EQU #030000                         ; permanent ARGB4 frog block, before balls
+PLATE_RAMG_ADDR    EQU FROG_RAMG_ADDR + #8000
+TONGUE_RAMG_ADDR   EQU FROG_RAMG_ADDR + #10000
+OVERLAY_RAMG_ADDR  EQU FROG_RAMG_ADDR + #18000
+                else
+FROG_TOTAL_PAGES   EQU 4                               ; 4 × 122×122 PALETTED4444 blocks
+FROG_RAMG_ADDR     EQU #0B0000                         ; after balls/frame reserved area
+PLATE_RAMG_ADDR    EQU FROG_RAMG_ADDR + #4000          ; #0B4000
+TONGUE_RAMG_ADDR   EQU PLATE_RAMG_ADDR + #4000         ; #0B8000
+OVERLAY_RAMG_ADDR  EQU TONGUE_RAMG_ADDR + #4000        ; #0BC000
+                endif
+FROG_PALETTE_PAGE  EQU #56                             ; 512-byte ARGB4 palette
+FROG_PALETTE_RAMG  EQU #0C0000                         ; 4-byte aligned, before cursor/kz
+PLATE_PALETTE_PAGE EQU #57
+PLATE_PALETTE_RAMG EQU #0C0200
+TONGUE_PALETTE_PAGE EQU #58
+TONGUE_PALETTE_RAMG EQU #0C0400
+OVERLAY_PALETTE_PAGE EQU #59
+OVERLAY_PALETTE_RAMG EQU #0C0600
 KZ_PAGE            EQU #16
 KZ_PAGE_COUNT      EQU 10                              ; killzone 6 pages + destroy 4 pages
 KZ_RAMG_ADDR       EQU #0D4000                         ; after cursor page, below RAM_G 1 MB limit
+KZ_PALETTE_RAMG    EQU #0EAB00                         ; after 88×88×12 PALETTED4444 pixels, inside page #1B padding
 DESTROY_PAGE       EQU #1C
 DESTROY_RAMG_ADDR  EQU #0EC000                         ; after killzone atlas, below RAM_G 1 MB limit
 

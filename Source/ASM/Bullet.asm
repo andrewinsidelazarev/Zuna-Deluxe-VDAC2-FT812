@@ -11,10 +11,11 @@
 
 BULLET_SPEED        EQU 12                            ; px/frame, ~684 px/sec @57Hz
 BULLET_SPRITE_HALF  EQU 16                            ; chain atlas 32×32 native classic
-BULLET_HIT_THR      EQU 30                            ; bbox prefilter: |dx|<THR && |dy|<THR.
-BULLET_HIT_MANHATTAN_THR EQU 46                       ; reject far bbox corners (30+30 looks wrong).
-                                                      ; D=32: trigger when sprites edges touch (~slight magnet).
-                                                      ; Was 16 (= D/2) → bullet provalivалsя half-deep before hit (Gemini fix 2026-05-16).
+BULLET_HIT_THR      EQU 22                            ; bbox prefilter: |dx|<THR && |dy|<THR.
+BULLET_HIT_MANHATTAN_THR EQU 34                       ; reject far bbox corners.
+                                                      ; D=32: 30/46 was too magnetic on curved chain and
+                                                      ; could pick a ball several slots before the aimed one.
+                                                      ; 22/34 keeps a small touch margin without early capture.
 
 
 ; ----------------------------------------------------------------------------
@@ -31,7 +32,10 @@ Bullet_Init:        XOR  A
 ; angle из Frog_Angle, spawn position из Frog_PosStartX/Y (центр лягушки).
 ; Velocity = BULLET_SPEED * (cos(angle), sin(angle)) / 128.
 ; ----------------------------------------------------------------------------
-Bullet_Spawn:       ; Разрешено стрелять только в PLAY (=0): не во время INTRO/PREVIEW/CLOSING,
+Bullet_Spawn:       LD   A, (VDC_DialogState)
+                    OR   A
+                    JR   NZ, .bs_block
+                    ; Разрешено стрелять только в PLAY (=0): не во время INTRO/PREVIEW/CLOSING,
                     ; ABSORB (шары улетают в killzone — стрельба бессмысленна), GAMEOVER.
                     LD   A, (VDC_GameState)
                     OR   A
@@ -54,6 +58,8 @@ Bullet_Spawn:       ; Разрешено стрелять только в PLAY (
                     LD   (Bullet_Y), HL
 
                     CALL LogShotFired                 ; SHOT_FIRED event
+
+                    CALL VDC_ResetBulletGapTracking   ; min-dist=255 на новый полёт
 
                     ; VX = (cos(angle) * BULLET_SPEED) / 128 (signed)
                     LD   A, (Frog_Angle)
@@ -80,7 +86,10 @@ Bullet_Spawn:       ; Разрешено стрелять только в PLAY (
 ; ----------------------------------------------------------------------------
 ; Bullet_Update — X += VX, Y += VY каждый кадр. Deactivate если за экран.
 ; ----------------------------------------------------------------------------
-Bullet_Update:      LD   A, (Bullet_Active)
+Bullet_Update:      LD   A, (VDC_DialogState)
+                    CP   3
+                    RET  Z
+                    LD   A, (Bullet_Active)
                     OR   A
                     RET  Z
 
@@ -110,7 +119,7 @@ Bullet_Update:      LD   A, (Bullet_Active)
                     RET  C                            ; Y < 480 → ОК
 .deactivate:        XOR  A
                     LD   (Bullet_Active), A
-                    RET
+                    JP   VDC_AwardGapBonus            ; expire без hit → gap bonus / chain break
 
 
 ; ----------------------------------------------------------------------------
@@ -200,7 +209,7 @@ Bullet_CheckCollision:
                     ; Finalize: if Bullet_TmpHit != 255 → perform insert
                     LD   A, (Bullet_TmpHit)
                     CP   255
-                    RET  Z                             ; no hit
+                    JP   Z, VDC_UpdateBulletGapTracking  ; no hit → check gap proximity
 
                     CALL LogBboxHit                    ; in: A=best_hit_idx (preserved)
 

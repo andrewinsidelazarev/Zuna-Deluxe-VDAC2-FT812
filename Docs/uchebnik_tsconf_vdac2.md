@@ -2785,3 +2785,766 @@ chip revisions FT812 поведение PALETTED8 / 4444 различается.
 - `Source/ASM/{main.asm, MainLoop.asm, Bullet.asm, Frog.asm}` — 4 точки.
 - `releases/v025-2026-05-19-paletted4444-fix.spg` + sources в
   `_baseline_v025_paletted4444_fix/`.
+
+
+## Глава 27. Почему отказались от псевдо-DXT фона (2026-05-19)
+
+### TL;DR
+
+Псевдо-DXT (Глава 21–22) занимал ~80 КБ RAM_G и весил 0.5–0.75 байт/пикс — отличный
+компромисс по памяти. **Но на реальном железе ZX-Evo вызывал то, что выглядело как
+«срыв строчной синхронизации»**: дрожание строк, цветные полосы, мерцание. На
+Unreal x64 эмуляторе всё было идеально. Причина оказалась в **переполнении
+бюджета пиксельных клоков FT812 на строку** из-за трёх полноэкранных bitmap-проходов
+на каждый кадр. Решение: 400×300 PALETTED4444 + NEAREST upscale ×1.6 = **один**
+bitmap-проход. Канарейка v028-эпохи (2026-05-19) подтвердила на реале.
+
+### Что делал псевдо-DXT (краткое напоминание)
+
+Из Глав 21–22:
+- Фон 640×480 раскладывался на три плоскости в формате DXT1-emulation:
+  - `c0` — RGB565 цвет «низкий» (160×120 пикс, 38 КБ)
+  - `c1` — RGB565 цвет «высокий» (160×120 пикс, 38 КБ)
+  - `mask` — L2 или L4 (2 или 4 бита/пикс, 80×60 или 160×120 пикс)
+- Display List на каждый кадр:
+  1. Begin BITMAPS, source=c0, scale ×4, draw 640×480 full screen
+  2. Source=c1, BLEND_FUNC = DST_ALPHA, draw 640×480
+  3. Source=mask, sample as alpha mask, draw 640×480
+
+Три полноэкранных прохода. Каждый проход = один bitmap fetch per pixel.
+
+### Симптом на реале — «срыв строчной»
+
+Когда фон рисовался псевдо-DXT, на ZX-Evo:
+- Картинка дрожала по горизонтали (строки слегка прыгали)
+- Появлялись цветные полосы непредсказуемой ширины
+- При движении frog/шаров — артефакты усиливались
+- На Unreal x64 эмуляторе — **всё чисто**, никакого тиринга
+
+Первая гипотеза была tearing — попробовали VM_640_480_74Hz (Глава 13). Не помогло.
+Вторая — буфер DL переполняется. Замеры через REG_CLOCK профайлер показали что
+DL build не превышал vblank window. То есть Z80 ничего не зашкаливает.
+
+### Реальная причина — пиксельный клок-бюджет на строку
+
+FT812 на 800 пикс/строка имеет ровно **800 пиксельных клоков** для всех операций
+рендера этой строки. При:
+- 1 bitmap-проходе с NEAREST + paletted4444 → ~1 такт/пикс, бюджет = 800 пикс,
+  с большим запасом.
+- 1 bitmap-проходе с BILINEAR → ~2 такта/пикс, бюджет = 400 пикс ≈ половина строки.
+- **3 bitmap-прохода** (псевдо-DXT) → каждый берёт 1 такт/пикс минимум, итого
+  3 × 640 = 1920 тактов. **На 1120 тактов больше** чем строка содержит. FT812
+  не успевает закончить рендер строки до начала следующей → строка обрезается /
+  смещается, что визуально и выглядит как срыв синхронизации.
+
+Это **аппаратное ограничение per-line**, а не общий FPS-cap. Unreal x64 эмулирует
+DL семантически но не моделирует pixel-clock budget — поэтому там не было видно.
+
+### Решение — один полноэкранный проход
+
+Перешли на формат `400×300 PALETTED4444` + аппаратный NEAREST upscale ×1.6:
+
+```asm
+FT_BitmapHandle  BG_HANDLE
+FT_PaletteSource BG_PALETTE_RAMG
+FT_BitmapSource  BG_RAMG_ADDR
+FT_BitmapLayout  FT_PALETTED4444, 400, 300
+FT_BitmapSize    FT_NEAREST, FT_BORDER, FT_BORDER, 640, 480
+CMD_SCALE        1.6 (16.16 fixed)
+Vertex2f         (0, 0)
+```
+
+Один bitmap fetch на пиксель. NEAREST = 1 такт/пикс. На 800-тактовую строку
+бюджет занят процентов на 50 — есть запас под другие операции (рамка, шары, frog).
+
+**На реале — чистая картинка**, никакого дрожания.
+
+### Что потеряли по сравнению с псевдо-DXT
+
+| Метрика | Псевдо-DXT (L4) | 400×300 PALETTED4444 NEAREST |
+|---|---|---|
+| RAM_G | ~80 КБ | 120 КБ + 512Б palette |
+| Native разрешение | 640×480 (после blend) | 400×300 → upscale 640×480 |
+| Цветовая глубина | RGB565 (16 bpp эфф.) | 256 цветов в палитре ARGB4 |
+| Bitmap-проходов на кадр | 3 | 1 |
+| Pixel-clock budget на строку | **переполнен на реале** | OK с запасом |
+
+- **Потеряли**: 640×480 native + 16-bit цвет. С NEAREST upscale картинка стала
+  слегка «пикселявой» (~1.6× больше реальных пикселей). Цвета теперь
+  ограничены 256-цветной палитрой (раньше было до ~50K при RGB565×2).
+- **Получили**: рабочая стабильная картинка на реальном железе.
+- **Стоимость по RAM_G**: +40 КБ (~50% больше) — терпимо, общая RAM_G FT812 = 1 МБ.
+
+### Почему не разделили на полосы
+
+Можно было оставить псевдо-DXT, но рисовать не 640×480 за один кадр а полосами
+(скажем 8×60 px каждая), переключая bitmap source/scissor между ними. Это
+распределило бы pixel-clock budget — каждая полоса в своём DL «окне».
+
+Не пошли потому что:
+- Требует scissor management + N draw calls = сложнее код
+- Не масштабируется для уровней — каждый фон уровня = свой trick
+- Бюджет всё равно >>1 такт/пикс если делать blend в одной полосе
+
+Простой single-pass PALETTED4444 решает проблему **без архитектурной
+сложности**, ценой ~50% RAM.
+
+### Bigger picture: правило бюджета строки
+
+Закон для FT812 на 800-тактовой строке:
+```
+sum(такты/пикс на каждый bitmap-проход) × (видимая ширина в пикс) ≤ 800
+```
+
+Для 640-pix экрана:
+- 1 NEAREST = 640 тактов → запас 160
+- 1 BILINEAR = 1280 тактов → **уже переполнение** для full-screen sprite
+- 2 NEAREST = 1280 тактов → переполнение
+- 3 NEAREST (псевдо-DXT) = 1920 → грубое переполнение
+
+Если нужно несколько проходов — они должны быть **не полноэкранными**, чтобы
+сумма ширин × такты ≤ 800. Маленькие sprites (frog, шары, курсор) проблемы не
+создают потому что их совокупная ширина по любой строке << 640.
+
+### Когда стоит вернуться к псевдо-DXT
+
+Если на реале FT812 окажется что появилась дополнительная архитектура
+которая решает row-pixel-clock переполнение (например split rendering на
+4 параллельных engine), или будет важна экономия 40 КБ RAM_G в ущерб качеству.
+В текущей VDAC2 архитектуре — нет.
+
+### Источники
+
+- Memory: `reference_zuma_vdac2_pixel_clock_budget` — бюджет 800 тактов/линия.
+- Memory: `reference_zuma_vdac2_baseline_2026-05-19_bg400_killzone88_real_hw_ok` — финальный baseline с 400×300 PALETTED4444 фоном, верифицирован на реале.
+- Чат.txt: `[2026-05-19 22:55] Codex -> BG 400x300 PALETTED4444 nearest upscale canary` — диагностика и переход.
+- Глава 21 (DXT1 L2) + Глава 22 (L4 апгрейд) — описание того что отказались делать.
+
+
+## Глава 28. Bridgetek EveApps FT812 Emulator — настоящая эмуляция чипа (2026-05-19)
+
+### Зачем понадобился новый эмулятор
+
+До сессии 2026-05-19 наша «эмуляция» Zuma выглядела так:
+
+| Слой | Инструмент | Что эмулирует |
+|---|---|---|
+| Z80 CPU | `zuma_full_z80_emulator.py` (kosarev/z80) | Только Z80 instructions + memory |
+| VDC physics | Python `vdc_visual_emulator.py` | Chain логика 1:1 порт asm |
+| Графика → screen | **Unreal x64** | Z80 + TS-Conf + FT812 (LIES — semantically only) |
+
+**Проблема Unreal x64:** он эмулирует FT812 **семантически**, выполняет DL команды и
+выводит картинку, но **не моделирует hardware constraints**:
+- pixel-clock budget per line (см. Главу 27)
+- BITMAP_HANDLE binding rules (см. Главу 29 ниже)
+- SPI bandwidth, DMA timing, BFLB swap latency
+
+Поэтому на Unreal x64 всё работало, а на реальном ZX-Evo + VDAC2 — глюки.
+
+Нужен был **настоящий эмулятор чипа FT812** для отладки таких багов БЕЗ необходимости
+загружать на реал каждый раз. Bridgetek предоставляет официальный — берём.
+
+### Что выбрали
+
+**Bridgetek EveApps MSVC Emulator** — официальный эмулятор FT812 от производителя.
+
+- GitHub: https://github.com/Bridgetek/EveApps
+- Лицензия: MIT (open source)
+- Точность: 100% (от FTDI/Bridgetek, той же команды что сделала чип)
+- Windows + MSVC build
+
+Альтернативы из `Docs/ft812_emulator_setup_guide.md`:
+- EVE Screen Editor — GUI, для прототипирования, не для авто-тестов
+- RudolphRiedel FT800-FT813 — кросс-платформа, требует USB-SPI bridge
+- CircuitPython _eve — через железо
+
+Выбрали EveApps MSVC Emulator потому что:
+- Бесплатно + open source
+- Windows native (наша платформа разработки)
+- Поддержка ASTC/FT81x/BT81x — для будущих апгрейдов
+- Можно интегрировать через файлы (просто и надёжно)
+
+### Установка (Codex, 2026-05-19)
+
+#### Шаг 1: Visual Studio Build Tools 2022 + MSVC v143
+
+Без полного Visual Studio — достаточно «Build Tools for Visual Studio 2022»
+с компонентом «Desktop development with C++». Лёгкая установка ~3 GB.
+
+#### Шаг 2: Клонирование EveApps
+
+```cmd
+cd C:\Users\Администратор\Desktop
+git clone https://github.com/Bridgetek/EveApps.git
+```
+
+#### Шаг 3: Адаптация SampleApp
+
+Bridgetek даёт готовое `SampleApp\Bitmap` — простой sample который рисует bitmap
+на эмулированный экран. Скопировали как заготовку:
+
+```cmd
+cd EveApps\SampleApp
+xcopy /E /I Bitmap ZumaPlayback
+```
+
+Затем переименовали проект в Visual Studio в `ZumaPlayback_Emulator`,
+выбрали target = FT812 (через `EVE_GRAPHICS_TARGET` define),
+заменили `ZumaPlayback.c` на наш файл (см. ниже).
+
+#### Шаг 4: Build
+
+В Visual Studio: Configuration = Debug, Platform = MSVC_Emulator (не FT9XX!),
+Build → Build Solution. Результат:
+
+```
+C:\Users\Администратор\Desktop\EveApps\SampleApp\ZumaPlayback\Project\Msvc_Emulator\Debug\ZumaPlayback_Emulator.exe
+```
+
+### Что делает ZumaPlayback.c
+
+Эмулятор работает как **playback harness** — не интерпретирует Z80, а просто
+проигрывает заранее снятые «кадры» (RAM_G + cmd FIFO snapshots).
+
+```c
+int main(int argc, char* argv[]) {
+    // 1. Init FT812 эмулятор
+    EVE_HalContext s_halContext;
+    EVE_Hal_open(&s_halContext, ...);
+
+    // 2. Load ram_g.bin → RAM_G FT812 (1 MB полный snapshot)
+    char bundle_dir[256];
+    strcpy(bundle_dir, argv[1]);     // bundle path из CLI
+    FILE* f = fopen(bundle_dir "/ram_g.bin", "rb");
+    uint8_t ram[1024*1024];
+    fread(ram, 1, sizeof(ram), f);
+    fclose(f);
+    EVE_Hal_wrMem(&s_halContext, 0, ram, sizeof(ram));
+
+    // 3. Find all cmd_frame_*.bin in bundle, sorted
+    // 4. For each frame: write cmd stream → EVE_Cmd_wr32, waitFlush, swap
+    for (...) {
+        FILE* cf = fopen("cmd_frame_XXXX.bin", "rb");
+        // Read 32-bit commands one at a time
+        uint32_t cmd;
+        while (fread(&cmd, 4, 1, cf) == 1) {
+            EVE_Cmd_wr32(&s_halContext, cmd);
+        }
+        EVE_Cmd_waitFlush(&s_halContext);
+        EVE_Hal_wr8(&s_halContext, REG_DLSWAP, DLSWAP_FRAME);
+        Sleep(500);   // подержать кадр на экране
+    }
+
+    // 5. Keep emulator window open
+    while (1) Sleep(100);
+}
+```
+
+### Bundle export (Python side)
+
+Bundle = папка с двумя видами файлов:
+- `ram_g.bin` — полный 1 MB snapshot FT812 RAM_G (assemblят все assets в правильных адресах)
+- `cmd_frame_NNNN.bin` — snapshot CMD FIFO для конкретного frame number
+
+Генератор: `Source/OTHER/export_ft812_bundle.py`. Делает:
+
+1. **Парсит EQU константы** из `Source/ASM/main.asm` (RAM_G addresses всех assets)
+2. **Собирает ram_g.bin** — кладёт каждый converted asset (bg paletted, balls, frog, frame strips, dialog_frame, fonts, palettes...) в свой EQU address
+3. **Запускает full Z80 emulator** (`zuma_full_z80_emulator.py`) с реальным asm кодом
+4. **Прогоняет N frames** через emulator (вызывает Frog_Update, VDC_Update, Bullet_Update, ZL_DrawFrame)
+5. **На указанных frames** дампит CMD FIFO buffer → `cmd_frame_NNNN.bin`
+
+CLI пример:
+
+```cmd
+python Source\OTHER\export_ft812_bundle.py --out _ft812_bundle_test --frames 0,240,500,650
+```
+
+Опциональные флаги для тестирования специфичных состояний:
+
+```cmd
+python Source\OTHER\export_ft812_bundle.py --out _ft812_bundle_dialog_test --frames 100 --force-dialog 1 --force-lives 2
+```
+
+`--force-dialog 1` — записать `VDC_DialogState=1` ПЕРЕД захватом frame, чтобы
+триггернуть рендер game-over диалога без необходимости проиграть partию.
+
+### Запуск эмулятора
+
+```powershell
+$exe='C:\Users\Администратор\Desktop\EveApps\SampleApp\ZumaPlayback\Project\Msvc_Emulator\Debug\ZumaPlayback_Emulator.exe'
+$bundle='C:\Users\Администратор\Desktop\Zuma Deluxe VDAC2\_ft812_bundle_dialog_test'
+Start-Process -FilePath $exe -ArgumentList "`"$bundle`"" -WorkingDirectory (Split-Path $exe)
+```
+
+Открывается окно «BT8XX Emulator» с эмулированным экраном FT812 640×480. Кадры
+из bundle проигрываются по очереди с задержкой ~0.5 сек.
+
+### Что дало в v028
+
+Глава 28 написана *после* того как эмулятор нашёл нам реальный баг которого Unreal x64 не видел.
+
+**Кейс:** при рендере game-over диалога текст должен показывать "2 lives left",
+"GAME OVER" и т.д. В Unreal x64 текст рисовался корректно. На FT812 эмуляторе —
+**rainbow color noise** в позиции текста (Главу 29 см. ниже про сам баг).
+
+Сценарий который сработал:
+1. Написали DrawString routine, проверили в Unreal x64 — выглядит ОК.
+2. Юзер запустил на реале → garbled. Не поверили — могли быть проблемы с реалом.
+3. Запустили FT812 emulator → **то же garbled!** Стало ясно что баг в коде, не в реале.
+4. Скриншот эмулятора через PowerShell `CopyFromScreen` → ВИДНО garbage rect ровно где
+   должен быть текст. Position+size правильные, content = rainbow noise.
+5. Гипотеза: BITMAP_SOURCE/SIZE применяются к WRONG handle. Подтверждено reading
+   FT812 datasheet. Fix: эмитить BITMAP_HANDLE ПЕРЕД SOURCE/SIZE.
+6. После fix → эмулятор показывает правильный текст. Юзер подтвердил на реале.
+
+**Без FT812 emulator** мы бы либо:
+- Гоняли реал каждый цикл итерации (5-10 мин на цикл)
+- Или скипнули баг как «реальное hardware quirk» и оставили сломанным
+
+С эмулятором цикл итерации ~30 сек, и баг был очевиден сразу.
+
+### Подход playback vs interactive
+
+EveApps умеет и **interactive mode** — где C код напрямую обновляет DL каждый
+кадр через FT812 API. Это нужно для тестов с input/touch. Мы пока сделали только
+**playback** (RAM_G + cmd snapshots), потому что:
+
+- Z80 логика — это наш asm, не C; портировать в C это дублирование
+- Playback покрывает 90% случаев — рендер «застывшего» состояния
+- Bundle экспорт за секунды, можно проверить любой state через `--force-*` флаги
+- Snapshot не зависит от времени → reproducible
+
+**Interactive mode** понадобится если будем тестировать timing-sensitive штуки
+(анимации, animations, transitions). Тогда напишем C harness который вызывает Z80
+функции через ctypes или socket bridge.
+
+### Что осталось сделать
+
+- **Авто-скриншот после запуска** — сейчас вручную через PowerShell `CopyFromScreen`.
+  Можно добавить в C код `Sleep(N) + glReadPixels` → PNG.
+- **CI integration** — запускать в headless mode для автотестов. Bridgetek SDK
+  поддерживает но требует X server или offscreen flag.
+- **Diff-tests** — сравнивать скриншот с эталонным PNG, fail если diff > N пикселей.
+
+### Ссылки
+
+- Setup guide: `Docs/ft812_emulator_setup_guide.md` (раннее общее планирование)
+- Source: `C:\Users\Администратор\Desktop\EveApps\SampleApp\ZumaPlayback\Src\ZumaPlayback.c`
+- Bundle exporter: `Source/OTHER/export_ft812_bundle.py`
+- Чат.txt: `[2026-05-19 13:42] Codex -> FT812 emulator playback harness ready` — Codex set-up note.
+- Чат.txt: `[2026-05-20 02:40] VDAC2 → VDC: v028 Game Over dialog` — описание bug который эмулятор нашёл.
+
+
+## Глава 29. BITMAP_HANDLE binding ловушка FT812 (2026-05-20)
+
+### TL;DR
+
+`BITMAP_HANDLE` в FT812 это **selector** одного из 32 slots с per-handle bitmap state.
+Команды `BITMAP_SOURCE`, `BITMAP_LAYOUT`, `BITMAP_SIZE` записываются в **текущий**
+selected handle. Если эмитить SOURCE → HANDLE → SIZE → Vertex2f, то SOURCE попадает в
+OLD handle (тот что был selected до), и новый handle остаётся со старым source
+(garbage или previous frame leftovers). Symptom: ЯРКИЙ rainbow / multi-color noise
+ровно в bounding box того места где должна быть текстура.
+
+### Семантика BITMAP_HANDLE в FT812
+
+```
+FT812 имеет 32 "bitmap slot" (handles 0..31).
+Каждый slot хранит свои:
+  - BITMAP_SOURCE   (address в RAM_G)
+  - BITMAP_LAYOUT   (format + stride + height)
+  - BITMAP_SIZE     (filter + wrap + width + height)
+  - BITMAP_TRANSFORM_* (matrix coefficients)
+  - PALETTE_SOURCE  (для PALETTED формата)
+  - ... остальные per-bitmap state regs
+
+BITMAP_HANDLE(N) переключает "active slot" в N.
+Все последующие BITMAP_* команды модифицируют active slot.
+BEGIN(BITMAPS) + Vertex2II/Vertex2f — рисуют из active slot.
+```
+
+### Bad pattern (rainbow noise!)
+
+```asm
+; Try to draw glyph with runtime BITMAP_SOURCE switch
+LD HL, glyph_addr_lo
+LD A, glyph_addr_hi
+LD B, #01 : LD C, A : LD D, H : LD E, L
+CALL Command_BCDE                ; ← BITMAP_SOURCE emit (но какой handle active?)
+FT_BitmapHandle GLYPH_HANDLE     ; ← switch slot ПОСЛЕ source emit
+FT_BitmapLayout FT_ARGB4, ...
+FT_BitmapSize FT_NEAREST, ...
+XOR A : CALL FT.Coprocessor.Cell
+LD BC, x*16 : LD DE, y*16
+CALL FT.Coprocessor.Vertex2f
+```
+
+Что происходит:
+- Active handle = previous (e.g. FRAME_HANDLE)
+- BITMAP_SOURCE записывается в previous slot (perverts state of frame!)
+- FT_BitmapHandle GLYPH_HANDLE — switches active
+- BITMAP_LAYOUT/SIZE записываются в GLYPH_HANDLE (правильно)
+- Vertex2f читает из GLYPH_HANDLE: source = whatever было раньше (или default) =
+  читаем garbage RAM_G как ARGB4 → rainbow noise
+
+### Good pattern
+
+```asm
+FT_BitmapHandle GLYPH_HANDLE     ; ← FIRST select slot
+LD HL, glyph_addr_lo             ; теперь setup runtime addr
+LD A, glyph_addr_hi
+LD B, #01 : LD C, A : LD D, H : LD E, L
+CALL Command_BCDE                ; ← BITMAP_SOURCE → GLYPH_HANDLE (correct)
+FT_BitmapLayout FT_ARGB4, ...
+FT_BitmapSize FT_NEAREST, ...
+XOR A : CALL FT.Coprocessor.Cell
+LD BC, x*16 : LD DE, y*16
+CALL FT.Coprocessor.Vertex2f
+```
+
+### Защита от случайной перестановки
+
+В DrawString routine (v028 baseline) специально сделана пара PUSH/POP вокруг
+HANDLE emit чтобы можно было запушить вычисленный addr ДО switch handle:
+
+```asm
+; HL = glyph addr lo, A = glyph addr hi уже вычислены
+PUSH HL
+PUSH AF
+FT_BitmapHandle GLYPH_HANDLE    ; macro clobbers BCDE — нужно сохранить HL/AF
+POP  AF
+POP  HL
+; Теперь HL/AF сохранены, эмитим SOURCE
+LD   B, #01 : LD   C, A : LD   D, H : LD   E, L
+CALL FT.Coprocessor.Command_BCDE
+```
+
+### Когда баг проявляется
+
+- Switch font/atlas внутри DrawString loop (см. v028 DrawDialogContent с SetFontNative + SetFontCancun8)
+- Switch sprite state (normal/hover/pressed) внутри dialog button draw
+- Любое место где runtime BITMAP_SOURCE emit'ится «не от того» handle
+
+### Почему Unreal x64 НЕ видит этот баг
+
+Unreal x64 эмулирует FT812 как «один глобальный bitmap state» (упрощённо), не как
+32 отдельных slot. Поэтому BITMAP_SOURCE применяется к НОВОМУ active handle сразу
+после BITMAP_HANDLE — независимо от порядка emit. Реальный FT812 + Bridgetek
+эмулятор моделируют per-slot state правильно → видят баг.
+
+**Урок:** для bug'ов которые «вокруг handle binding» — Unreal x64 не подходит,
+нужен Bridgetek emulator или реальное железо.
+
+### Ссылки
+
+- v028 baseline: `releases/v028-2026-05-20-game-over-dialog.spg`
+- Memory: `reference_ft812_bitmap_handle_binding`
+- Чат.txt: `[2026-05-20 02:40]` bug section
+- FT81x Programmers Guide §4.30 BITMAP_HANDLE — описание slot binding (но не явно про порядок emit'а — нашли через эмулятор debugging).
+
+
+## Глава 30. Сессия 2026-05-20: scoring engine, matrix LUT, ARGB4 frog → tearing fix
+
+Серия оптимизаций и багфиксов за один день, кульминация — устранение tearing на реальном железе через смену формата frog слоёв.
+
+### 30.1 Match-3 «синие шары вместо gap» — критический bug
+
+Симптом: после анимации match-3 на месте удалённой группы появлялись 3 синих шара (color 0) вместо пустых ячеек.
+
+Root cause: в `VDC_CheckMatch3.m3_have_marker` регистр B хранил marker (#FE GAP_STOP / #FD CASCADE), затем Codex добавил stats-блок ниже с подсчётом points. `LD B, A` в gauge-loop клобал B значением `TmpMCount` (=3). После DJNZ loop B=0, и потом `LD (HL), B` писал 0 в `ExplodeMarker[lb..rb]`. При финализации `Slots[idx]=0` = синий шар.
+
+Fix: `PUSH BC` сразу после `.m3_have_marker:`, `POP BC` перед записью в `ExplodeMarker`.
+
+Урок: при добавлении кода в существующую функцию — отметить все клобаемые регистры. B и C особо опасны в scoring/UI коде где много `LD B, A` для loop counter.
+
+### 30.2 Scoring engine 1:1 с HD-ref Statistics.c
+
+Реализована полная формула очков из `Statistics.c:37`:
+
+```
+points = count*10 + combo*100 + (100 + 10*(chain-5))
+                                      ^^^ если chain>=5 AND combo==0
+```
+
+State в `VDC.asm`: `VDC_StatChainCount` (reset на miss-shot), `VDC_StatCombos`, `VDC_GaugeScore` (true), `VDC_GaugeShown` (animated LERP +8/frame), `VDC_BulletGapMinDist`/`Count` для gap_bonus.
+
+Gap bonus в 1D VDC через новый entry `VDC_SlotPosAllowGap` (без skip-on-gap). На expire bullet off-screen без hit — `VDC_AwardGapBonus` начисляет очки, max 32/shot.
+
+Spawn gate: `VDC_TrySpawn_NoHsubGate` блокируется при `VDC_GaugeFull != 0`.
+
+Тесты: `test_gauge_score_z80.py` верифицирует формулы через реальный CALL `VDC_CheckMatch3`.
+
+### 30.3 Точный fill_px для прогресс-бара
+
+Заменил `score/16` на математически точную `(GaugeShown * 63) / 1000`. На Z80 нет 16-bit division, делим в два прохода через `ZL_Mul16x8` + `>> 3` + `VDC_DivHLbyA(125)`.
+
+### 30.4 FT_ScissorXY клобает B — повторение pattern
+
+Симптом: при score=30 бар показывал ~27 px вместо 1.
+
+Cause: `LD B, A` (fill_px) → `FT_ScissorXY` (FT_CMD_BUF inline-ит LD BC, opcode_high → B = 0x1B) → `LD A, B` берёт клобнутое 27.
+
+Fix: `LD (DhpFillPx), A` ПЕРЕД FT_ScissorXY, `LD A, (DhpFillPx)` ПОСЛЕ.
+
+Правило ужесточено: **ВСЕ FT_* макросы клобают BCDE. Не держать критические данные в регистре через FT_CMD_BUF.**
+
+Поймал через `test_draw_progress_z80.py` — Z80 тест вызывает CALL DrawHudProgress и парсит SCISSOR_SIZE opcode из emitted CMD buffer.
+
+### 30.5 GaugeShown animated LERP — плавный бар
+
+Score прыгает мгновенно (chain bonus +100), но бар анимируется +8 pts/frame через `VDC_TickGaugeShown` в конце `VDC_AnimateChain`. ~12 кадров до полного догона = ~0.2 сек = выглядит плавно.
+
+### 30.6 Pre-baked rotation matrix LUT
+
+CMD-цепочка (`LOADIDENTITY → 2x TRANSLATE → ROTATE → SETMATRIX`, 40 bytes + coproc work) заменена на **LUT 32 x 24 bytes = 768 bytes**. Генератор `make_chain_matrix_lut.py` считает Q8.8 cos/sin + Q23.8 translation.
+
+Helper `ZL_EmitBallMatrixFromBRAD` (12 LOC) — LDIR 24 bytes из LUT в FT BufferPtr.
+
+Sign convention: эмпирически инвертировано `B=+sin, D=-sin` + C/F пересчитаны как `cx*(1-cos)-cy*sin / cx*sin+cy*(1-cos)`. Совпало с CMD_ROTATE coprocessor output.
+
+Применён в `Frog_DrawBallNow` — шар во рту лягушки крутится синхронно с frog aim.
+
+Lazy BITMAP_HANDLE switching (`ZL_TmpLastHandle`) — skip emit если same handle.
+
+DL byte savings: v028 ~2900 → v030 2232 bytes/frame (-23%).
+
+### 30.7 OK button hit-test + Fire trigger
+
+OK button рисуется при state ∈ {1, 2}. Click hit-test bounds [170..470, 315..349]. Также Fire trigger через SPACE/Kempston с rising edge debounce.
+
+### 30.8 MENU sprite skip baked при idle
+
+`DrawHudMenu RET Z if HudMenuState=0`. Idle state уже запечён в `frame_top.png`.
+
+### 30.9 Главный фикс tearing: ARGB4 + NEAREST для frog
+
+После всех оптимизаций tearing продолжался на реале. Pixel-clock analyzer показывал budget 14% — НЕ виноват.
+
+Codex нашёл root cause: frog слои body/plate/tongue/overlay рисовались **PALETTED4444 + BILINEAR**.
+
+Per output pixel cost:
+
+| Формат | Reads/px |
+|---|---|
+| ARGB4 NEAREST | 1 |
+| ARGB4 BILINEAR | 4 (4 taps) |
+| PALETTED4444 NEAREST | 2 (index + palette entry) |
+| PALETTED4444 BILINEAR | **8** (4 taps × 2 reads) |
+
+Frog был **PALETTED4444 + BILINEAR** = 8 reads/px × 122×122 × 4 layers ≈ 476K reads/кадр.
+
+Fix: `FROG_ARGB4_ENABLED EQU 1` — переключение в **ARGB4 + NEAREST** = 1 read/px × 122×122 × 4 = 59.5K reads/кадр (**8× меньше**).
+
+Tearing устранён. v031 опорная (`releases/v031-2026-05-20-argb4-frog-no-tearing.spg`).
+
+Урок: мой analyzer использовал упрощённую модель (NEAREST=16 px/clk, BILINEAR=2 px/clk) и **не учитывал palette lookup overhead** PALETTED формата. Если tearing на реале — сначала проверить crucial sprites на BILINEAR/PALETTED и пробовать ARGB4+NEAREST.
+
+### 30.10 Outcome дня
+
+После Codex v028 baseline:
+- **v029**: scoring engine + match-3 blue fix + FT_ScissorXY clobber fix
+- **v030**: matrix LUT + lazy handle + frog ball rotates (-23% DL bytes)
+- **v031**: ARGB4 frog → tearing устранён (текущая опорная)
+
+Все харнесс тесты PASS. Цель сессии достигнута — играбельный билд без видимого tearing на реальном железе ZX Evo + FT812 @ 74Hz.
+
+## Глава 31. Mr.Gluk RTC чтение и часы на экране (2026-05-20)
+
+### 31.1 Постановка
+
+После добавления cluster-RNG для chain spawn'а юзер заметил: на каждом запуске игры выпадает **одна и та же последовательность шаров**. RTC не влияет на seed.
+
+Симптомы:
+- 2 кадра screenshot'ов c рестартом → идентичные цвета первых ~20 шаров
+- F12 dump показывал `VDC_LfsrSeed = 0x9624` для каждого запуска
+- Распределение синих шаров (color 0) почти нулевое
+
+### 31.2 Диагностика
+
+**Шаг 1.** Сохранил entropy-источники в фиксированную RAM область:
+
+```asm
+LD (#5008), A      ; raw RTC sec (parsed)
+LD A, R
+LD (#5009), A      ; R refresh register
+LD HL, (ZL_FrameCounter)
+LD (#500A), HL     ; FrameCounter at VDC_Init time
+LD HL, (VDC_LfsrSeed)
+LD (#500C), HL     ; final seed
+```
+
+F12 dump → парсер → результат:
+```
+#5008 RTC parsed = 165 (0xA5)
+#5009 R register = 0
+#500A FC         = FF00
+#500C seed       = 9624
+```
+
+**165** — расшифровка BCD от 0xFF: `high*10 + low = 15*10 + 15 = 165`. То есть порт #BFF7 возвращал **0xFF** (нет данных).
+
+**Шаг 2.** Юзер указал на Wild Commander (показывает реальное время в Unreal). Значит RTC в эмуляторе работает. Бага в нашем коде.
+
+**Шаг 3.** Изучил ZiFi source (`C:\Users\Администратор\Desktop\WC\ZiFi\zifi.asm:4206`) — рабочее чтение GLUK:
+
+```asm
+write_rtc
+        ld a, #80
+        ld bc, #eff7         ; <-- АКТИВАЦИЯ через #EFF7
+        out (c), a
+        ...
+        ; работа через #DFF7 (адрес) / #BFF7 (данные)
+        ...
+        ld a, #00
+        ld bc, #eff7
+        out (c), a           ; <-- ДЕАКТИВАЦИЯ
+        ret
+```
+
+Я использовал `#DEF7` (ошибочно из памяти, никогда не работало). Правильный порт активации — **#EFF7**.
+
+### 31.3 Правильная процедура чтения Mr.Gluk
+
+```
+1. OUT #EFF7, #80       — enable Mr.Gluk (включает порты DFF7/BFF7)
+2. OUT #DFF7, reg_idx   — выбрать регистр (0=сек, 2=мин, 4=час, 7=день, 8=мес, 9=год)
+3. IN  A, (#BFF7)       — прочитать BCD значение
+4. OUT #EFF7, #00       — disable Mr.Gluk (вернуть порты другим устройствам)
+```
+
+BCD → binary: `value = (raw>>4)*10 + (raw&0xF)`.
+
+### 31.4 Применение к Zuma VDAC2
+
+После замены `#DEF7` на `#EFF7` в `ReadRTCSeconds` и `ReadRTCRegister`:
+- RTC возвращает реальное wall-clock значение
+- Каждый запуск с другой секундой → seed для chain spawn разный
+- `VDC_GameSeconds` правильно инкрементируется в `VDC_UpdateRtcElapsed`
+
+### 31.5 Часы в нижней рамке
+
+`DrawDebugClock` в `MainLoop.asm:204`:
+
+```asm
+DrawDebugClock:
+    ; HH @ (28, 438)
+    LD   A, 4
+    CALL ReadRTCRegister
+    LD   C, A : LD B, 0
+    LD   DE, 0
+    FT_NumberDEBC 28, 438, 26, 2
+    ; ':' через FT_CMD_TEXT (ASCII 0x3A + NUL padding)
+    FT_Text 46, 438, 26, 0
+    FT_CMD_BUF #0000003A
+    ; MM @ (52, 438)
+    LD   A, 2
+    CALL ReadRTCRegister
+    LD   C, A : LD B, 0
+    LD   DE, 0
+    FT_NumberDEBC 52, 438, 26, 2
+    ; ':' @ (70, 438)
+    FT_Text 70, 438, 26, 0
+    FT_CMD_BUF #0000003A
+    ; SS @ (76, 438)
+    XOR  A
+    CALL ReadRTCRegister
+    ...
+```
+
+Геометрия:
+- Bottom frame занимает `Y=456..479` (24 px)
+- Left frame занимает `X=0..23` (24 px)
+- Часы на `Y=438` (18 px над bottom frame), `X=28` (за left frame + 4 px отступ)
+- FT812 ROM font handle 26 = 8×16 → "HH:MM:SS" ≈ 64 px width
+
+`FT_NumberDEBC` принимает число в BC (low 16) + DE (high 16). `Options=2` = 2-digit padding (00..99).
+
+`FT_Text` для двоеточия: после cmd word передаётся 4-byte aligned NUL-terminated строка через `FT_CMD_BUF #0000003A` (":\0\0\0" в LE).
+
+### 31.6 Фикс TIME в Game Over dialog
+
+`DrawTimeValue` раньше использовал `VDC_StatTimeFrames / 60` — это давало неверный результат при 74Hz видеорежиме (74 frames/sec ≠ 60). Заменено на `VDC_GameSeconds` (RTC-based секунды, pause excluded).
+
+### 31.7 Что в memory
+
+- `[[feedback_zuma_vdac2_ft_cmd_buf_clobbers_bcde]]` — Mr.Gluk activation port = #EFF7.
+
+
+## Глава 32. Когда эмулятор сам с багом — горький урок (2026-05-20)
+
+### 32.1 Симптомы
+
+Два разных бага в match-3 одновременно:
+- **Ложный** match-3 после gap closure без реального схлопывания одноцветных шаров.
+- **Пропущенный** match-3 после half-cell insert: визуально 3 шара одного цвета подряд, match НЕ срабатывает.
+
+Я пытался лечить через `Source/OTHER/vdc_visual_emulator.py` — это Python mirror VDC physics с 2D визуализацией. Тесты показывали зелёное, но на реальном железе симптомы оставались.
+
+### 32.2 Корень проблемы — Python эмулятор фазово drift'ил от ASM
+
+Python emulator имел старый update-order на тике:
+```
+try_spawn → move_chain → animate_chain
+```
+
+ASM фактически использовал:
+- **Fast phase** (BallsSpawned < LEVEL_START_BALLS):
+  `12×MoveChain → AnimateChain → TrySpawn_NoHsubGate`
+- **Normal phase**:
+  `MoveChain → AnimateChain → TrySpawn`
+
+Из-за рассинхрона Python показывал правдоподобные, но **фазово неверные** цепочки:
+- spawn попадал на другой HSub
+- HSA/SlotsLen жили по другому расписанию
+- delayed match (когда insert half-cell match становится валидным через несколько кадров offset decay) в Python работал, в ASM — нет
+
+Эмулятор как oracle подсовывал ЛОЖНЫЕ объяснения: я «чинил» симптомы в модели, не реальные invariants в RAM.
+
+### 32.3 Кто закрыл — Codex через RAM dump
+
+Codex отказался от Python-эмулятора как ground truth и взял за источник истины **прямой RAM dump** (F12 в Unreal → `parse_log_dump.py` + чтение `VDC_Slots`, `VDC_Offsets`, `VDC_Shot2`, `VDC_ExplodeFrame`, `VDC_ExplodeMarker` по адресам из `main.lst`).
+
+Из RAM dump'ов 111/222/333/444 Codex увидел:
+- В 111 — `MATCH3` без предшествующего `SHOT/BBOX/INSERT` (stale Shot2 trigger).
+- В 222 — settled одноцветные ряды, но Shot2 уже очищен (преждевременная очистка).
+- В свежем 111 — `BallsSpawned=35`, `Slots=GAP_STOP`, `GaugeScore=110`, `GaugeFull=0` → normal spawn вообще не срабатывает.
+
+### 32.4 Применённые ASM-фиксы
+
+1. **`VDC_SetShot2OnNeighbors`** — narrow trigger:
+   - Было: Shot2 на K-1 и K если оба non-gap.
+   - Стало: Shot2 ставится только если `slot[K-1] == slot[K]` (реальное one-color closure).
+2. **`VDC_ScanForNewMatch`** — pending Shot2:
+   - Было: в конце loop без match'а — clear ALL Shot2.
+   - Стало: pending Shot2 держится пока offsets около слота не settled. Half-cell insert match получает несколько кадров на decay.
+3. **`VDC_TrySpawn_NoHsubGate`** — убран stop по `BallsSpawned >= TARGET`. `BallsSpawned` теперь только saturating debug counter. Реальный spawn-stop — `VDC_GaugeFull` или Game Over.
+4. **Убран `HSA == TrackNumSlots` ранний stop** — обработка конца track теперь через `VDC_CheckKillzone`.
+5. **Убран gate `FrameCounter & 63 == 0`** в normal phase — он фазово конфликтовал с внутренним `HSub == 0`, spawn никогда не срабатывал после fast phase. `VDC_TrySpawn` сам gate'ится по HSub.
+
+### 32.5 Что синхронизировано в Python эмуляторе
+
+`vdc_visual_emulator.py` приведён к ASM:
+- fast/normal update order совпадает с ASM
+- `try_spawn(no_hsub_gate=True)` для fast phase
+- saturating `balls_spawned`
+- narrow Shot2 trigger (same-color closure only)
+- pending Shot2 до settled offsets
+
+### 32.6 Урок
+
+**Правило:** Когда баг phase-sensitive (timing'и `Shot2`, `ExplodeFrame`, half-cell insert), **НЕ доверять** визуальному Python-эмулятору как oracle. Источник истины:
+1. F12 dump → `parse_log_dump.py` для ring buffer событий
+2. Прямое чтение `VDC_Slots/Offsets/Shot2/ExplodeFrame` по адресам из `main.lst`
+3. Сверка с ASM update-order
+
+Python emulator может «показывать что баг исправлен», но физически — нет. Это худший вариант false positive: тесты зелёные, прод сломан.
+
+**Аналогия** — это как чинить машину по симулятору, у которого двигатель работает не так, как в реальном железе. Можно «исправить» проблему в симуляторе и думать что готово, а реальное авто продолжает глохнуть на том же месте.
+
+### 32.7 Память на будущее
+
+- `[[feedback_zuma_vdac2_emulator_oracle_drift]]` — правило не доверять Python emu для phase-sensitive багов.
+- `[[feedback_zuma_vdac2_full_z80_emulator_unreliable_for_render]]` — full Z80 emu тоже не годится для render-багов.
+- `[[reference_zuma_debug_env_methodology]]` — официальная методичка SOP для VDC регрессий через RAM dump.
+

@@ -3076,3 +3076,626 @@ progress_green/yellow 95×28 (HUD progress bars), menu_inactive/active/pressed
 - releases/v026-2026-05-19-frame-strips.spg
 - _baseline_v026_frame_strips/ (исходники)
 - Docs/uchebnik_tsconf_vdac2.md Глава 26 (PALETTED4444 setup + lessons).
+
+## [2026-05-19 13:15] Codex -> VDAC2: Frog PALETTED4444 fixed colors baseline
+
+Контекст: после v026 frame strips перевели Frog из ARGB4 в PALETTED4444 для экономии RAM_G. Первые варианты с per-layer/kmeans palette и alpha в palette давали неверные цвета; canary-palette доказал, что Frog render path и FT_PaletteSource реально работают. Правильный вариант — делать Frog строго по рабочей схеме шаров/рамки.
+
+Финальное решение:
+- `Source/OTHER/make_frog_paletted.py` переписан по аналогии с `make_balls_atlas_paletted.py`.
+- Источник берётся напрямую из `~/Desktop/Zuma Deluxe/graphics/frog.png`, не из промежуточного ARGB4.
+- Crop/resize соответствуют старому `make_misc_sprites.py`: body, plate, tongue, overlay по 122x122.
+- Одна shared palette для всех четырёх Frog layers, как у шаров: index 0 transparent, indices 1..255 opaque.
+- Palette format: строго 512 bytes, ARGB4 LE, word = `(A4<<12)|(R4<<8)|(G4<<4)|B4`, `A4=0xF` для всех nonzero entries.
+- Для совместимости с текущим asm четыре palette-файла `frog_palette_argb4.bin`, `frog_plate_palette_argb4.bin`, `frog_tongue_palette_argb4.bin`, `frog_overlay_palette_argb4.bin` оставлены как byte-identical aliases.
+- Frog body/plate/tongue/overlay sprites теперь PALETTED4444 8bpp; подключены через ZX7 pages #52..#55. Palette aliases raw 512B на pages #56..#59.
+- В `Frog.asm` Frog sprite layers используют `FT_PALETTED4444` + `FT_NEAREST`; balls in frog mouth/back остаются на `BALLS_PALETTE_RAMG`.
+
+Экономия:
+- Старый Frog ARGB4 runtime layout: 8 x 16K = 128 KB RAM_G, raw useful data 119,072 bytes (~116.3 KB).
+- Новый Frog PALETTED4444 runtime layout: 4 x 16K + 4 x 512B palettes = ~66 KB RAM_G.
+- Экономия RAM_G примерно 62 KB. SPG compressed Frog sprite data: body 8600, plate 8720, tongue 1324, overlay 4544 bytes + 2 KB raw palette aliases.
+
+Проверки:
+- `sjasmplus Source\ASM\main.asm --syntax=ab --lst=main.lst --sym=zuma.sym`: 0 errors / 0 warnings.
+- `spgbld -b spgbld_vdac2.ini zuma_vdac2.spg`: DONE.
+- `test_tail_fix_verify.py`: PASS.
+- User hardware feedback: colors are correct (“бинго. цвета правильные”).
+
+Baseline saved:
+- `releases/baseline_2026-05-19_frog_paletted4444_fixed_colors/`
+- includes current `zuma_vdac2.spg`, `Core.bin`, `main1_play.bin`, `TSLib.bin`, `spgbld_vdac2.ini`, key ASM, generator/export scripts, Frog paletted assets and palettes, and `Чат.txt` snapshot.
+
+## [2026-05-19 13:42] Codex -> FT812 emulator playback harness ready
+
+По `Docs/ft812_emulator_setup_guide.md` поднят официальный Bridgetek EveApps MSVC Emulator, не самописный эмулятор.
+
+Сделано:
+- EveApps cloned to `C:\Users\Администратор\Desktop\EveApps`.
+- Copied sample `SampleApp\Bitmap` -> `SampleApp\ZumaPlayback`.
+- Project built as `ZumaPlayback_Emulator` with Visual Studio BuildTools 2022 / MSVC v143.
+- Executable: `C:\Users\Администратор\Desktop\EveApps\SampleApp\ZumaPlayback\Project\Msvc_Emulator\Debug\ZumaPlayback_Emulator.exe`.
+- Playback source: `C:\Users\Администратор\Desktop\EveApps\SampleApp\ZumaPlayback\Src\ZumaPlayback.c`.
+
+Harness behavior:
+- loads `ram_g.bin` into FT812 `RAM_G`;
+- finds `cmd_frame_*.bin`;
+- writes each exported RAM_CMD stream through `EVE_Cmd_wr32`;
+- waits `EVE_Cmd_waitFlush`;
+- swaps with `REG_DLSWAP = DLSWAP_FRAME`;
+- keeps emulator window open.
+
+Current exported bundle:
+- `C:\Users\Администратор\Desktop\Zuma Deluxe VDAC2\_ft812_bundle_current`
+- frames: 0, 240, 433, 500, 650
+- `ram_g.bin` = 1 MB
+
+Launch command:
+`Start-Process -FilePath 'C:\Users\Администратор\Desktop\EveApps\SampleApp\ZumaPlayback\Project\Msvc_Emulator\Debug\ZumaPlayback_Emulator.exe' -ArgumentList '"C:\Users\Администратор\Desktop\Zuma Deluxe VDAC2\_ft812_bundle_current"' -WorkingDirectory 'C:\Users\Администратор\Desktop\EveApps\SampleApp\ZumaPlayback\Project\Msvc_Emulator\Debug'`
+
+Status: launched successfully; process `ZumaPlayback_Emulator.exe` is running.
+
+## [2026-05-19 22:55] Codex -> BG 400x300 PALETTED4444 nearest upscale canary
+
+Контекст: на реальном FT812 эффект похож на срыв строчной синхронизации, но причина определена как перегруз Display List / переполнение циклов на строку. Главный кандидат был фон pseudo-DXT: 3 полноэкранных bitmap-прохода вместо одного.
+
+Сделано:
+- Перевел фон level 1 на `400x300 PALETTED4444` с `FT_NEAREST` upscale до `640x480`.
+- В `Source/ASM/MainLoop.asm` фон теперь рисуется одним bitmap-проходом: `FT_PALETTED4444`, `FT_PaletteSource BG_PALETTE_RAMG`, `CMD_SCALE 1.6`, затем явный reset matrix для остальных bitmap-слоев.
+- В `Source/ASM/main.asm` upload фона теперь грузит 8 raw pages `#07..#0E` в `RAM_G #010000`, затем 512-byte palette page `#0F` в `RAM_G #02D500`.
+- В `spgbld_vdac2.ini` старые `bg_l4_p00..p14` заменены на `bg_paletted_p00..p07` + `bg_palette_argb4.bin`.
+- В `Source/OTHER/export_ft812_bundle.py` bundle exporter обновлен под новый фон и palette.
+- Добавлен генератор `Source/OTHER/make_bg_paletted.py`: делает raw PALETTED4444 pages, 512-byte ARGB4 palette, preview PNG и zlib stream для будущего `CMD_INFLATE`.
+
+Размеры:
+- raw `Graphics/Converted/bg_paletted.bin`: 120000 bytes.
+- pages: 8 x 16 KB = 131072 bytes в текущей raw canary-сборке.
+- zlib `Graphics/Converted/bg_paletted.zlib`: 100900 bytes для level 1.
+- Оценка 22 уровней: `100900 * 22 = 2219800` bytes (~2.12 MiB) + palettes около 11 KB. В ZX Evo 4 MB это должно влезть с нормальным запасом относительно 640x480 PALETTED4444.
+
+FT812 JPEG/PNG вывод:
+- `CMD_LOADIMAGE` умеет JPEG/PNG -> bitmap в RAM_G.
+- JPEG для нас хуже: после decode это RGB565, 640x480 = 614400 bytes и 1280 bytes/line, плюс lossy artifacts.
+- Для задачи разгрузки строки лучше `400x300 PALETTED4444 + zlib + одноразовый CMD_INFLATE` на загрузке уровня.
+
+Проверки:
+- `python Source\OTHER\make_bg_paletted.py 1`: OK, zlib 100900 bytes.
+- `sjasmplus Source\ASM\main.asm --syntax=ab --lst=main.lst --sym=zuma.sym`: 0 errors / 0 warnings.
+- `spgbld -b spgbld_vdac2.ini zuma_vdac2.spg`: DONE.
+- `python Source\OTHER\test_tail_fix_verify.py`: PASS.
+- `python Source\OTHER\export_ft812_bundle.py --out _ft812_bundle_bg400_paletted --frames 0,240,433,500,650`: OK. Frame 650 command FIFO fragment = 2052 bytes.
+
+Canary saved:
+- `releases/canary_2026-05-19_bg400_paletted_nearest.spg`
+
+Важно:
+- Текущая canary-сборка грузит фон raw pages, чтобы быстро проверить на железе именно строковую нагрузку.
+- zlib-файл уже создан, но финальный loader под 22 уровней еще нужно подключить через `FT.Coprocessor.Inflate` / `CMD_INFLATE` на загрузке уровня с ожиданием flush до gameplay.
+
+## [2026-05-19 23:25] Codex -> Kill-zone overlay always + full star + closed idle skull
+
+Контекст: после перехода фона на 400x300 PALETTED4444 стало видно деградацию области kill-zone, если overlay не рисуется постоянно. Первый canary рисовал kill-zone всегда, но cell 0 содержал только черную дыру без золотой звезды, а idle `KzFrame=1` попадал на второй skull frame с уже приоткрытым ртом.
+
+Сделано:
+- В `Source/ASM/main.asm` из `DrawKillzoneDual` убран ранний выход при `VDC_KzFrame == 1`; kill-zone overlay теперь рисуется каждый кадр.
+- В `Source/OTHER/make_misc_sprites.py` cell 0 теперь берется из `~/Desktop/Zuma Deluxe/graphics/killzone-64-64.png`, то есть включает всю золотую звезду вокруг черной дыры.
+- Skull frames сдвинуты: cell 1 теперь соответствует первому/закрытому кадру черепа, поэтому idle `KzFrame=1` больше не показывает приоткрытый рот.
+- Перегенерированы `Graphics/Converted/killzone.bin`, `killzone_p00..p05.bin`, `killzone_p00..p05_zx7.bin`.
+- `_killzone_preview.png` проверен визуально: slot 0 = star+hole, slot 1 = closed skull.
+
+Размеры новых compressed killzone pages:
+- `killzone_p00_zx7.bin`: 5897 bytes.
+- `killzone_p01_zx7.bin`: 4610 bytes.
+- `killzone_p02_zx7.bin`: 4166 bytes.
+- `killzone_p03_zx7.bin`: 3455 bytes.
+- `killzone_p04_zx7.bin`: 2395 bytes.
+- `killzone_p05_zx7.bin`: 1087 bytes.
+
+Проверки:
+- `spgbld -b spgbld_vdac2.ini zuma_vdac2.spg`: DONE.
+- `python Source\OTHER\export_ft812_bundle.py --out _ft812_bundle_bg400_kz_star --frames 0,240,433,500,650`: OK. Frame 650 command FIFO fragment = 2100 bytes.
+
+Canary saved:
+- `releases/canary_2026-05-19_bg400_killzone_star_closed.spg`
+
+## [2026-05-19 23:35] Codex -> Kill-zone 88x88 PALETTED4444 real hardware OK baseline
+
+Контекст: скриншот показал, что 64x64 kill-zone overlay меньше baked-звезды на фоне уровня. В HD-ref есть source большего масштаба: `C:\Users\Администратор\Desktop\Zuma-Deluxe-HD-ref\content\images\gameobjects.png`.
+
+Сделано:
+- В `Source/OTHER/make_misc_sprites.py` источник kill-zone переключен на HD-ref `gameobjects.png`, если файл существует.
+- Kill-zone atlas переведен с `64x64 ARGB4` на `88x88 PALETTED4444`.
+- Размер 88x88 выбран по измерению baked-звезды на `level_src_01.png`: примерно 86x87 px около центра kill-zone.
+- Cell 0 = star+black hole, cell 1 = closed skull idle frame, далее кадры раскрытия.
+- Палитра ARGB4 512 bytes добавлена в padding шестой kill-zone страницы; runtime address `KZ_PALETTE_RAMG = #0EAB00`, отдельная SPG page не нужна.
+- В `DrawKillzoneDual` добавлен `FT_PaletteSource Core.KZ_PALETTE_RAMG`, layout/size обновлены на `FT_PALETTED4444, 88, 88`, позиция = `center - 44`.
+- Перегенерированы `killzone.bin`, `killzone_p00..p05.bin`, `killzone_p00..p05_zx7.bin`, `_killzone_preview.png`, `_killzone_paletted_preview_stack.png`.
+
+Проверки:
+- `sjasmplus Source\ASM\main.asm --syntax=ab --lst=main.lst --sym=zuma.sym`: 0 errors / 0 warnings.
+- `python Source\OTHER\test_tail_fix_verify.py`: PASS.
+- `spgbld -b spgbld_vdac2.ini zuma_vdac2.spg`: DONE.
+- `python Source\OTHER\export_ft812_bundle.py --out _ft812_bundle_bg400_kz88 --frames 0,240,433,500,650`: OK. Frame 650 command FIFO fragment = 2104 bytes.
+- User hardware feedback: работает на реале.
+
+Canary saved:
+- `releases/canary_2026-05-19_bg400_killzone_88_paletted.spg`
+
+Baseline saved with sources:
+- `releases/baseline_2026-05-19_bg400_killzone88_real_hw_ok/`
+- includes current `zuma_vdac2.spg`, `Core.bin`, `main1_play.bin`, `TSLib.bin`, `spgbld_vdac2.ini`, `main.lst`, `zuma.sym`, `Чат.txt`, key ASM files, generator/export/compressor scripts, bg paletted assets, kill-zone paletted assets, and previews.
+
+Rule added to Codex memory:
+- Опорные версии сохранять вместе с исходниками, не только SPG/binaries.
+
+
+## [2026-05-20 02:40] VDAC2 → VDC: v028 Game Over dialog + lives counter (v027/v028 в одной сессии)
+
+**Контекст:** добавил top-HUD lives counter (v027) и полный Game Over диалог (v028) с Maya рамкой, динамическим title по `VDC_Lives` и 5 stats-счётчиками. Оба emu-verified в Unreal x64, real HW не проверял.
+
+**v027 — Lives counter (top bar):**
+- `life_frog.png` 38×37 → downscale 20×20 PALETTED4444 (400B raw + 512B HUD palette)
+- Замерил sock'и на нашем `frame_top.png` 640×44: green sock x=26..103 (78px), interior y=3..25 (22px)
+- 3 жабы 20×20 в green sock через DrawLivesCounter (Vertex2f loop), clamp LIFE_MAX_DRAW=3
+- `VDC_Lives` DEFB 3, decrement в `.ua_done` (main.asm) на game-over trigger
+- RAM_G: #0C0800 (sprite) + #0C0A00 (HUD palette)
+- SPG pages: #5B (life_frog raw) + #5C (HUD palette)
+
+**v028 — Game Over dialog:**
+- **Maya рамка** = Gemini-generated PNG → process_dialog_frame.py (заполняет felt area, alpha-cut bg, scale 400×327). PALETTED4444 ZX7 в 8 чанках по 16K (130800 bytes raw → 26KB compressed суммарно)
+- **Title** по `VDC_Lives`: "game over" / "2 lives left" / "1 life left" — шрифт **nativealienextended18** (HD-ref content/fonts), downscale 33→24px
+  - lowercase в strings потому что nativealien18 имеет ограниченный uppercase set (нет C,H,K,L,M,V в РЕАЛЬНЫХ uppercase позициях), но lowercase a-z в PNG визуально = декоративный uppercase
+  - Нет ':' в charset → TIME separator делал '.' (потом исправил т.к. stats на cancun8)
+- **Stats** = 5 счётчиков в 2 колонки: TIME M:SS / COMBOS N / COINS N (левая) + MAX CHAIN N / MAX COMBO N (правая) — шрифт **cancun8** (HD-ref TTF 16pt), 689×21 ARGB4
+  - Cancun8 содержит ТОЛЬКО uppercase A-Z + digits + symbols (66 chars). Stats labels должны быть UPPERCASE строго.
+- **DrawString font-agnostic** routine: per-glyph runtime emit BITMAP_SOURCE + BITMAP_SIZE + Vertex2f. State vars `FontPtrGlyphX/W/Advance/AtlasLo/Hi/Height` переключаются через `SetFontNative` / `SetFontCancun8`
+- **Stats tracking** в VDC.asm: `VDC_StatTimeFrames` (++каждый PLAY-кадр), `VDC_StatCombos/MaxCombo` (same-color streak), `VDC_StatMaxChain` (max TmpMCount). Hook в `.m3_have_marker`. Reset в `VDC_Init`.
+- **Click anywhere** в state=GAMEOVER → RestartLevel (falling edge LMB). На lives=0 → reset до 3.
+
+**Bugs словлены за сессию:**
+1. **FT_BitmapHandle до Source/Size**: SOURCE/SIZE применяются к ТЕКУЩЕМУ slot выбранному предыдущим HANDLE. Если эмитить SOURCE → HANDLE → SIZE, то SOURCE попадает в OLD handle. Symptom: rainbow noise garbage вместо текста. Fix: HANDLE первый.
+2. **PNG mode 'P' → RGBA**: transparent pixels получают random RGB values которые проходили green-felt filter в process_dialog_frame.py. Fix: ВСЕГДА `alpha > 0` mask в color-detection.
+3. **stride > 1023 нужен BITMAP_LAYOUT_H ext**: FT_BitmapLayout macro уже эмитит оба opcode'а (0x28 + 0x07). Stride до 4095 bytes supported.
+4. **Cancun8 = uppercase only, nativealien18 = lowercase для C/H/K/L/M/V**: source strings смешивают case по контексту.
+
+**Применимо ли в VDC:**
+- Maya dialog рамка — нет (TS-Conf 360×288 другая раскладка)
+- Glyph-blit DrawString с font-state vars — переносимо, если будете делать dialog там
+- Stats tracking hooks в match-3 — переносимо, аналогичная логика combo+chain работает на любой архитектуре
+- HD-ref font map применим: cancun8=button text, cancun12=floating, nativealien48=level title, extended16/18=НЕ используются в коде
+
+**Ссылки:**
+- `releases/v027-2026-05-20-lives-counter.spg`, `releases/v028-2026-05-20-game-over-dialog.spg`
+- `_baseline_v027_lives_counter/`, `_baseline_v028_game_over_dialog/` (local, sources)
+- Memory: `reference_zuma_vdac2_baseline_2026-05-20_lives_counter.md`, `reference_zuma_vdac2_baseline_2026-05-20_game_over_dialog.md`
+- Code: `Source/ASM/main.asm` (DrawDialogContent, DrawString, SetFont*, DrawByteValue, DrawTimeValue, UpdateDialog, RestartLevel), `Source/ASM/VDC.asm` (.m3_have_marker hook), `font_native_meta.inc`, `font_cancun8_meta.inc`
+- Generators: `make_font_native.py`, `make_font_cancun8.py`, `process_dialog_frame.py`, `make_hud_paletted.py`
+- Doc: `Docs/hud_topbar_reverse_engineering.md` (gauge bar reverse еng + Wiki confirmation)
+
+
+## [2026-05-20 13:35] Codex → Top HUD/Menu + final dialog OK button work-in-progress
+
+**Контекст:** пользователь просил доделать верхний HUD: MENU button, progress/Zuma bar, счёт, время; также финальное Game Over меню с OK-кнопкой. Важные замечания пользователя:
+- Масштаб HUD sprites должен быть **720p → 480p = 2/3**, а не 1280→640.
+- Progress bar должен рисоваться полным sprite и обрезаться **прямоугольной scissor-маской** по мере накопления очков.
+- MENU button был не на месте, active/pressed состояния были перепутаны.
+- Надписи часов/score не должны выходить за границы своих окон.
+- OK button в финальном меню нельзя рисовать “от балды”; sprite надо брать с холста оригинала:
+  `C:\Users\Администратор\Desktop\Zuma-Deluxe-HD-ref\content\images\menu.png`.
+
+**Что сделано в коде:**
+- `Source/OTHER/make_hud_paletted.py`:
+  - Добавлена генерация `hud_menu_atlas.bin` и `hud_progress_atlas.bin`.
+  - Исправлено с crop на настоящий resize.
+  - MENU target сейчас `79×26`, progress `63×19`.
+  - Состояния MENU учтены как swapped extracted names:
+    - cell 0 = `menu_inactive.png`
+    - cell 1 = `menu_pressed.png` как hover
+    - cell 2 = `menu_active.png` как pressed
+- `spgbld_vdac2.ini`:
+  - Добавлены HUD blocks: `#5E hud_menu_atlas.bin`, `#5F hud_progress_atlas.bin`.
+  - Добавлен временный/текущий `#6D dialog_ok_normal.bin` (см. ниже: сейчас это надо переделать на crop из `menu.png`).
+- `Source/ASM/main.asm`:
+  - Добавлены HUD assets constants:
+    - `HUD_MENU_W/H = 79/26`
+    - `HUD_PROGRESS_W/H = 63/19`
+    - `HUD_MENU_X/Y = 539/4` по `frame_top.png`
+    - `HUD_PROGRESS_X/Y = 407/1` по `frame_top.png`
+  - `DrawHudMenu` рисует top MENU sprite.
+  - `UpdateHudMenu` открывает pause dialog (`VDC_DialogState=3`) по click-release на MENU.
+  - `DrawHudProgress` рисует `progress_yellow/green` через `FT_ScissorXY` + `FT_ScissorSize`, потом сбрасывает scissor на 640×480.
+  - `DrawHudTopText` добавлен для clock/score, но **текущая реализация неудовлетворительна**:
+    - Cancun8 слишком крупный для красного/чёрного top HUD sockets.
+    - Часы и SCORE/число выходили за границы окон.
+    - Нужно либо использовать меньший font/bitmap font для top HUD, либо отдельную scaled text routine; не пытаться впихивать Cancun8 как есть.
+  - `FormatHudClock` делает `HH:MM:SS`.
+  - `FormatWordToBuf` временно оставлен как `00000`, чтобы число было видимым; формат надо довести после выбора правильного малого шрифта.
+- `Source/ASM/VDC.asm`:
+  - Добавлены `VDC_GaugeScore`, `VDC_GaugeFull`, `VDC_PlayerScore`.
+  - Добавлен RTC-based clock state:
+    - `VDC_GameSeconds`
+    - `VDC_RtcLastSecond`
+    - `VDC_RtcNoTickFrames`
+  - `VDC_UpdateRtcElapsed` увеличивает `VDC_GameSeconds` по RTC seconds, с fallback на 60 frames если RTC в эмуляторе стоит.
+  - ВАЖНО: раньше была ошибка — `VDC_GaugeFull` был подключен к `VDC_TrySpawn_NoHsubGate` и ломал gameplay. Сейчас spawn gate НЕ должен зависеть от неполной gauge/scoring-модели.
+
+**Документ/реверс:**
+- Проверял `Docs/hud_topbar_reverse_engineering.md` против HD-ref и wiki-like sources.
+- Core mechanic подтверждена:
+  - Zuma meter наполняется очками.
+  - Full meter становится green.
+  - После full новые шары перестают входить.
+  - Уровень завершён только после очистки оставшихся шаров.
+- Но в текущем VDAC2 нельзя включать spawn gate, пока scoring не соответствует оригиналу полностью (gap/chain/coin).
+- HD-ref точные score targets есть в:
+  `C:\Users\Администратор\Desktop\Zuma-Deluxe-HD-ref\content\levels\levels.xml`
+  - `lvl11/lvl12 score=1000`
+  - `lvl131 score=10000`
+
+**Final Game Over OK button:**
+- Пользователь показал оригинальный вид: широкая зелёная OK-кнопка почти на всю нижнюю часть felt-поля.
+- Я временно сделал procedural wide green sprite `dialog_ok_normal.bin` в `make_hud_paletted.py`, но пользователь уточнил, что это неправильно.
+- Следующий правильный шаг:
+  1. Открыть оригинальный холст:
+     `C:\Users\Администратор\Desktop\Zuma-Deluxe-HD-ref\content\images\menu.png`
+  2. Найти там sprite OK button.
+  3. Вырезать/растянуть именно его (как в оригинале) в `dialog_ok_normal.bin`.
+  4. Не использовать текущую procedural кнопку.
+- Текущие constants:
+  - `DIALOG_OK_PAGE = #6D`
+  - `DIALOG_OK_RAMG = #0C6000`
+  - `DIALOG_OK_W/H = 300/34`
+  - `DLG_OK_X/Y = 170/335`
+  - upload добавлен после `DIALOG_PALETTE_PAGE`.
+  - `DrawDialogOkButton` рисует bitmap handle `24`.
+
+**Проверки, которые выполнялись после текущих правок:**
+- `python Source\OTHER\make_hud_paletted.py` — OK.
+- `C:\z80\zuma\sjasmplus.exe Source\ASM\main.asm --syntax=ab --lst=main.lst --sym=zuma.sym` — 0 errors / 0 warnings.
+- `C:\z80\zuma\spgbld.exe -b spgbld_vdac2.ini zuma_vdac2.spg` — DONE.
+- `python Source\OTHER\test_tail_fix_verify.py` — PASS.
+- `python Source\OTHER\test_match3_stuck.py` — exit code 0, но выводит `STUCK REAL BALLS`; считать подозрительным диагностическим тестом, не зелёным.
+
+**Открытые задачи / не закрывать без визуального скрина:**
+1. Вырезать настоящую OK-кнопку из HD-ref `content\images\menu.png`; заменить procedural `make_ok_button_wide_green`.
+2. Исправить top HUD text:
+   - часы строго по центру красного окна и внутри границ;
+   - `SCORE` слева с маленьким отступом внутри чёрного окна;
+   - число счёта справа с маленьким отступом внутри чёрного окна;
+   - текст не должен выходить за границы по X/Y.
+3. После этого обязательно сделать визуальную проверку скриншотом/FT812 bundle, а не только сборку.
+
+
+## [2026-05-20 16:10] VDAC2 → VDC: v029 Zuma bar + scoring engine — все харнесс тесты PASS
+
+**Сводка фиксов после v028 (Codex'а):**
+
+1. **Match-3 → 3 синих шара (КРИТИЧНЫЙ bug)** — В `VDC_CheckMatch3.m3_have_marker` регистр B (= marker GAP_STOP/CASCADE) клобался stats-блоком (`LD B, A` в gauge loop). Marker писался как 0 → после анимации в Slots[lb..rb] попадали цветные шары (color 0 = синий). **Fix:** `PUSH BC` сразу после `.m3_have_marker:`, `POP BC` перед записью в ExplodeMarker.
+
+2. **Точная scoring engine** (формула 1:1 с HD-ref `Statistics.c:37`):
+   - `points = count × 10 + combo × 100 + (100 + 10×(chain−5) если chain≥5 AND combo==0)`
+   - Все 3 ветви взаимно исключающие
+   - Новые state vars: `VDC_StatChainCount` (consecutive explosions, reset на miss-shot)
+
+3. **Gap bonus detection в 1D VDC**:
+   - State: `VDC_BulletGapMinDist`, `VDC_BulletGapCount`
+   - Per-frame: `VDC_UpdateBulletGapTracking` обновляет min Manhattan dist до ближайшего GAP-слота когда bullet миссит
+   - На expire off-screen: `VDC_AwardGapBonus` начисляет очки (формула scaled DOWN vs original — max 32/shot, ×2 consecutive — иначе один промах = 50% бара)
+   - `VDC_SlotPosAllowGap` новый entry без gap-skip для compute позиции gap-слотов
+
+4. **Spawn gate при gauge_full** — `VDC_TrySpawn_NoHsubGate` теперь возвращает rest if `VDC_GaugeFull != 0`. Полный бар → шары перестают спавниться из хвоста (как в оригинале).
+
+5. **Точный fill_px формула** — было `score/16` (захардкоженная аппроксимация). Теперь `(GaugeShown × 63) / 1000` через `ZL_Mul16x8` + `/8` + `VDC_DivHLbyA(125)`. Работает для любых GaugeTarget значений (TODO 3000 для lvl1).
+
+6. **Анимация бара (LERP)** — `VDC_GaugeShown` ползёт к `VDC_GaugeScore` по 8 очков/кадр через `VDC_TickGaugeShown` в `VDC_AnimateChain`. Chain bonus +100 не выглядит мгновенным скачком, а плавно за 12 кадров.
+
+7. **КРИТИЧНЫЙ bug FT_ScissorXY клобает B** — мой `LD B, A` (fill_px) → `FT_ScissorXY` (клобает B = 0x1B = high byte SCISSOR_XY opcode) → `LD A, B` → EmitScissor(27, 19). Bar показывал 27 px при fill_px=1! Нашёл через Z80 binary trace `test_draw_progress_z80.py` (читает emitted SCISSOR_SIZE из CMD buffer). **Fix:** хранить fill_px в RAM byte `DhpFillPx`, не в регистре. **Memory обновлена**: feedback_zuma_vdac2_ft_cmd_buf_clobbers_bcde.md — правило ужесточено «ВСЕ FT_* макросы клобают BCDE».
+
+8. **HUD text positioning** — clock cx=194 (было 199), SCORE x=271, число right_x=361 (было 365), все Y+1. Подобрано визуально по screenshot из VDAC2 Emul.
+
+9. **OK button в dialog**:
+   - Codex рисовал только при `state=2` (GAME_OVER_FINAL) → теперь и при `state=1` (SHOW_RETRY, lives>0). `CP 3; CALL C` вместо `CP 2; CALL Z`.
+   - Y=315 (было 335 — низковато)
+   - **Hit-test** — click срабатывает ТОЛЬКО в bounds [170..470, 315..349], не anywhere.
+
+10. **MENU sprite только при hover/press** — idle state уже baked в frame_top.png, рисовать sprite cell 0 == redundant. Экономия 79×26/16 ≈ 128 pixel-clock + 24 DL bytes каждый idle кадр. `RET Z` если HudMenuState=0.
+
+11. **Game Over dialog reorganized** — правая колонка теперь 3 строки: **SCORE N** (PlayerScore, 16-bit, новая), MAX CHAIN, MAX COMBO. Левая остаётся: TIME, COMBOS, COINS.
+
+**Инфраструктура:**
+
+- **Python визуальный эмулятор** теперь mirror всех scoring/gauge mechanics (gauge_score, gauge_shown, chain, combo, gap_bonus). Прогресс-бар рендерится на canvas + info panel с PlayerScore/GaugeScore/GaugeShown/fill_px/Chain/Combo/GapMinDist. Log событий MATCH/GAP_BONUS/MISS. UTF-8 encoding (Windows cp1251 → `->` вместо `→`). Скрипт: `Source/OTHER/vdc_visual_emulator.py`.
+- **Z80-уровень тесты**: `test_match3_marker_z80.py`, `test_gauge_score_z80.py`, `test_draw_progress_z80.py` (последний — реальный CALL DrawHudProgress + parse emitted SCISSOR_SIZE — это и поймало B-clobber bug).
+- **HD-ref RE документ** обновлён: `Docs/hud_topbar_reverse_engineering.md` § 7 — все формулы 1:1 с asm impl + reverse-engineering на ALL HD-ref source files (`Statistics.c`, `BallChain.c`, `Bullets.c`, `Level.h`). Найдено: HD-ref **не вызывает** `Statistics_AddBulletGap`, `IncrementChain`, `BreakChain` — gauge mech в HD-ref **не реализован** (только struct field).
+
+**Применимо ли в VDC (360×288 TS-Conf):**
+- Scoring formula — переносимо 1:1.
+- B-clobber в FT_CMD_BUF — НЕ применимо (у вас VDC через TS-Conf TSU, не FT812).
+- Smooth bar animation — переносимо.
+- Spawn gate logic — переносимо.
+- Gap detection в 1D — переносимо.
+
+**Тесты PASS:**
+- `test_tail_fix_verify`: 0/86 mismatches
+- `vdc_test_runner`: ALL TESTS PASSED (STOP+CASCADE+rollback+settle+unstall)
+- `test_match3_marker_z80`: marker корректен (STOP=#FE, CASCADE=#FD)
+- `test_gauge_score_z80`: формулы 1:1 верифицированы (base, combo, chain bonus)
+- `test_draw_progress_z80`: SCISSOR_SIZE(1, 19) при GaugeShown=30
+- `test_match3_stuck`: exit=0 (diagnostic)
+
+**Ссылки:**
+- `releases/v029-2026-05-20-zuma-bar-scoring.spg`
+- `_baseline_v029_zuma_bar_scoring/` (sources + tests)
+- Memory: `feedback_zuma_vdac2_ft_cmd_buf_clobbers_bcde.md` (updated), `reference_zuma_vdac2_user_screen_path.md` (new)
+
+
+
+## [2026-05-20 17:20] VDAC2 → VDC: v030 Pre-baked matrix LUT + lazy handle + frog ball rotate
+
+**Что сделано после v029:**
+
+1. **Lazy BITMAP_HANDLE switching** (MainLoop.asm chain loop): trackим `ZL_TmpLastHandle` byte, skip CALL ZL_EmitBitmapHandle если new handle == previous. Экономит ~140 DL bytes per frame на 35-ball chain (большинство шаров в одном handle).
+
+2. **Pre-baked rotation matrix LUT** (768 bytes, 32 buckets × 6 BITMAP_TRANSFORM_A..F opcodes × 4 bytes):
+   - Generator: `Source/OTHER/make_chain_matrix_lut.py`
+   - LUT lives в main1 segment (INCBIN в MainLoop.asm после ZL_BALL_TANGENT_*).
+   - Replace `CMD_LOADIDENTITY + 2×CMD_TRANSLATE + CMD_ROTATE + CMD_SETMATRIX` (40 SPI bytes + FT812 coproc work) → `LDIR 24 bytes` (Z80 work, no coproc).
+   - Helper `ZL_EmitBallMatrixFromBRAD` (12 LOC): A=BRAD → bucket = (A & #F8) >> 3 → offset = bucket × 24 → LDIR из LUT в BufferPtr.
+   - **Sign convention fix:** изначально я делал стандартный CCW B=-sin, D=+sin → визуально шары крутились В обратную сторону. Эмпирически инвертировано в `make_chain_matrix_lut.py`: `B=+sin, D=-sin`, плюс C/F пересчитаны как `cx(1-cos) - cy·sin / cx·sin + cy(1-cos)`. Совпало с CMD_ROTATE output.
+
+3. **Frog ball-in-mouth (Frog_DrawBallNow)** ранее рисовался с identity matrix (Frog_DrawTongue делает LoadId+SetMatrix перед концом). Юзер: «во рту лягушки шар вообще не вращается». Fix: добавил `CALL ZL_EmitBallMatrixFromBRAD` с `Frog_Angle` перед draw + reset matrix после. Использует тот же LUT (32×32 ball).
+
+4. **MENU sprite skip на idle** — `DrawHudMenu RET Z if HudMenuState=0`. Baked в frame_top.png. Экономит 128 pixel-clock + 24 DL bytes/frame.
+
+5. **OK button fire trigger** — `UpdateDialog` теперь срабатывает на:
+   - Mouse click в bounds [170..470, 315..349]
+   - **SPACE** (#7FFE bit 0)
+   - **Kempston FIRE** (Input.VK_KEMPSTON_B)
+   Debounce `DialogFirePrev` byte. Срабатывает rising edge.
+
+6. **OK button Y=315** (был 335 — слишком низко выходил за felt).
+
+7. **MENU sprite y=3** (-1px) для align с baked сокетом.
+
+8. **Game Over dialog** правая колонка теперь 3 строки: **SCORE N** (PlayerScore 16-bit), MAX CHAIN, MAX COMBO.
+
+9. **DrawHudProgress FT_ScissorXY клобает B bug** — мой `LD B, A (fill_px)` → `FT_ScissorXY` → `LD A, B` брал 0x1B (high byte SCISSOR_XY opcode) → бар показывал 27px при fill_px=1. Fix: store fill_px в RAM byte `DhpFillPx`, не в регистре. Memory `feedback_zuma_vdac2_ft_cmd_buf_clobbers_bcde.md` обновлена (правило ужесточено).
+
+10. **Python visual emulator** содержит весь scoring/gauge mirror asm. Для debug. UTF-8 log (cp1251 fix). См. v029 chat entry.
+
+**DL byte savings (frame 1500 with 35-ball chain):**
+- v028 baseline: ~2900 bytes
+- After lazy handle: 2728 bytes (−170 от lazy)
+- After matrix LUT: **2232 bytes** (−496 от LUT, total −668 vs v028, −23%)
+
+**Pixel-clock budget (per analyzer):**
+- Frame 1500 worst line: 122 clocks из 832 budget (14% used)
+- Frame total: 31657 из 384000 (8%)
+- **Pixel-clock НЕ виноват в tearing** на реале. Tearing root cause — Z80 work / SPI bandwidth / DLSWAP timing race.
+
+**Открытый вопрос:** tearing на железе всё ещё иногда виден. Анализатор показал что это не pixel-clock и не line budget. Гипотезы:
+- Z80 work overhead (94k cycles/frame @ 74Hz tight)
+- SPI bandwidth (2232 bytes/frame at FT812 SPI clock)
+- DLSWAP race (Z80 пишет пока FT812 ещё читает)
+
+Не диагностировано.
+
+**Тесты PASS:** test_tail_fix_verify, vdc_test_runner, test_match3_marker_z80, test_gauge_score_z80, test_draw_progress_z80 (SCISSOR_SIZE(1,19) для fill_px=1).
+
+**Ссылки:**
+- `releases/v030-2026-05-20-matrix-lut.spg`
+- `_baseline_v030_matrix_lut/` (sources + LUT bin + tests)
+- `Source/OTHER/make_chain_matrix_lut.py` (LUT generator)
+- `Source/OTHER/analyze_dl_pixelclock.py` (per-line FT812 budget analyzer)
+- Memory: `reference_zuma_vdac2_baseline_2026-05-20_matrix_lut.md` (new)
+
+
+
+## [2026-05-20 17:50] VDAC2 → VDC: Tearing диагностика — что пробовали / открытые вопросы
+
+После сохранения опорной v030 продолжаем расследование tearing на реальном железе (Unreal Speccy / TS-Conf на FPGA + FT812). Pixel-clock budget уже исключён (8% от max, worst line 14%).
+
+**Тесты-отключения для локализации источника:**
+
+1. **Отключал DrawHudProgress (progress bar)** — `MainLoop.asm:459 CALL DrawHudProgress` закомментировал, билд PASS. Юзер: «не помогло». Восстановил.
+
+2. (Ранее) **Отключал DrawHudTopText clock** — тоже не помогло, восстановил.
+
+3. (Ранее) **SKIP frog at DialogState != 0** — никакого эффекта на gameplay tearing (dialog не показан во время play).
+
+**Что НЕ виноваты (по аналитике + тестам):**
+- BG (640×480 PALETTED4444 NEAREST) — 19200 PCLK / кадр
+- Frog 6 компонентов — 931 PCLK each
+- Frame strips — 1760+960+618+618
+- Progress bar — отключён, тоже tearing
+- Clock — отключён, тоже tearing
+- Chain matrix LUT (новое) — даже сократил DL bytes на 23%, tearing ещё есть
+
+**Открытые гипотезы tearing:**
+1. **Z80 work overhead** — при полной chain + bullet + collision check + gap tracking Z80 не успевает за 13.5ms frame budget @ 74Hz. Symptom — random spikes без видимой системы.
+2. **TS-Conf bus contention** — SPI к FT812 шарит шину с чем-то на ZX Evo плате.
+3. **REG_PCLK timing edge case** на 74Hz режиме.
+4. **FT812 SPI clock не на max** — cumulative задержка SPI bytes.
+
+**Diagnostic план (не реализован):**
+Добавить in-game profiler:
+- `T0 = REG_CLOCK` в начале `.Loop` (MainLoop.asm:38)
+- `T1 = REG_CLOCK` перед `.WaitIntSync` → `build_time = T1 - T0`
+- `T2 = REG_CLOCK` после `.WaitIntSync` → `idle_time = T2 - T1`
+- Рисовать build_time / idle_time как мелкий текст в углу cancun8 шрифтом
+- Если build > 13.5ms на каких-то кадрах → Z80 переполнен (нужны больше оптимизаций)
+- Если build < 13.5ms но idle = 0 → проблема ниже Z80 (SPI/DLSWAP timing)
+
+**Уточнение про DLSWAP race:**
+- Текущий код использует HighLander pattern (build → WaitIntSync → WaitDLSwap=0 → FT_CMD_Write → WaitFlush → DLSWAP_FRAME) — race теоретически закрыт.
+- Z80 ждёт что предыдущий swap прошёл, потом пишет, потом ждёт coprocessor flush, потом запрашивает swap.
+- WaitFlush гарантирует что coprocessor доработал перед DLSWAP.
+
+**FT812 emulator command (заметка):**
+```
+Start-Process -FilePath 'C:\Users\Администратор\Desktop\EveApps\SampleApp\ZumaPlayback\Project\Msvc_Emulator\Debug\ZumaPlayback_Emulator.exe' \
+  -ArgumentList '"C:\Users\Администратор\Desktop\Zuma Deluxe VDAC2\_ft812_bundle_NAME"' \
+  -WorkingDirectory 'C:\Users\Администратор\Desktop\EveApps\SampleApp\ZumaPlayback\Project\Msvc_Emulator\Debug'
+```
+Bundle делается через `python Source/OTHER/export_ft812_bundle.py --out _ft812_bundle_NAME --frames 500,1000,1500`.
+
+**FT812 DL analyzer:**
+`Source/OTHER/analyze_dl_pixelclock.py` парсит cmd_frame_*.bin, считает per-sprite pixel-clock budget + per-line load (FT812 832 PCLK/line @ 74Hz). Использовать для проверки что pixel-clock в норме.
+
+**Состояние SPG:** опорный v030 не изменился, прогресс-бар включён. Diagnostic timer не сделан.
+
+
+## [2026-05-20 18:40] VDAC2 → VDC: tearing устранён постоянной ARGB4-лягушкой
+
+Реальное железо, 74 Гц: пользователь подтвердил, что с `FT_NEAREST` на лягушке кадр почти не рвало, а с временной ARGB4-канарейкой лягушки кадр не рвёт вообще.
+
+Что сделано постоянно:
+- `FROG_ARGB4_ENABLED EQU 1` вместо временного canary-флага.
+- Слои лягушки `body / plate / tongue / overlay` переведены в `FT_ARGB4 + FT_NEAREST`.
+- Шары в лягушке пока оставлены `PALETTED4444`, но тоже `FT_NEAREST`.
+- Убрано временное перекрытие RAM_G с dialog frame.
+- Постоянная RAM_G раскладка:
+  - frog ARGB4: `#030000..#050000`
+  - balls: `#050000..#080000`
+  - dialog frame: `#0AC000..#0CC000`
+  - HUD/palettes: `#0CC000..#0D0000`
+  - cursor: `#0D0000`
+  - killzone/destroy: `#0D4000..`
+- Dialog frame снова загружается, тестовая сборка больше не ломает финальный диалог из-за overlap.
+
+Сборка:
+- `sjasmplus Source\ASM\main.asm --syntax=ab --lst=main.lst --sym=zuma.sym` — PASS, 0 errors / 0 warnings.
+- `spgbld -b spgbld_vdac2.ini zuma_vdac2.spg` — PASS.
+
+Регресс-тесты:
+- `python Source\OTHER\test_match3_marker_z80.py` — PASS.
+- `python Source\OTHER\test_draw_progress_z80.py` — PASS.
+- `python Source\OTHER\test_gauge_score_z80.py` — PASS.
+- `python Source\OTHER\test_gauge_shown_anim.py` — PASS.
+
+Опорная сборка сохранена:
+- `releases/v031-2026-05-20-argb4-frog-no-tearing.spg`
+- `releases/baseline_2026-05-20_argb4_frog_no_tearing/`
+
+Вывод: основная причина tearing была в рендере лягушки на FT812: `BILINEAR` и/или палитровая выборка слоёв корпуса давали достаточную нагрузку/нестабильность. Постоянный вариант — ARGB4 для слоёв лягушки + NEAREST.
+
+
+## [2026-05-20 23:16] VDAC2 → VDC: postmortem по рассинхрону VDC / ложным и пропущенным match-3
+
+Контекст: пользователь дал RAM-dump'ы `111`, `222`, `333`, `444` и указал на два симптома:
+- `111` — произошёл ложный match-3.
+- `222` — не произошёл штатный match-3.
+- позже свежий `111` — хвост цепи обрезан до набора 1000 очков.
+
+Что реально показал ring buffer `Source/OTHER/parse_log_dump.py`:
+- В старом `111` после реального `INSERT/MATCH3` появлялся новый `MATCH3` без нового `SHOT/BBOX/HEMI/INSERT`. Значит это не aim/cursor и не FT812-render, а stale/ложный trigger внутри VDC.
+- В `222` в финальной RAM были очевидные settled ряды одного цвета, но `Shot2[]` уже был очищен. Значит штатный delayed match терял trigger до того, как offsets успевали выровняться.
+- В свежем `111`: `GaugeScore=110`, `GaugeFull=0`, `GameState=0`, `BallsSpawned=35`, `DbgSpawn=35`, а `Slots[]` состоял из `GAP_STOP`. Это значит после fast phase новые шары вообще не спавнились; хвост не "закончился по уровню", а normal spawn не срабатывал.
+
+Что было исправлено в ASM:
+1. `VDC_SetShot2OnNeighbors`
+   - Было: после удаления любого gap ставили `Shot2` на K-1 и K, если оба слота non-gap.
+   - Проблема: если на одной стороне gap уже была готовая одноцветная серия, такой широкий trigger давал ложный match-3 без реального закрытия gap.
+   - Стало: `Shot2` ставится только если удаление gap реально сомкнуло два соседних шара одного цвета (`slot[K-1] == slot[K]`, оба non-gap).
+
+2. `VDC_ScanForNewMatch`
+   - Было: если проход по `Shot2` не нашёл match, в конце чистился весь `Shot2`.
+   - Проблема: свежий insert на half-cell может стать match'ем только после нескольких кадров decay, когда offsets дойдут до допустимого расстояния.
+   - Стало: pending `Shot2` держится, пока offsets около слота не settled. Если settled и match всё ещё нет — чистится конкретный trigger.
+
+3. `VDC_TrySpawn_NoHsubGate`
+   - Убран runtime stop по `BallsSpawned >= VDC_BALLS_TARGET`.
+   - `BallsSpawned` оставлен только как debug/phase counter и saturate'ится на 255, чтобы не завернуть обратно в fast phase.
+   - Реальный stop выпуска шаров теперь должен быть `VDC_GaugeFull` (уровневый бонусный счёт достиг цели, сейчас 1000 для level 1) или Game Over/Absorb state.
+
+4. Убран старый stop `HSA == VDC_TrackNumSlots -> RET` внутри spawn.
+   - Проблема: хвост переставал выпускаться у kill-zone до достижения `GaugeFull`.
+   - Теперь конец track обрабатывается только `VDC_CheckKillzone`, а не блокирует хвостовой spawn напрямую.
+
+5. Найдена текущая причина "хвост обрезан" в свежем `111`
+   - Normal phase делала spawn только когда `(ZL_FrameCounter & 63) == 0`.
+   - Но `VDC_TrySpawn` внутри ещё требует `HSub == 0`.
+   - Если фазы `FrameCounter&63` и `HSub` разъехались, попытка spawn всегда приходила при `HSub != 0`, и хвост больше никогда не появлялся. В дампе это видно как `BallsSpawned=35`, `DbgSpawn=35` после fast phase.
+   - Фикс: убрать внешний `FrameCounter&63` gate; `VDC_TrySpawn` сам gate'ится по `HSub==0` и tail-offset settled.
+
+Что было исправлено в Python/2D reference:
+- `Source/OTHER/vdc_visual_emulator.py` был не синхронен с текущим ASM:
+  - старый order tick'а: `try_spawn -> move_chain -> animate_chain`;
+  - текущий ASM fast phase: `12×MoveChain -> AnimateChain -> TrySpawn_NoHsubGate`;
+  - текущий ASM normal phase: `MoveChain -> AnimateChain -> TrySpawn`.
+- Из-за этого Python/2D эмулятор мог "чинить" не тот VDC: он воспроизводил другую фазу HSA/HSub/SlotsLen и подсовывал ложные объяснения.
+- Синхронизировано:
+  - fast/normal update order;
+  - `try_spawn(no_hsub_gate=True)` для fast phase;
+  - saturating `balls_spawned`;
+  - narrow `Shot2` trigger только при реальном same-color closure;
+  - pending `Shot2` до settled offsets.
+
+Про "Клод неправильным эмулятором чинил неправильный VDC":
+- Главная ошибка подхода: доверять визуальному Python/2D эмулятору как oracle, когда его update-order уже не совпадает с ASM.
+- Такой эмулятор показывал правдоподобные, но фазово неверные цепочки: spawn, HSA/HSub и delayed match жили по другой временной сетке.
+- В итоге можно было "лечить" симптомы в модели, а не реальные invariants в RAM.
+- Правильный источник истины для этих багов — RAM dump + ring buffer (`SHOT/BBOX/HEMI/INSERT/CASCADE/MATCH3`) + прямое чтение `VDC_Slots`, `VDC_Offsets`, `VDC_Shot2`, `VDC_ExplodeFrame`, `VDC_ExplodeMarker`, `GaugeScore`, `GaugeFull`, `GameState`.
+
+Текущий статус на момент записи:
+- Исправления по `Shot2`/false match/missed match уже собраны и прошли Z80 tests.
+- Последний найденный фикс по normal spawn phase (`FrameCounter&63` gate) внесён в ASM, требует финальной пересборки SPG и проверки свежим дампом.
+
+
+## [2026-05-20 23:55] Final dialog stats font: cancun10 native, без трогания cancun8
+
+Контекст: в финальном меню под декоративным `GAME OVER` были плохо читаемые строки статистики:
+`TIME`, `COMBOS`, `COINS`, `SCORE`, `MAX CHAIN`, `MAX COMBO`.
+
+Важно: шрифт меню/HUD `cancun8` нельзя трогать. Его раньше пиксельно подгоняли, поэтому любые изменения
+`make_font_cancun8.py`, `font_cancun8_meta.inc` или `font_cancun8_atlas.bin` считаются опасными.
+
+Что было сделано:
+- `cancun8` оставлен как есть.
+- Декоративный `nativealien` / `GAME OVER` font для статистики не использован: он крупный, но не тот стиль.
+- Добавлен отдельный stats-only font из оригинального HD-ref:
+  `C:\Users\Администратор\Desktop\Zuma-Deluxe-HD-ref\content\fonts\cancun10.png`
+  + `cancun10.txt`.
+- Новый генератор:
+  `Source/OTHER/make_font_cancun10_stats.py`
+- Новый include:
+  `Source/ASM/font_cancun10_stats_meta.inc`
+- Новый atlas:
+  `Graphics/Converted/font_cancun10_stats_atlas.bin`
+  `Graphics/Converted/font_cancun10_stats_atlas_p00.bin`
+  `Graphics/Converted/font_cancun10_stats_atlas_p00_zx7.bin`
+
+Критичная правка после замечания пользователя:
+- Сначала была ошибочная попытка сделать `cancun10` через 2x upscale.
+- Пользователь правильно остановил: нужно "в нативном масштабе без апскела".
+- Генератор исправлен: glyph copy теперь идёт напрямую из `cancun10.png`, без `resize`.
+- Итоговый atlas: `187x11`, `FONT_CANCUN10_STATS_H = 11`, `FONT_CANCUN10_STATS_BYTES = 4114`.
+
+Размещение:
+- SPG page: `#6A`
+- RAM_G: `#0A0000`
+- Handle: `FONT_CANCUN10_STATS_HANDLE = 25`
+- `cancun8` остался на `#6B..#6C`, RAM_G `#0A4000`.
+
+ASM:
+- В `Source/ASM/main.asm` добавлен `SetFontCancun10Stats`.
+- В `DrawDialogContent` строки статистики переключены с `SetFontCancun8` на `SetFontCancun10Stats`.
+- Геометрия stats:
+  - `DLG_STATS_Y = 208`
+  - `DLG_STATS_X_L = 165`
+  - `DLG_STATS_X_R = 356`
+  - `DLG_LINE_H = 18`
+- Правая колонка была сдвинута левее по просьбе пользователя: `DLG_STATS_X_R 380 -> 356`
+  (примерно на 3 символа cancun10).
+
+SPG packaging:
+- В `spgbld_vdac2.ini` добавлен блок:
+  `Block = #0000, #6A, Graphics/Converted/font_cancun10_stats_atlas_p00_zx7.bin`
+
+Проверка:
+- `sjasmplus Source\ASM\main.asm --syntax=ab --lst=main.lst --sym=zuma.sym` — PASS, 0 errors / 0 warnings.
+- `spgbld -b spgbld_vdac2.ini zuma_vdac2.spg` — PASS.
+- Пользователь подтвердил результат: "Да отлично!"
+
+Итог: финальное меню теперь использует отдельный нативный `cancun10` для строк счёта/статистики,
+а пиксельно подогнанный `cancun8` меню/HUD не изменён.

@@ -7,8 +7,8 @@ move_chain, try_spawn, insert_at, slot_pos PRESERVE) сохранена один
 рендер канвы — для отладки 640×480-варианта под VDAC2.
 
 Управление: только мышь.
-- Движение мыши → aim лягушки.
-- ЛКМ → выстрел шара текущего цвета.
+- Движение мыши -> aim лягушки.
+- ЛКМ -> выстрел шара текущего цвета.
 
 Не использует никаких внешних библиотек кроме tkinter (стандартная Python поставка).
 """
@@ -19,16 +19,19 @@ import os
 from dataclasses import dataclass, field
 
 # ---------- Константы (синхронно с текущим asm: VDC.asm + MainLoop.asm) ----------
-CELL_SIZE          = 32          # = VDC_CELL_SIZE в asm. 1 sample ≈ 1.08 px → ≈ 34.6 px между centers.
-DECAY_NEG_PER_FRAME = 2          # negative offsets (insert head slide) → 0 быстро.
-DECAY_POS_PER_FRAME = 1          # positive offsets (cascade rollback) → 0 плавно (= коллега).
+CELL_SIZE          = 32          # = VDC_CELL_SIZE в asm. 1 sample ≈ 1.08 px -> ≈ 34.6 px между centers.
+DECAY_NEG_PER_FRAME = 2          # negative offsets (insert head slide) -> 0 быстро.
+DECAY_POS_PER_FRAME = 1          # positive offsets (cascade rollback) -> 0 плавно (= коллега).
 NUM_BALL_COLORS    = 6           # = VDC_NUM_COLORS
 MAX_SLOTS          = 240         # = VDC_MAX_SLOTS
+LEVEL_START_BALLS  = 35          # = VDC_LEVEL_START_BALLS
+FAST_ADVANCE       = 12          # = VDC_FAST_ADVANCE
+SPAWN_FRAME_MASK   = 63          # normal phase: VDC_TrySpawn only when frame&63 == 0
 GAP_STEP_FRAMES    = CELL_SIZE
 GAP_STOP           = 0xFE
 GAP_CASCADE        = 0xFD
 SHOT_SPEED         = 6           # px/frame (= MainLoop bullet step, 360×288 baseline)
-DM3_OFFSET_GAP_MAX = 10          # = VDC_DM3_OFFSET_GAP_MAX
+DM3_OFFSET_GAP_MAX = CELL_SIZE // 2 + 2  # = VDC_DM3_OFFSET_GAP_MAX
 BALL_DIAMETER      = 32          # = ZL_BALL_DIAM_PX (atlas cell 32×32)
 BALL_RADIUS_VISUAL = 16          # = ZL_BALL_HALF
 COLLISION_BBOX_HALF = 16         # = ZL_BALL_HALF
@@ -92,8 +95,32 @@ class VDCState:
     gap_step_counter: int = 0
     match_scan_idx: int = 0xFF
     balls_spawned: int = 0
+    spawn_cluster_color: int = 0xFF
+    spawn_cluster_rem: int = 0
     last_match_scan_idx: int = 0
     frame: int = 0
+    # --- Scoring / Zuma bar (mirror of VDC.asm m3_have_marker + VDC_TickGaugeShown) ---
+    gauge_score: int = 0            # true cumulative score for this level
+    gauge_shown: int = 0            # displayed animated score (LERP to gauge_score @ STEP/frame)
+    gauge_full: int = 0             # 1 when gauge_score >= GAUGE_TARGET
+    stat_combos: int = 0
+    stat_max_combo: int = 0
+    stat_chain_count: int = 0       # consecutive explosions без miss-shot
+    stat_max_chain: int = 0
+    stat_prev_match_color: int = 0xFF
+    player_score: int = 0           # cumulative for HUD
+    # Gap-bonus tracking — обновляется когда летящий шар near GAP-слотов и не задел chain
+    bullet_gap_min_dist: int = 255  # init=255, ползёт вниз во время полёта
+    bullet_gap_count: int = 0       # consecutive gap-shots для ×2 multiplier
+
+
+# --- Scoring constants (mirror VDC.asm + main.asm) ---
+GAUGE_TARGET           = 1000       # HUD_GAUGE_TARGET (юзер 2026-05-20: lvl1 оригинал = 3000, but keep 1000 for now)
+GAUGE_SHOWN_STEP       = 8          # очков/кадр в анимации бара
+GAUGE_SPRITE_W         = 63         # HUD_PROGRESS_W
+CHAIN_BONUS_THRESHOLD  = 5          # chain >= 5 + combo == 0 -> bonus
+GAP_HIT_THR            = 24         # VDC_GAP_HIT_THR (Manhattan dist)
+GAP_MAX                = 32         # VDC_GAP_MAX
 
 class VDCEngine:
     def __init__(self, track, seed=0):
@@ -107,10 +134,11 @@ class VDCEngine:
         if idx >= s.slots_len: return None
         c = s.slots[idx]
         if is_gap(c): return None
-        # Adjacent idx (lower=forward, higher=behind) → pixel_dist = 32 + offsets[fwd] - offsets[bhd].
+        # Adjacent idx (lower=forward, higher=behind) -> pixel_dist = 32 + offsets[fwd] - offsets[bhd].
         # Match-3 fires когда шары касаются ИЛИ overlap'ятся (pixel_dist в [0..32+GAP_MAX]).
         # Соответствует diff = offsets[fwd] - offsets[bhd] в [-32..GAP_MAX].
-        # Левая граница (-32) допускает overlap при insert; правая (+8) блокирует cascade-gap.
+        # Левая граница (-32) допускает overlap при insert; правая (+18) допускает
+        # свежую вставку на half-cell, но блокирует full cascade-gap (+32).
         lb = idx
         while lb > 0 and s.slots[lb-1] == c:
             d = s.offsets[lb-1] - s.offsets[lb]
@@ -138,18 +166,44 @@ class VDCEngine:
                 and not is_gap(s.slots[rb+1])
                 and s.slots[lb-1] == s.slots[rb+1]):
             marker = GAP_CASCADE
+        # --- Scoring (mirror VDC.asm m3_have_marker) ---
+        s.stat_chain_count += 1
+        if count > s.stat_max_chain:
+            s.stat_max_chain = count
+        # Combo: same-color streak
+        if color == s.stat_prev_match_color:
+            s.stat_combos += 1
+            if s.stat_combos > s.stat_max_combo:
+                s.stat_max_combo = s.stat_combos
+        else:
+            s.stat_combos = 0
+            s.stat_prev_match_color = color
+        # Points: base + (combo OR chain bonus, mutually exclusive)
+        points = count * 10
+        if s.stat_combos > 0:
+            points += s.stat_combos * 100
+        elif s.stat_chain_count >= CHAIN_BONUS_THRESHOLD:
+            points += 100 + 10 * (s.stat_chain_count - CHAIN_BONUS_THRESHOLD)
+        s.player_score += points
+        s.gauge_score += points
+        if s.gauge_score >= GAUGE_TARGET:
+            s.gauge_full = 1
+        # Hook for app-level logging (App sets this callback if needed)
+        if getattr(self, 'on_match_log', None):
+            self.on_match_log(count, color, points, marker)
         for k in range(lb, rb + 1):
             s.slots[k] = marker
             s.offsets[k] = 0
             s.shot2[k] = 0
-        if lb > 0:
-            s.shot2[lb-1] = 1
-        if rb + 1 < s.slots_len:
-            s.shot2[rb+1] = 1
+        # NOTE 2026-05-20: преждевременная Shot2 propagation на lb-1/rb+1 убрана
+        # (с repeatChance RNG соседи часто 3+ same color → ложный «двойной match-3
+        # разных цветов» без gap closure). Cascade теперь через DoGapStep после
+        # физического закрытия gap.
+        # OLD: s.shot2[lb-1] = 1; s.shot2[rb+1] = 1
         # Триггерим первый gap_step немедленно — иначе chain motion в течение
         # waiting period (0..CS frames до hsub=0) двигает head вперёд, а должна
         # стоять и ждать хвост. С первым instant gap_step head получает +CS
-        # offset compensation сразу → stationary до конца decay phase.
+        # offset compensation сразу -> stationary до конца decay phase.
         # Оставшиеся markers ждут hsub=0 (= 1 marker per gap_step call).
         self.do_gap_step()
         s.gap_step_counter = 0
@@ -157,10 +211,22 @@ class VDCEngine:
 
     def do_gap_step(self):
         s = self.s
+        def set_shot2_on_real_closure(k):
+            # Trigger delayed match only when removing the gap joins two same-color balls.
+            # Otherwise a pre-existing same-color run on one side can false-trigger.
+            if k <= 0 or k >= s.slots_len:
+                return
+            left = s.slots[k - 1]
+            right = s.slots[k]
+            if is_gap(left) or is_gap(right) or left != right:
+                return
+            s.shot2[k - 1] = 1
+            s.shot2[k] = 1
+
         # STOP from tail — HSA-- + head компенсация +CELL_SIZE. Tail НЕ компенсируем:
         # shift idx-=1 в сочетании с HSA-=1 автоматически сохраняет позицию tail-шаров.
         # Это даёт «как CASCADE»: chain shrinks by 1 cell, head smooth slides back 32 px,
-        # tail балы остаются физически на месте → без jerk'ов.
+        # tail балы остаются физически на месте -> без jerk'ов.
         for k in range(s.slots_len - 1, -1, -1):
             if s.slots[k] == GAP_STOP:
                 for j in range(k, s.slots_len - 1):
@@ -175,14 +241,11 @@ class VDCEngine:
                 for j in range(k):
                     s.offsets[j] = min(s.offsets[j] + CELL_SIZE, CELL_SIZE)
                 # NO chain_freeze here — head компенсация +CELL_SIZE декаится за CELL_SIZE кадров
-                # параллельно с естественным chain motion (hsub++ wrap → HSA++). Net = head стоит.
-                if k > 0 and k - 1 < s.slots_len and not is_gap(s.slots[k-1]):
-                    s.shot2[k-1] = 1
-                if k < s.slots_len and not is_gap(s.slots[k]):
-                    s.shot2[k] = 1
+                # параллельно с естественным chain motion (hsub++ wrap -> HSA++). Net = head стоит.
+                set_shot2_on_real_closure(k)
                 s.match_scan_idx = k
                 return  # обрабатываем ОДИН маркер за вызов — иначе STOP+CASCADE в одном
-                        # тике дают HSA-=2 без двойной компенсации → рывок head назад на 32 px.
+                        # тике дают HSA-=2 без двойной компенсации -> рывок head назад на 32 px.
         # CASCADE from head
         for k in range(s.slots_len):
             if s.slots[k] == GAP_CASCADE:
@@ -196,17 +259,14 @@ class VDCEngine:
                 if s.hsa > 0:
                     s.hsa -= 1
                 # Smooth rollback compensation, cap +CELL_SIZE — без cap'а несколько
-                # cascade'ов подряд накапливают offset до 70+ → head «зависает» на
+                # cascade'ов подряд накапливают offset до 70+ -> head «зависает» на
                 # десятки кадров пока offset не decay'ится до 0.
                 for j in range(k):
                     s.offsets[j] = min(s.offsets[j] + CELL_SIZE, CELL_SIZE)
-                # chain_freeze: head декаится без параллельного chain motion →
+                # chain_freeze: head декаится без параллельного chain motion ->
                 # head визуально откатывается на CELL_SIZE px назад за N кадров (видимый rollback).
                 s.chain_freeze_counter = CELL_SIZE
-                if k > 0 and k - 1 < s.slots_len and not is_gap(s.slots[k-1]):
-                    s.shot2[k-1] = 1
-                if k < s.slots_len and not is_gap(s.slots[k]):
-                    s.shot2[k] = 1
+                set_shot2_on_real_closure(k)
                 s.match_scan_idx = k
                 break
 
@@ -220,7 +280,8 @@ class VDCEngine:
                     continue
                 if self.check_match3(k):
                     return True
-                # No match. Clear Shot2 only if offsets near k settled.
+                # No match. Keep pending until offsets near k settle; fresh insert
+                # can become a valid match after half-cell slide decays.
                 settled = (s.offsets[k] == 0)
                 if k > 0:
                     settled = settled and (s.offsets[k-1] == 0)
@@ -249,7 +310,7 @@ class VDCEngine:
         s.gap_step_counter += 1
         # Каждые GAP_STEP_FRAMES кадров (= CELL_SIZE) запускаем gap_step — синхронно
         # с decay (offsets +CS decay'ятся за CELL_SIZE/decay_pos = 32 кадров).
-        # Без hsub=0 constraint, иначе зазор между decay-end и next gap_step → head moves forward.
+        # Без hsub=0 constraint, иначе зазор между decay-end и next gap_step -> head moves forward.
         if s.gap_step_counter >= GAP_STEP_FRAMES:
             s.gap_step_counter = 0
             self.do_gap_step()
@@ -271,16 +332,26 @@ class VDCEngine:
                 s.hsa += 1
 
     # --------- Spawn / Insert ----------
-    def try_spawn(self):
+    def try_spawn(self, no_hsub_gate=False):
         s = self.s
+        if s.gauge_full: return False               # Zuma bar full -> spawn gate OFF
         if s.slots_len >= MAX_SLOTS: return False
         if s.hsa < s.slots_len: return False
         # Спавнить только когда chain выровнен по cell-границе (hsub=0).
-        if s.hsub != 0: return False
-        candidate = self.rng.randint(0, NUM_BALL_COLORS - 1)
-        # anti-3-spawn-guard
-        if s.slots_len >= 2 and s.slots[s.slots_len - 1] == s.slots[s.slots_len - 2] == candidate:
-            candidate = (candidate + 1) % NUM_BALL_COLORS
+        # Fast phase mirrors asm VDC_TrySpawn_NoHsubGate.
+        if not no_hsub_gate and s.hsub != 0: return False
+        if s.spawn_cluster_rem > 0:
+            s.spawn_cluster_rem -= 1
+            candidate = s.spawn_cluster_color
+        elif self.rng.randrange(2) == 0:
+            candidate = self.rng.randint(0, NUM_BALL_COLORS - 1)
+            s.spawn_cluster_rem = 0
+        else:
+            candidate = self.rng.randint(0, NUM_BALL_COLORS - 1)
+            s.spawn_cluster_color = candidate
+            total_len = self.rng.randint(1, NUM_BALL_COLORS - 1)
+            s.spawn_cluster_rem = total_len - 1
+        s.spawn_cluster_color = candidate
         s.slots[s.slots_len] = candidate
         # Offset нового шара = offset хвоста (или -delta*CELL_SIZE если цепь пуста).
         # Это даёт ровную cell-aligned дистанцию между новым шаром и хвостом
@@ -294,7 +365,7 @@ class VDCEngine:
         s.shot2[s.slots_len] = 0
         s.last_render_pos[s.slots_len] = None
         s.slots_len += 1
-        s.balls_spawned += 1
+        s.balls_spawned = min(255, s.balls_spawned + 1)  # mirror asm debug counter saturation
         return True
 
     def insert_at(self, target_idx, color):
@@ -312,8 +383,8 @@ class VDCEngine:
         else:
             head_off = s.offsets[target_idx - 1]; tail_off = s.offsets[target_idx]
         new_offset = -CELL_SIZE // 2 + (head_off + tail_off) // 2
-        # Tail-side (idx target_idx..end → target_idx+1..end+1): idx +1, HSA +1.
-        # Эти эффекты на slot_t взаимно компенсируются → offsets без изменений.
+        # Tail-side (idx target_idx..end -> target_idx+1..end+1): idx +1, HSA +1.
+        # Эти эффекты на slot_t взаимно компенсируются -> offsets без изменений.
         for j in range(s.slots_len, target_idx, -1):
             s.slots[j] = s.slots[j-1]
             s.offsets[j] = s.offsets[j-1]
@@ -328,18 +399,75 @@ class VDCEngine:
         # HSA+1 = chain продвинулся на 1 cell вперёд (к killzone). Cap по track-end.
         if s.hsa < len(self.track) // CELL_SIZE - 1:
             s.hsa += 1
-        # Head-side (idx 0..target_idx-1): idx тот же, HSA+1 → +32 instant.
+        # Head-side (idx 0..target_idx-1): idx тот же, HSA+1 -> +32 instant.
         # offsets -=CELL_SIZE компенсирует instant, декей возвращает к 0 за 32 кадра
-        # → плавный slide HEAD на 32 px вперёд. Cap'ним на -CELL_SIZE чтобы при
+        # -> плавный slide HEAD на 32 px вперёд. Cap'ним на -CELL_SIZE чтобы при
         # многократных insert/match offsets не уходили в большие отрицательные значения.
         for i in range(target_idx):
             s.offsets[i] = max(s.offsets[i] - CELL_SIZE, -CELL_SIZE)
         # NO freeze (= синхронно с asm `VDC_InsertAt`): head компенсация (-CS) decay'ится
-        # параллельно с natural chain motion → head «ускоренно уезжает вперёд на 2 cells
+        # параллельно с natural chain motion -> head «ускоренно уезжает вперёд на 2 cells
         # за CELL_SIZE кадров», без stutter'а паузы. См. коммент в VDC.asm после InsertAt.
         matched = self.check_match3(target_idx)
+        if not matched:
+            # Shot без match -> BreakChain (Statistics_BreakChain)
+            s.stat_chain_count = 0
         self.clamp_offset_order()
         return matched
+
+    # --------- Gauge bar animation ----------
+    def tick_gauge_shown(self):
+        s = self.s
+        if s.gauge_shown < s.gauge_score:
+            s.gauge_shown = min(s.gauge_shown + GAUGE_SHOWN_STEP, s.gauge_score)
+        elif s.gauge_shown > s.gauge_score:
+            s.gauge_shown = s.gauge_score  # быстрый откат (restart, etc)
+
+    # --------- Gap-bonus detection ----------
+    def update_bullet_gap_tracking(self, bx, by):
+        """Per-frame во время полёта (когда BBOX не попал в chain): обновить min-dist
+        от bullet до ближайшего GAP-слота."""
+        s = self.s
+        for i in range(s.slots_len):
+            if not is_gap(s.slots[i]): continue
+            pos = self.slot_pos(i)
+            if pos is None: continue
+            cx, cy = pos
+            d = int(abs(bx - cx) + abs(by - cy))
+            if d < s.bullet_gap_min_dist:
+                s.bullet_gap_min_dist = d
+
+    def reset_bullet_gap_tracking(self):
+        self.s.bullet_gap_min_dist = 255
+
+    def award_gap_bonus(self):
+        """Bullet expired off-screen без hit'а. Если был gap-pass — начислить очки."""
+        s = self.s
+        if s.bullet_gap_min_dist <= GAP_HIT_THR:
+            s.bullet_gap_count += 1
+            bonus = max(10, GAP_MAX - s.bullet_gap_min_dist)
+            if s.bullet_gap_count > 1:
+                bonus *= 2
+            s.player_score += bonus
+            s.gauge_score += bonus
+            if s.gauge_score >= GAUGE_TARGET:
+                s.gauge_full = 1
+        else:
+            s.bullet_gap_count = 0
+        # Shot exit ломает chain
+        s.stat_chain_count = 0
+
+    # --------- fill_px для прогресс-бара (mirror DrawHudProgress) ----------
+    def fill_px(self):
+        s = self.s
+        if s.gauge_full:
+            return GAUGE_SPRITE_W
+        if s.gauge_shown == 0:
+            return 0
+        q = (s.gauge_shown * GAUGE_SPRITE_W) // GAUGE_TARGET
+        if q == 0:
+            q = 1
+        return min(q, GAUGE_SPRITE_W)
 
     # --------- Compute slot's track-position ----------
     def slot_t(self, i):
@@ -381,7 +509,7 @@ class App:
         _here = os.path.dirname(os.path.abspath(__file__))
         _root = os.path.abspath(os.path.join(_here, '..', '..'))
         log_path = os.path.join(_root, 'vdc_emulator_log.txt')
-        self.log = open(log_path, 'w', buffering=1)
+        self.log = open(log_path, 'w', buffering=1, encoding='utf-8')
         self.log.write('# frame slotsLen hsa hsub freeze scanIdx slots offsets shot2\n')
         self.cw = SCR_W * SCALE
         self.ch = (SCR_H + RENDER_Y_OFFSET) * SCALE
@@ -394,6 +522,14 @@ class App:
         # FROG center = FROG_DEFAULT_X/Y из Frog.asm (hardcoded для level 1).
         self.frog_cx, self.frog_cy = 327, 231
         self.engine = VDCEngine(self.track, seed=42)
+        # Attach scoring logger hook
+        def _on_match(count, color, points, marker):
+            mname = 'STOP' if marker == GAP_STOP else 'CASCADE'
+            self.log.write(f'# MATCH frame={self.engine.s.frame} count={count} color={color} '
+                           f'marker={mname} chain={self.engine.s.stat_chain_count} '
+                           f'combo={self.engine.s.stat_combos} +{points} pts -> '
+                           f'gauge={self.engine.s.gauge_score}\n')
+        self.engine.on_match_log = _on_match
         self.flying = []
         self.next_color = self.rng_color()
         self.mouse_xy = (self.frog_cx, self.frog_cy - 50)
@@ -427,7 +563,7 @@ class App:
         return random.choice(list(colors))
 
     def s2c(self, x, y):
-        """game coords → canvas coords (с шифтом по Y чтобы спавн-зона track[0..29] с y<0 была видна)"""
+        """game coords -> canvas coords (с шифтом по Y чтобы спавн-зона track[0..29] с y<0 была видна)"""
         return x * SCALE, (y + RENDER_Y_OFFSET) * SCALE
 
     def on_motion(self, e):
@@ -452,6 +588,7 @@ class App:
         self.flying.append(FlyingBall(self.frog_cx, self.frog_cy, dx, dy, self.next_color))
         self.next_color = self.rng_color()
         self.shot_cooldown = 8
+        self.engine.reset_bullet_gap_tracking()
 
     def update_flying(self):
         e = self.engine
@@ -460,8 +597,16 @@ class App:
             if not b.active: continue
             b.x += b.dx
             b.y += b.dy
-            # Off-screen → drop
+            # Off-screen -> drop (expire без hit -> gap-bonus award)
             if b.x < -32 or b.x > SCR_W + 32 or b.y < -32 or b.y > SCR_H + 32:
+                pre_gauge = e.s.gauge_score
+                e.award_gap_bonus()
+                if e.s.gauge_score != pre_gauge:
+                    self.log.write(f'# GAP_BONUS frame={e.s.frame} min_dist={e.s.bullet_gap_min_dist} '
+                                   f'count={e.s.bullet_gap_count} +{e.s.gauge_score - pre_gauge} pts -> '
+                                   f'gauge={e.s.gauge_score}\n')
+                else:
+                    self.log.write(f'# MISS frame={e.s.frame} (no gap, chain reset)\n')
                 continue
             # Check collision with chain
             inserted = False
@@ -499,18 +644,44 @@ class App:
                     inserted = True
                     break
             if not inserted:
+                # Не попал в этом кадре — update gap-tracking (min Manhattan dist
+                # до ближайшего GAP-слота в цепи)
+                e.update_bullet_gap_tracking(b.x, b.y)
                 new_list.append(b)
         self.flying = new_list
 
     def tick(self):
+        import time as _t
+        _t0 = _t.time()
+        def _check(stage):
+            el = _t.time() - _t0
+            if el > 0.5:
+                print(f'[SLOW TICK] frame={self.engine.s.frame} stage={stage} elapsed={el:.2f}s')
+                self.log.write(f'# SLOW_TICK frame={self.engine.s.frame} stage={stage} elapsed={el:.2f}s\n')
         e = self.engine
-        # Spawn: try_spawn сам gate'ится по hsub==0 → одна попытка раз в 32 кадра
-        # ровно в момент клеточного выравнивания. Шар появляется на track[0].
-        if e.s.balls_spawned < 60:
-            e.try_spawn()
-        e.move_chain()
-        e.animate_chain()
+        # Mirror asm VDC_Update:
+        # fast phase: 12x MoveChain, then AnimateChain, then TrySpawn_NoHsubGate.
+        # normal phase: MoveChain, AnimateChain, then TrySpawn every 64 frames.
+        if e.s.balls_spawned < LEVEL_START_BALLS:
+            for _ in range(FAST_ADVANCE):
+                e.move_chain()
+            _check('move_chain_fast')
+            e.animate_chain()
+            _check('animate_chain')
+            e.try_spawn(no_hsub_gate=True)
+            _check('try_spawn_fast')
+        else:
+            e.move_chain()
+            _check('move_chain')
+            e.animate_chain()
+            _check('animate_chain')
+            if (e.s.frame & SPAWN_FRAME_MASK) == 0:
+                e.try_spawn()
+            _check('try_spawn')
+        e.tick_gauge_shown()                       # animate Zuma bar
+        _check('tick_gauge_shown')
         self.update_flying()
+        _check('update_flying')
         if self.shot_cooldown > 0:
             self.shot_cooldown -= 1
         e.s.frame += 1
@@ -550,7 +721,7 @@ class App:
             slot = e.s.slots[i]
             if is_gap(slot): continue
             pos = e.slot_pos(i)
-            if pos is None: continue                      # pre-spawn (t<0) → не рисуем
+            if pos is None: continue                      # pre-spawn (t<0) -> не рисуем
             x, y = pos
             color = BALL_COLORS.get(slot, '#888')
             cx, cy = self.s2c(x, y)
@@ -580,6 +751,21 @@ class App:
         c.create_oval(fx-12*SCALE, fy-12*SCALE, fx+12*SCALE, fy+12*SCALE,
                       fill=prev_color, outline='#fff', tags='dyn')
 
+        # --- Zuma progress bar (top-right) ---
+        bar_x, bar_y, bar_w, bar_h = 540, 40, 63, 19
+        bx0, by0 = self.s2c(bar_x, bar_y)
+        bx1, by1 = self.s2c(bar_x + bar_w, bar_y + bar_h)
+        # Red socket background
+        c.create_rectangle(bx0, by0, bx1, by1, fill='#601015', outline='#a06030', width=1, tags='dyn')
+        fill = e.fill_px()
+        if fill > 0:
+            fx1, fy1 = self.s2c(bar_x + fill, bar_y + bar_h)
+            colr = '#40e040' if e.s.gauge_full else '#ffd040'
+            c.create_rectangle(bx0, by0, fx1, fy1, fill=colr, outline='', tags='dyn')
+        # bar label
+        lx, ly = self.s2c(bar_x + bar_w // 2, bar_y - 8)
+        c.create_text(lx, ly, text=f'{e.s.gauge_shown}/{GAUGE_TARGET}', font=('Consolas', 8), fill='#ffd080', tags='dyn')
+
         # Info panel
         s = e.s
         info = []
@@ -592,6 +778,16 @@ class App:
         info.append(f'BallsSpawned: {s.balls_spawned}')
         info.append(f'Flying balls: {len(self.flying)}')
         info.append(f'Next color:   {self.next_color}')
+        info.append('')
+        info.append('--- Scoring ---')
+        info.append(f'PlayerScore:  {s.player_score}')
+        info.append(f'GaugeScore:   {s.gauge_score}')
+        info.append(f'GaugeShown:   {s.gauge_shown}  fill={e.fill_px()}/{GAUGE_SPRITE_W} px')
+        info.append(f'GaugeFull:    {s.gauge_full}')
+        info.append(f'Chain:        {s.stat_chain_count} (max {s.stat_max_chain})')
+        info.append(f'Combo:        {s.stat_combos} (max {s.stat_max_combo})')
+        info.append(f'GapMinDist:   {s.bullet_gap_min_dist}')
+        info.append(f'GapCount:     {s.bullet_gap_count}')
         info.append('')
         info.append('--- Slot states ---')
         info.append('idx slot off shot2')

@@ -14,6 +14,7 @@ tongue: tight-crop по alpha bbox + 4 px padding для bilinear → resize д�
 торчит на полную длину sprite за пределы face.
 """
 import os, struct
+import numpy as np
 from PIL import Image
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -22,6 +23,10 @@ CONVERTED = os.path.join(PROJECT_ROOT, 'Graphics', 'Converted')
 TEMP_DIR = PROJECT_ROOT
 GFX = os.path.join(os.path.expanduser('~'), 'Desktop', 'Zuma Deluxe', 'graphics')
 HD_GAMEOBJECTS = os.path.join(PROJECT_ROOT, 'Graphics', 'Original', 'gameobjects.png')
+HD_REF_GAMEOBJECTS = os.path.join(os.path.expanduser('~'), 'Desktop', 'Zuma-Deluxe-HD-ref',
+                                  'content', 'images', 'gameobjects.png')
+if os.path.exists(HD_REF_GAMEOBJECTS):
+    HD_GAMEOBJECTS = HD_REF_GAMEOBJECTS
 if not os.path.exists(HD_GAMEOBJECTS):
     HD_GAMEOBJECTS = r'C:\z80\zuma\_gameobjects_hd.png'
 PAGE_SZ = 16384
@@ -85,10 +90,11 @@ for name, crop, first_page in PARTS_122:
 
 
 # ========================================================================
-# Killzone — 64×64 ARGB4 = 8192 байт, 1 page.  Перенесён в bg padding
-# (page 0x16, RAM_G #04C000) чтобы освободить #0FD000 для face overlay.
+# Killzone — 88×88 PALETTED4444. 88px matches the baked level-1 star bbox
+# (~86×87 px) better than the previous 64×64 overlay. Palette is appended in
+# the padding after the 12 cells, so the existing 6 upload pages stay enough.
 # ========================================================================
-KW = KH = 64
+KW = KH = 88
 KZ_FRAMES = 12
 KZ_HOLE_X = 629
 KZ_HOLE_Y = 0
@@ -96,52 +102,54 @@ KZ_SRC_X = 629
 KZ_SRC_Y = 132
 KZ_SRC_W = 132
 KZ_SRC_H = 132
-KZ_TARGET_MAX = 60
 
 objects = clear_red_guides(Image.open(HD_GAMEOBJECTS).convert('RGBA'))
-hole = objects.crop((KZ_HOLE_X, KZ_HOLE_Y, KZ_HOLE_X + KZ_SRC_W, KZ_HOLE_Y + KZ_SRC_H))
-hole = hole.resize((KW, KH), Image.LANCZOS)
-hole_alpha = Image.new('RGBA', (KW, KH), (0, 0, 0, 0))
-hole_src = hole.load()
-hole_dst = hole_alpha.load()
-for y in range(KH):
-    for x in range(KW):
-        r, g, b, a = hole_src[x, y]
-        if a and max(r, g, b) < 58:
-            hole_dst[x, y] = (0, 0, 0, a)
+hole_alpha = objects.crop((KZ_HOLE_X, KZ_HOLE_Y, KZ_HOLE_X + KZ_SRC_W, KZ_HOLE_Y + KZ_SRC_H))
+hole_alpha = clear_red_guides(hole_alpha.resize((KW, KH), Image.LANCZOS))
 src_frames = [
     objects.crop((KZ_SRC_X, KZ_SRC_Y + i * KZ_SRC_H,
                   KZ_SRC_X + KZ_SRC_W, KZ_SRC_Y + (i + 1) * KZ_SRC_H))
     for i in range(KZ_FRAMES)
 ]
-bboxes = [frame.split()[3].getbbox() for frame in src_frames]
-max_dim = max(max(box[2] - box[0], box[3] - box[1]) for box in bboxes if box)
-
-# Якорь — source center (66, 66). Раньше каждый кадр crop'ался по своему
-# alpha-bbox + re-center в 64×64 → asymmetric кадры (frame 5: челюсть отколота
-# до x=0 → bbox-center сдвинут влево на 15 → череп визуально съезжал вправо
-# на ~9px относительно других кадров).  Теперь: единый scale всей 132×132,
-# crop центра 64×64.  Source-center (66,66) точно ложится в (32,32) ячейки.
-scale = KZ_TARGET_MAX / max_dim
-SCALED = max(KW, int(round(KZ_SRC_W * scale)))
 
 atlas = Image.new('RGBA', (KW, KH * KZ_FRAMES), (0, 0, 0, 0))
 preview = Image.new('RGBA', (KW * KZ_FRAMES, KH), (0, 0, 0, 0))
 atlas.alpha_composite(hole_alpha, (0, 0))
 preview.alpha_composite(hole_alpha, (0, 0))
-for i, frame in enumerate(src_frames):
-    if i == 0:
-        continue
-    scaled = clear_red_guides(frame.resize((SCALED, SCALED), Image.LANCZOS))
-    off = (SCALED - KW) // 2
-    cropped = scaled.crop((off, off, off + KW, off + KH))
-    atlas.alpha_composite(cropped, (0, i * KH))
-    preview.alpha_composite(cropped, (i * KW, 0))
+for i, frame in enumerate(src_frames[:KZ_FRAMES - 1]):
+    cropped = clear_red_guides(frame.resize((KW, KH), Image.LANCZOS))
+    cell = i + 1
+    atlas.alpha_composite(cropped, (0, cell * KH))
+    preview.alpha_composite(cropped, (cell * KW, 0))
 
-kz_blob = to_argb4_le(atlas)
-assert len(kz_blob) == KW * KH * KZ_FRAMES * 2
+q = atlas.quantize(colors=255, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
+raw_idx = np.array(q, dtype=np.uint8)
+rgba = np.array(atlas, dtype=np.uint16)
+alpha = rgba[:, :, 3]
+indices = np.where(alpha > 0, raw_idx.astype(np.uint16) + 1, 0).astype(np.uint8)
+
+palette = np.zeros((256, 4), dtype=np.uint8)
+for qi in range(255):
+    mask = (raw_idx == qi) & (alpha > 0)
+    if not mask.any():
+        continue
+    avg = rgba[mask].mean(axis=0)
+    palette[qi + 1] = np.clip(avg, 0, 255).astype(np.uint8)
+
+pal_blob = bytearray()
+for r, g, b, a in palette:
+    word = (((int(a) >> 4) & 0xF) << 12) | (((int(r) >> 4) & 0xF) << 8) | \
+           (((int(g) >> 4) & 0xF) << 4) | ((int(b) >> 4) & 0xF)
+    pal_blob += struct.pack('<H', word)
+
+kz_pixels = indices.tobytes()
+assert len(kz_pixels) == KW * KH * KZ_FRAMES
+kz_blob = kz_pixels + bytes(pal_blob)
+assert len(kz_blob) <= 6 * PAGE_SZ
 with open(os.path.join(CONVERTED, 'killzone.bin'), 'wb') as f:
     f.write(kz_blob)
 write_pages('killzone', kz_blob, 0x16)
+Image.fromarray(palette[indices].reshape(KH * KZ_FRAMES, KW, 4), 'RGBA').save(
+    os.path.join(PROJECT_ROOT, '_killzone_paletted_preview_stack.png'))
 preview.resize((KW * KZ_FRAMES * 2, KH * 2), Image.NEAREST).save(
     os.path.join(PROJECT_ROOT, '_killzone_preview.png'))

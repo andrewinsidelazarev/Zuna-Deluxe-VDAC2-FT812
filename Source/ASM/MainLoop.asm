@@ -24,6 +24,14 @@ ZL_SCR_W        EQU 640
 ZL_SCR_H        EQU 480
 ZL_SUB          EQU 16                                ; subpixel множитель
 ZL_CMD_WARN_BYTES EQU #0E00                           ; warn before RAM_CMD FIFO pressure (4096 bytes)
+ZL_PROFILER_ENABLED EQU 0                             ; 1=show FT812 timing overlay
+ZL_FROG_DRAW_ENABLED EQU 1                            ; canary master: isolate frog tearing source
+ZL_FROG_DRAW_PLATE   EQU 1                            ; no rotation
+ZL_FROG_DRAW_BODY    EQU 1                            ; rotated main body
+ZL_FROG_DRAW_TONGUE  EQU 1                            ; rotated tongue
+ZL_FROG_DRAW_BALL_NOW  EQU 1                          ; ball on tongue / in mouth
+ZL_FROG_DRAW_NEXT_BALL EQU 1                          ; next ball on frog back
+ZL_FROG_DRAW_OVERLAY EQU 1                            ; rotated face overlay
 
 ; ----------------------------------------------------------------------------
 ; MainLoop — точка входа. Никогда не возвращается.
@@ -36,9 +44,16 @@ MainLoop:       ; --- Init game state (одноразово при первом 
                 LD   (ZL_SpinK), A
 
 .Loop           ; --- 1. Update input + game state (Z80-only, параллельно с FT812 render) ---
+                if ZL_PROFILER_ENABLED
+                CALL ZL_ProfileReadClock
+                LD   (ZL_ProfileLoopStartLo), DE
+                LD   (ZL_ProfileLoopStartHi), HL
+                endif
                 CALL Input.Mouse.UpdateMouseState
                 CALL ZL_AimUpdate
                 CALL ZL_SmoothMouse
+                CALL UpdateDialog                    ; mouse hit-test на retry-dialog кнопках
+                CALL UpdateHudMenu                   ; top MENU button hover/press + input block
                 CALL Frog_Update
                 CALL VDC_Update
                 CALL Bullet_Update
@@ -53,6 +68,7 @@ MainLoop:       ; --- Init game state (одноразово при первом 
                 FT_ClearColorRGB32 0x102030
                 FT_ClearAll
                 CALL ZL_DrawFrame
+                CALL DrawDebugClock
                 FT_Display
                 FT_CMD_Count
                 LD   (ZL_CmdBytes), BC
@@ -64,8 +80,19 @@ MainLoop:       ; --- Init game state (одноразово при первом 
                 LD   (ZL_CmdOverflow), A
 .CmdSizeOk
 
-                ; --- 3. Sync с FT812 vsync (HighLander pattern). Wait ПОСЛЕ build,
-                ; ПЕРЕД write — FT812 закончил рендер prev frame, освободил RAM_DL.
+                if ZL_PROFILER_ENABLED
+                CALL ZL_ProfileReadClock
+                LD   BC, (ZL_ProfileLoopStartLo)
+                LD   IX, (ZL_ProfileLoopStartHi)
+                CALL ZL_ProfileDeltaK
+                LD   (ZL_ProfileBuildK), HL
+                LD   (ZL_ProfilePostBuildLo), DE
+                LD   (ZL_ProfilePostBuildHi), IX
+                endif
+
+                ; --- 3. Sync с FT812 swap interrupt, then wait until previous
+                ; DLSWAP request completed.  On real VDAC2, letting the
+                ; coprocessor rebuild RAM_DL during active scanout tears badly.
 .WaitIntSync    FT_RD_REG8 FT_REG_INT_FLAGS
                 AND  FT_INT_SWAP
                 JR   Z, .WaitIntSync
@@ -74,9 +101,27 @@ MainLoop:       ; --- Init game state (одноразово при первом 
                 AND  3
                 JR   NZ, .WaitDLSwap
 
-                ; --- 4. Burst write Z80 buffer → FT812 RAM_CMD (in vblank window) ---
+                if ZL_PROFILER_ENABLED
+                CALL ZL_ProfileReadClock
+                LD   BC, (ZL_ProfilePostBuildLo)
+                LD   IX, (ZL_ProfilePostBuildHi)
+                CALL ZL_ProfileDeltaK
+                LD   (ZL_ProfileIdleK), HL
+                LD   (ZL_ProfilePreWriteLo), DE
+                LD   (ZL_ProfilePreWriteHi), IX
+                endif
+
+                ; --- 4. Burst write Z80 buffer → FT812 RAM_CMD in the swap window,
+                ; wait until coprocessor has produced RAM_DL, then request swap.
                 FT_CMD_Write
                 CALL FT.Coprocessor.WaitFlush
+                if ZL_PROFILER_ENABLED
+                CALL ZL_ProfileReadClock
+                LD   BC, (ZL_ProfilePreWriteLo)
+                LD   IX, (ZL_ProfilePreWriteHi)
+                CALL ZL_ProfileDeltaK
+                LD   (ZL_ProfileWriteK), HL
+                endif
                 FT_WR_REG8 FT_REG_DLSWAP, FT_DLSWAP_FRAME
 
                 ; --- 5. Frame counter ---
@@ -132,21 +177,12 @@ ZL_DESTROY_HANDLE EQU 10
 ZL_DESTROY_W      EQU 64
 ZL_DESTROY_H      EQU 64
 ZL_DESTROY_HALF_DELTA EQU ((ZL_DESTROY_W - ZL_BALL_W) / 2) * 16
-ZL_BG_W         EQU 640                               ; DXT1_L4_RGB565 decoded output W
-ZL_BG_H         EQU 480                               ; DXT1_L4_RGB565 decoded output H
-ZL_BG_RAMG_ADDR EQU #010000                           ; raw = c0 + c1 + l2 in RAM_G
-ZL_BG_BLOCK_W   EQU ZL_BG_W / 4
-ZL_BG_BLOCK_H   EQU ZL_BG_H / 4
-ZL_BG_C0_SIZE   EQU ZL_BG_BLOCK_W * ZL_BG_BLOCK_H * 2
-ZL_BG_C1_SIZE   EQU ZL_BG_C0_SIZE
-ZL_BG_COLOR_ADDR EQU ZL_BG_RAMG_ADDR
-ZL_BG_L2_ADDR   EQU ZL_BG_RAMG_ADDR + ZL_BG_C0_SIZE + ZL_BG_C1_SIZE
-ZL_BG_COLOR_STRIDE EQU ZL_BG_BLOCK_W * 2
-ZL_BG_L2_STRIDE EQU ZL_BG_W / 2                       ; FT_L4 = 4bpp → 2 пикс/байт
-ZL_BG_L2_HANDLE EQU 8
-ZL_BG_SIZE_W_LO EQU ZL_BG_W & 511
-ZL_BG_SIZE_H_LO EQU ZL_BG_H & 511
-ZL_BG_SIZE_HI   EQU ((ZL_BG_W >> 9) << 2) | (ZL_BG_H >> 9)
+ZL_BG_W         EQU 400                               ; native bg storage, upscaled to 640x480
+ZL_BG_H         EQU 300
+ZL_BG_DRAW_W    EQU 640
+ZL_BG_DRAW_H    EQU 480
+ZL_BG_SCALE     EQU #0001999A                         ; 1.6 in f16.16
+ZL_BG_HANDLE    EQU 1
 
 ; Local DL command constants not covered by existing TSLib macros.
 ZL_FT_L2        EQU FT_L4                              ; mask layout: 4bpp linear ramp 0..15→0..255
@@ -165,51 +201,65 @@ ZL_COLOR_MASK_A EQU %00000001
 
 ZL_BALL_COLORS  EQU 6
 
+; ============================================================================
+; DrawDebugClock — HH:MM:SS в левом нижнем углу над bottom frame.
+; Bottom frame занимает Y=456..479 (24 px). Clock на Y=438 (18 px выше).
+; X=28 — сразу за left frame (24 px) + 4 px отступ.
+; Font 26 = FT812 ROM 8×16, "HH:MM:SS" ≈ 64 px wide.
+; ============================================================================
+DrawDebugClock:
+                ; Tint white
+                LD   C, 255 : LD D, 255 : LD E, 255
+                CALL FT.Coprocessor.ColorRGB
+                ; HH @ (28, 438)
+                LD   A, 4
+                CALL ReadRTCRegister
+                LD   C, A : LD B, 0
+                LD   DE, 0
+                FT_NumberDEBC 28, 438, 26, 2
+                ; ':' @ (46, 438)
+                FT_Text 46, 438, 26, 0
+                FT_CMD_BUF #0000003A
+                ; MM @ (52, 438)
+                LD   A, 2
+                CALL ReadRTCRegister
+                LD   C, A : LD B, 0
+                LD   DE, 0
+                FT_NumberDEBC 52, 438, 26, 2
+                ; ':' @ (70, 438)
+                FT_Text 70, 438, 26, 0
+                FT_CMD_BUF #0000003A
+                ; SS @ (76, 438)
+                XOR  A
+                CALL ReadRTCRegister
+                LD   C, A : LD B, 0
+                LD   DE, 0
+                FT_NumberDEBC 76, 438, 26, 2
+                RET
+
 ZL_DrawFrame:
                 ; --- Tint: белый (без модуляции цвета bitmap) ---
                 LD   C, 255 : LD D, 255 : LD E, 255
                 CALL FT.Coprocessor.ColorRGB
 
-                ; bg DXT1_L4_RGB565 raw layout (ft812_dxt_convert output):
-                ;   c0/c1: RGB565 cells W/4 × H/4, stride=(W/4)*2, cell 0/1
-                ;   L4   : FT_L4 full image mask W × H, stride=W/2 (4bpp)
-                ; FT_CMD_BUF аргументы ОБЯЗАТЕЛЬНО в скобках — без них | парсится криво
-                ; и в макрос попадает только первый operand.
-                FT_CMD_BUF (ZL_DL_SAVE_CONTEXT)
-                CALL ZL_EmitLoadId
-                CALL ZL_EmitSetMatrix
-
-                ; handle 1: RGB565 color cells, cell 0 = c0, cell 1 = c1.
-                FT_BitmapHandle 1
-                FT_BitmapSource ZL_BG_COLOR_ADDR
-                FT_BitmapLayout FT_RGB565, ZL_BG_COLOR_STRIDE, ZL_BG_BLOCK_H
-                FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, ZL_BG_W, ZL_BG_H
-
-                ; handle 8: full-resolution L4 mask
-                FT_BitmapHandle ZL_BG_L2_HANDLE
-                FT_BitmapSource ZL_BG_L2_ADDR
-                FT_BitmapLayout ZL_FT_L2, ZL_BG_L2_STRIDE, ZL_BG_H
-                FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, ZL_BG_W, ZL_BG_H
-
-                FT_Begin FT_BITMAPS
-                FT_CMD_BUF (ZL_DL_COLOR_MASK | ZL_COLOR_MASK_A)
-                FT_CMD_BUF (ZL_DL_BLEND_FUNC | (ZL_BLEND_ONE << 3) | ZL_BLEND_ZERO)
-                FT_CMD_BUF (ZL_DL_COLOR_A | 255)
-                FT_Vertex2ii 0, 0, ZL_BG_L2_HANDLE, 0
-
-                FT_CMD_BUF (ZL_DL_COLOR_MASK | ZL_COLOR_MASK_RGB)
+                ; 400x300 PALETTED4444 background: one pass, NEAREST upscale to 640x480.
                 CALL ZL_EmitLoadId
                 FT_CMD_BUF FT_CMD_SCALE
-                FT_CMD_BUF #00040000                  ; sx = 4.0
-                FT_CMD_BUF #00040000                  ; sy = 4.0
+                FT_CMD_BUF ZL_BG_SCALE
+                FT_CMD_BUF ZL_BG_SCALE
                 CALL ZL_EmitSetMatrix
-
-                FT_CMD_BUF (ZL_DL_BLEND_FUNC | (ZL_BLEND_DST_ALPHA << 3) | ZL_BLEND_ZERO)
-                FT_Vertex2ii 0, 0, 1, 1              ; c1 where alpha=1
-                FT_CMD_BUF (ZL_DL_BLEND_FUNC | (ZL_BLEND_ONE_MINUS_DST_ALPHA << 3) | ZL_BLEND_ONE)
-                FT_Vertex2ii 0, 0, 1, 0              ; c0 where alpha=0
+                FT_PaletteSource BG_PALETTE_RAMG
+                FT_BitmapHandle ZL_BG_HANDLE
+                FT_BitmapSource BG_RAMG_ADDR
+                FT_BitmapLayout FT_PALETTED4444, ZL_BG_W, ZL_BG_H
+                FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, ZL_BG_DRAW_W, ZL_BG_DRAW_H
+                FT_Begin FT_BITMAPS
+                XOR  A
+                CALL FT.Coprocessor.Cell
+                FT_Vertex2ii 0, 0, ZL_BG_HANDLE, 0
                 FT_End
-                FT_CMD_BUF (ZL_DL_RESTORE_CONTEXT)
+                CALL ZL_EmitLoadId
+                CALL ZL_EmitSetMatrix
 
                 ; One bitmap primitive for the remaining bitmap layers.
                 FT_Begin FT_BITMAPS
@@ -221,23 +271,36 @@ ZL_DrawFrame:
                 CALL DrawKillzoneDual
 
                 ; ============================================================
-                ; Frog composition (HD Frog_Draw порядок):
-                ;   plate (под body, no rotation)
-                ;   body (rotation matrix к курсору, atan2)
-                ;   tongue (та же rotation matrix, offset = tongueExpand·dir)
-                ; tongueExpand втягивается в рот при выстреле (ЛКМ); recoil
-                ; pos.x/y вычисляется в Frog_TickRecoil из Frog_Update.
+                ; Frog composition — SKIP при показанном dialog
                 ; ============================================================
+                LD   A, (Core.VDC_DialogState)
+                OR   A
+                JR   NZ, .skip_frog
+                if ZL_FROG_DRAW_ENABLED
                 XOR  A
                 CALL FT.Coprocessor.Cell
+                if ZL_FROG_DRAW_PLATE
                 CALL Frog_DrawPlate
+                endif
+                if ZL_FROG_DRAW_BODY
                 CALL Frog_DrawBody
+                endif
+                if ZL_FROG_DRAW_TONGUE
                 CALL Frog_DrawTongue
+                endif
+                if ZL_FROG_DRAW_BALL_NOW
                 CALL Frog_DrawBallNow                  ; в рот, на pos+ballExpand·dir
+                endif
+                if ZL_FROG_DRAW_NEXT_BALL
                 CALL Frog_DrawNextBall                 ; на спине, pos-28·dir
+                endif
+                if ZL_FROG_DRAW_OVERLAY
                 CALL Frog_DrawFaceOverlay              ; face overlay поверх всего
+                endif
+                endif
 
                 CALL Bullet_Draw                       ; flying ball, if active
+.skip_frog:
 
                 ; ============================================================
                 ; Цепь шаров — PALETTED4444 dual handle (cell<128 handle 0, ≥128 handle 9).
@@ -380,11 +443,11 @@ ZL_DrawFrame:
 .ChainDraw:     LD   A, (ZL_BallCount)
                 OR   A
                 JP   Z, .ChainEnd
-                ; Init sentinels: tangent (0x01 — never matches mod-8) и color (#FF — force first emit).
+                ; Init sentinels: tangent (0x01 — never matches mod-8) и handle (#FF — force first emit).
                 LD   A, #01
                 LD   (ZL_TmpLastTangent), A
                 LD   A, #FF
-                LD   (ZL_TmpLastColor), A
+                LD   (ZL_TmpLastHandle), A              ; lazy BITMAP_HANDLE switch
                 LD   A, (ZL_BallCount)
                 LD   B, A
                 LD   C, 0
@@ -396,24 +459,16 @@ ZL_DrawFrame:
                 JP   Z, .PBSkip                       ; (JR out of range — body grew)
                 PUSH BC
                 ; --- Skip matrix emit если quantized tangent совпал с предыдущим
-                ; emit'ом (соседи цепи часто в одном bucket'е). 8 BRAD quantization.
+                ; emit'ом (соседи цепи часто в одном bucket'е). 16 BRAD canary quantization.
                 LD   A, (IX+0)                        ; stable tangent
-                AND  #F8                              ; round to 8 BRAD (32 buckets)
+                AND  #F0                              ; round to 16 BRAD (16 buckets)
                 LD   HL, ZL_TmpLastTangent
                 CP   (HL)
                 JR   Z, .PBNoMatrix                   ; same bucket → reuse matrix
                 LD   (HL), A                          ; save new emitted tangent
-                ; emit matrix
-                CALL ZL_EmitLoadId
-                LD   HL, ZL_BALL_HALF
-                LD   DE, ZL_BALL_HALF
-                CALL ZL_EmitTranslate
+                ; --- Emit matrix via pre-baked LUT (bypass FT812 coproc) ---
                 LD   A, (ZL_TmpLastTangent)
-                CALL ZL_EmitRotate
-                LD   HL, -ZL_BALL_HALF
-                LD   DE, -ZL_BALL_HALF
-                CALL ZL_EmitTranslate
-                CALL ZL_EmitSetMatrix
+                CALL ZL_EmitBallMatrixFromBRAD
 .PBNoMatrix:
                 ; --- dual handle: cell<128 → handle 0; cell>=128 → handle 9 ---
                 LD   A, (IX+1)                        ; cell (= color*32 + spin)
@@ -421,7 +476,13 @@ ZL_DrawFrame:
                 LD   A, 0
                 JR   Z, .PBHSet
                 LD   A, 9
-.PBHSet:        CALL ZL_EmitBitmapHandle              ; clobbers BCDE
+.PBHSet:        ; lazy: skip BITMAP_HANDLE emit если same как previous ball
+                LD   HL, ZL_TmpLastHandle
+                CP   (HL)
+                JR   Z, .PBHandleSame
+                LD   (HL), A
+                CALL ZL_EmitBitmapHandle              ; clobbers BCDE
+.PBHandleSame:
                 LD   A, (IX+1)
                 AND  #7F                              ; local cell within handle
                 CALL FT.Coprocessor.Cell
@@ -485,6 +546,18 @@ ZL_DrawFrame:
                 ; --- Frame strips PALETTED4444 (рисуем ПОВЕРХ playfield, ПОД курсором) ---
                 CALL DrawFrameStrips
 
+                ; --- HUD: lives counter (N жаб-иконок в green sock'е top bar) ---
+                CALL DrawLivesCounter
+                CALL DrawHudTopText
+                CALL DrawHudProgress
+                CALL DrawHudMenu
+                if ZL_PROFILER_ENABLED
+                CALL ZL_DrawProfiler
+                endif
+
+                ; --- Retry dialog (показывается когда VDC_DialogState != 0) ---
+                CALL DrawRetryDialog
+
                 ; ============================================================
                 ; Cursor — деревянная стрелка 48×48 ARGB4 (handle 7).
                 ; Острие sprite в (CURSOR_TIP_X, CURSOR_TIP_Y) — рисуем sprite
@@ -522,9 +595,8 @@ ZL_DrawFrame:
                 EX   DE, HL
                 CALL FT.Coprocessor.Vertex2f
 
-                LD   A, (VDC_GameState)
-                CP   VDC_STATE_GAMEOVER
-                CALL Z, DrawGameOverText
+                ; GAME OVER text теперь рисуется ВНУТРИ retry-dialog (DrawRetryDialog),
+                ; старый top-center nativealien48 banner подавлен — dialog покрывает экран.
                 LD   A, (VDC_GameState)
                 CP   VDC_STATE_INTRO
                 CALL Z, DrawIntroText
@@ -912,8 +984,19 @@ ZL_CmdOverflow: DEFB 0                                ; sticky: 1 if command str
 ZL_BallCount:   DEFB 0                                ; cached VDC_SlotsLen для bucket prepass
 ZL_TmpBucket:   DEFB 0                                ; current bucket в outer loop (legacy)
 ZL_TmpLastTangent: DEFB 0                             ; per-ball loop: last emitted quantized tangent
-ZL_TmpLastColor:   DEFB 0xFF                          ; per-ball loop: last emitted COLOR_RGB color index (#FF = reset)
+ZL_TmpLastHandle:  DEFB 0xFF                          ; lazy BITMAP_HANDLE — last emitted ball handle (0/9, #FF=reset)
 ZL_CacheWPtr:   DEFW 0                                ; write ptr в prepass
+ZL_ProfileLoopStartLo: DEFW 0
+ZL_ProfileLoopStartHi: DEFW 0
+ZL_ProfilePostBuildLo: DEFW 0
+ZL_ProfilePostBuildHi: DEFW 0
+ZL_ProfilePreWriteLo:  DEFW 0
+ZL_ProfilePreWriteHi:  DEFW 0
+ZL_ProfileBuildK:      DEFW 0                         ; FT812 REG_CLOCK ticks / 1024
+ZL_ProfileIdleK:       DEFW 0
+ZL_ProfileWriteK:      DEFW 0
+ZL_ProfileDeltaEndLo:  DEFW 0
+ZL_ProfileDeltaEndHi:  DEFW 0
                 ; Per-ball cache: stable tangent, cell, Vx_lo, Vx_hi, Vy_lo, Vy_hi = 6 bytes.
                 ; bucket = #FF → skip (gap/off-track).
                 ; Размещён в свободной зоне slot 1 ниже Core (page 5 #4000-#5FFF),
@@ -921,10 +1004,143 @@ ZL_CacheWPtr:   DEFW 0                                ; write ptr в prepass
 ZL_BALL_CACHE_ADDR EQU #4200                          ; (max 240 × 6 = 1440 = #5A0; до #47A0)
 ZL_BALL_BUCKET_STATE_ADDR EQU #4100                   ; 240 bytes: stable tangent bucket per slot (dead-code legacy)
 ZL_BALL_TANGENT_STATE_ADDR EQU #4100                  ; 240 bytes: stable raw tangent (BRAD) per slot для per-ball hysteresis
-ZL_BALL_TANGENT_HYSTERESIS_THR EQU 8                  ; 8 BRAD ≈ 11.25° — bucket size, prevent in-bucket oscillation
+ZL_BALL_TANGENT_HYSTERESIS_THR EQU 16                 ; 16 BRAD ≈ 22.5° — reduce matrix churn for 74 Hz
 
 ; Circular RAM log EQU (GAMELOG_ADDR, EVT_*) определены в main.asm перед
 ; TSLib block — чтобы быть видимыми и из slot 0 (Log routines) и из slot 1
 ; (Core hooks). См. main.asm. RAM zone #4800..#5007 в slot 1 page 5.
+
+; ----------------------------------------------------------------------------
+; ZL_ChainMatrixLUT — pre-baked rotation matrices для 32 buckets (8 BRAD step).
+; Каждый bucket = 24 байта = 6 BITMAP_TRANSFORM_A..F opcodes. Sgnerированы
+; make_chain_matrix_lut.py (Q8.8 cos/sin, Q23.8 translation centered at +16/-16).
+; Bypass FT812 coprocessor — LDIR прямо в CMD буфер.
+; ----------------------------------------------------------------------------
+ZL_ChainMatrixLUT:
+                INCBIN "Graphics/Converted/chain_matrix_lut.bin"
+ZL_ChainMatrixLUT_END:
+ZL_CHAIN_MATRIX_LUT_STRIDE EQU 24
+
+; ----------------------------------------------------------------------------
+; ZL_EmitBallMatrixFromBRAD — LDIR matrix block в CMD буфер.
+;   In: A = BRAD (0..255), любые битья. Внутри квантуется к 8 BRAD (32 buckets).
+;   Out: matrix эмитнут в FT BufferPtr.
+;   Clobbers: AF, BC, DE, HL.
+; Reusable между chain rendering и FrogBallNow / прочими 32×32 sprites.
+; ----------------------------------------------------------------------------
+ZL_EmitBallMatrixFromBRAD:
+                AND  #F0                                ; quantize to 16 BRAD (uses even entries in 8-BRAD LUT)
+                SRL  A : SRL A : SRL A                  ; A = bucket (0..31)
+                LD   E, A : LD D, 0
+                LD   HL, 0
+                ADD  HL, DE
+                ADD  HL, HL : ADD HL, HL : ADD HL, HL   ; ×8
+                LD   B, H : LD C, L
+                ADD  HL, HL                             ; ×16
+                ADD  HL, BC                             ; ×24
+                LD   DE, ZL_ChainMatrixLUT
+                ADD  HL, DE
+                LD   DE, (FT.Coprocessor.BufferPtr)
+                LD   BC, ZL_CHAIN_MATRIX_LUT_STRIDE
+                LDIR
+                LD   (FT.Coprocessor.BufferPtr), DE
+                RET
+
+; ----------------------------------------------------------------------------
+; FT812 frame profiler (diagnostic overlay).
+; B/W/I are REG_CLOCK delta / 1024. At 60 MHz FT812 clock:
+;   74 Hz frame ~= 792, 57 Hz frame ~= 1028.
+; If B+W approaches frame budget and I is near zero, Z80/SPI path misses vblank.
+; ----------------------------------------------------------------------------
+ZL_ProfileReadClock:
+                FT_RD_REG32 FT_REG_CLOCK                ; BCDE = 32-bit little-endian value
+                LD   H, B
+                LD   L, C
+                RET                                     ; HLDE = clock
+
+; In: HLDE=end clock, IXBC=start clock. Out: HL=(delta >> 10), DE=end lo, IX=end hi.
+ZL_ProfileDeltaK:
+                LD   (ZL_ProfileDeltaEndLo), DE
+                LD   (ZL_ProfileDeltaEndHi), HL
+                EX   DE, HL                             ; HL=end low, DE=end high
+                AND  A
+                SBC  HL, BC                             ; HL=delta low
+                EX   DE, HL                             ; DE=delta low, HL=end high
+                PUSH IX
+                POP  BC                                 ; BC=start high
+                SBC  HL, BC                             ; HL=delta high
+                ; Convert 32-bit delta HL:DE to 16-bit delta/1024.
+                ; result bits: low=(D>>2)|(L<<6), high=(L>>2)|((H&3)<<6)
+                LD   A, D
+                SRL  A
+                SRL  A
+                LD   C, A
+                LD   A, L
+                ADD  A, A
+                ADD  A, A
+                ADD  A, A
+                ADD  A, A
+                ADD  A, A
+                ADD  A, A
+                OR   C
+                LD   E, A                               ; result low byte temp
+                LD   A, L
+                SRL  A
+                SRL  A
+                LD   B, A
+                LD   A, H
+                AND  3
+                RRCA
+                RRCA
+                OR   B
+                LD   D, A                               ; result high byte temp
+                EX   DE, HL                             ; HL=result
+                LD   DE, (ZL_ProfileDeltaEndLo)
+                LD   IX, (ZL_ProfileDeltaEndHi)
+                RET
+
+ZL_DrawProfiler:
+                CALL SetFontCancun8
+                LD   C, 255 : LD D, 242 : LD E, 168
+                CALL FT.Coprocessor.ColorRGB
+                LD   E, 255
+                CALL FT.Coprocessor.ColorA
+                FT_Begin FT_BITMAPS
+
+                LD   HL, str_prof_b
+                LD   BC, 26 * 16
+                LD   DE, 454 * 16
+                CALL DrawString
+                LD   HL, (ZL_ProfileBuildK)
+                CALL DrawWordValue
+
+                LD   HL, str_prof_w
+                LD   BC, 126 * 16
+                LD   DE, 454 * 16
+                CALL DrawString
+                LD   HL, (ZL_ProfileWriteK)
+                CALL DrawWordValue
+
+                LD   HL, str_prof_i
+                LD   BC, 226 * 16
+                LD   DE, 454 * 16
+                CALL DrawString
+                LD   HL, (ZL_ProfileIdleK)
+                CALL DrawWordValue
+
+                LD   HL, str_prof_c
+                LD   BC, 326 * 16
+                LD   DE, 454 * 16
+                CALL DrawString
+                LD   HL, (ZL_CmdBytes)
+                CALL DrawWordValue
+
+                LD   C, 255 : LD D, 255 : LD E, 255
+                JP   FT.Coprocessor.ColorRGB
+
+str_prof_b:    DEFB "B", 0
+str_prof_w:    DEFB "W", 0
+str_prof_i:    DEFB "I", 0
+str_prof_c:    DEFB "C", 0
 
                 endif ; ~_ZUMA_MAIN_LOOP_
