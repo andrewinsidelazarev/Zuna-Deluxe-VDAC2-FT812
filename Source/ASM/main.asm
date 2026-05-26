@@ -15,9 +15,9 @@
 ; ----------------------------------------------------------------------------
 ; FT command buffer: TSLib дефолтит на #C000 (slot 3). После main0/main1 split
 ; main1_play код живёт в slot 3 → буфер перекрывает код → corruption за кадр.
-; Перенесён в slot 1 free area после main0 (#5DA0..#7FFF = 8.5KB).
+; Keep it in slot 1 RAM before EntryPoint; #6000 is code now.
 ; ----------------------------------------------------------------------------
-                define CMD_ADDRESS_PTR #5E00
+                define CMD_ADDRESS_PTR #5010
 
 ; --- Адреса/EQU ----------------------------------------------------------
 EntryPoint           EQU #5C00                        ; slot 1 (page 5), keep Core below #8000
@@ -38,6 +38,12 @@ LOG_TMP_TYPE_ADDR   EQU #5002
 LOG_TMP_CTX_ADDR    EQU #5003
 LOG_TMP_DATA_ADDR   EQU #5004
 LOG_END_ADDR        EQU #5008
+BUILD_CANARY_ADDR   EQU #5020
+BUILD_CANARY_LEN    EQU 33
+; Boot canary: написан ПЕРВОЙ инструкцией Start (#5C00), ДО любого Init.
+; Дамп различает: канарейка ОТСУТСТВУЕТ → WC ещё грузит SPG / не дошёл до Core;
+; "BOOT" есть, но BUILD_CANARY (#5020) пуст → Core стартовал, но Init_Core завис.
+BOOT_CANARY_ADDR    EQU #5044
 EVT_SHOT_FIRED      EQU 1
 EVT_BBOX_HIT        EQU 2
 EVT_HEMI            EQU 3
@@ -50,6 +56,7 @@ EVT_MATCH3          EQU 6
 ; sjasmplus forward-resolve. FT_RAM_G #0000..#10000 = 64K free area (раньше
 ; не использовалась, bg начинается с #010000). Размеры см. text_*.info.
 FROG_ARGB4_ENABLED    EQU 1
+BALLS_ARGB4_ENABLED   EQU 1                         ; canary: native ARGB4 balls, 16 spin phases, no palette indirection
 TEXT_GAMEOVER_PAGE     EQU #20
 TEXT_GAMEOVER_RAMG     EQU #000000
 TEXT_GAMEOVER_W        EQU 169
@@ -65,6 +72,7 @@ TEXT_LEVEL11_DRAW_H    EQU 64                           ; 36 * 16/9 = 64
 
 ; SPIRAL OF DOOM — native 36 px, без scaling
 TEXT_SPIRALDOOM_PAGE   EQU #22
+TEXT_OSPREYTALON_PAGE  EQU #23
 TEXT_SPIRALDOOM_RAMG   EQU #008000
 TEXT_SPIRALDOOM_W      EQU 192
 TEXT_SPIRALDOOM_H      EQU 36
@@ -177,6 +185,10 @@ LIFE_STEP            EQU 20                            ; step между жаб�
 LIFE_MAX_DRAW        EQU 3                             ; clamp displayed count (sock 78px fits 3×20)
 HUD_MENU_X           EQU 539                           ; measured on frame_top.png MENU socket
 HUD_MENU_Y           EQU 3                             ; -1px to align with baked socket
+HUD_MENU_HIT_X       EQU 532
+HUD_MENU_HIT_Y       EQU 0
+HUD_MENU_HIT_W       EQU 96
+HUD_MENU_HIT_H       EQU 34
 HUD_PROGRESS_X       EQU 407                           ; measured on frame_top.png right red gauge socket
 HUD_PROGRESS_Y       EQU 1
 ; HUD_GAUGE_TARGET: оригинальный lvl1 = 3000 (юзер 2026-05-20 проверил в оригинале:
@@ -433,11 +445,194 @@ KZ_DEFAULT_Y       EQU 217
 KZ_SPR_W           EQU 88
 KZ_SPR_H           EQU 88
 KZ_SPR_HALF        EQU 44
+FROG_DEFAULT_X     EQU 327
+FROG_DEFAULT_Y     EQU 231
+
+; Room transitions keep the old DL visible until it is fully covered by a
+; black overlay. RAM_G can then be reloaded without exposing half-written art.
+FadeMenuToLevelSelect:
+                LD   HL, Core.MenuBuildFrame
+                CALL FadeOutRoom
+                JP   Core.LevelSelect
+
+FadeMenuToMoreGames:
+                LD   HL, Core.MenuBuildFrame
+                CALL FadeOutRoom
+                JP   MoreGames
+
+FadeLevelSelectToMenu:
+                LD   HL, Core.LevelSelectBuildFrame
+                CALL FadeOutRoom
+                JP   Core.MenuMain
+
+FadeLevelSelectToGameplay:
+                LD   HL, Core.LevelSelectBuildFrame
+                CALL FadeOutRoom                        ; ВНИМАНИЕ: оставляет FadeAlpha=255
+                XOR  A
+                LD   (FadeAlpha), A                     ; сброс! иначе DrawFadeOverlay зальёт геймплей чёрным
+                LD   HL, 0
+                LD   (Core.VDC_PlayerScore), HL         ; новый прогон adventure → счёт с нуля
+                CALL Core.LoadGameplayAssets
+                JP   Core.MainLoop
+
+FadeGameplayToMenu:
+                CALL DrawBlackTransitionFrame
+                JP   Core.MenuMain
+
+FadeInMenu:
+                LD   HL, Core.MenuBuildFrame
+                JP   FadeInRoom
+
+FadeInLevelSelect:
+                LD   HL, Core.LevelSelectBuildFrame
+                JP   FadeInRoom
+
+FadeInMoreGames:
+                LD   HL, MoreGamesBuildFrame
+                JP   FadeInRoom
+
+FadeMoreGamesToMenu:
+                LD   HL, MoreGamesBuildFrame
+                CALL FadeOutRoom
+                JP   Core.MenuMain
+
+FadeOutRoom:
+                LD   (FadeRoomBuilder + 1), HL
+                XOR  A
+.fade_out:      ADD  A, 32
+                JR   NC, .fade_out_store
+                LD   A, 255
+.fade_out_store:
+                LD   (FadeAlpha), A
+                PUSH AF
+                CALL FadeRoomFrame
+                POP  AF
+                CP   255
+                JR   NZ, .fade_out
+                RET
+
+FadeInRoom:
+                LD   (FadeRoomBuilder + 1), HL
+                LD   A, 255
+.fade_in:       LD   (FadeAlpha), A
+                PUSH AF
+                CALL FadeRoomFrame
+                POP  AF
+                OR   A
+                RET  Z
+                SUB  32
+                JR   NC, .fade_in
+                XOR  A
+                JR   .fade_in
+
+FadeRoomFrame:
+FadeRoomBuilder:
+                CALL #0000
+                JP   Core.MenuSwapFrame
+
+DrawBlackTransitionFrame:
+                FT_CMD_Start
+                FT_DL_Start
+                FT_VertexFormat 4
+                FT_ClearColorRGB32 0x000000
+                FT_ClearAll
+                FT_Display
+                FT_CMD_Count
+                JP   Core.MenuSwapFrame
+
+DrawFadeOverlay:
+                LD   A, (FadeAlpha)
+                OR   A
+                RET  Z
+                PUSH AF
+                FT_End
+                FT_SaveContext
+                FT_BlendFunc FT_SRC_ALPHA, FT_ONE_MINUS_SRC_ALPHA
+                FT_ColorRGB 0, 0, 0
+                POP  AF
+                LD   E, A
+                CALL FT.Coprocessor.ColorA
+                FT_Begin FT_RECTS
+                LD   BC, 0
+                LD   DE, 0
+                CALL FT.Coprocessor.Vertex2f
+                LD   BC, 640 * 16
+                LD   DE, 480 * 16
+                CALL FT.Coprocessor.Vertex2f
+                FT_End
+                FT_RestoreContext
+                RET
+
+; Adventure state vars are allocated inside ZiFi.asm (Core module); aliases
+; here so bare references in TSLib-region code (FadeIn/Out etc) still resolve.
+ADVENTURE_LEVEL_COUNT EQU 22
+FadeAlpha          EQU Core.FadeAlpha
+CurrentDifficulty  EQU Core.CurrentDifficulty
+CurrentLevel       EQU Core.CurrentLevel
+
+                include "level_runtime_table.inc"
+
+; Level-select thumbnails are SPG-resident zlib ARGB4 streams. Keep the
+; destination away from FONT_NATIVE_RAMG because titles are drawn as live text.
+LS_PREVIEW_BG_RAMG       EQU #0D4000
+LS_PREVIEW_BG_X          EQU 190
+LS_PREVIEW_BG_Y          EQU 253
+LS_PREVIEW_BG_DRAW_W     EQU 280
+LS_PREVIEW_BG_DRAW_H     EQU 170
+LS_PREVIEW_BG_W          EQU 280
+LS_PREVIEW_BG_H          EQU 170
+LS_PREVIEW_BG_HANDLE     EQU 6
+
+                include "level_select_preview_markers.inc"
+                include "level_select_preview_spg.inc"
+                include "MoreGamesSlot0.asm"
+
+DrawLevelSelectPreview:
+                FT_End
+                CALL Core.ZL_EmitLoadId
+                CALL Core.ZL_EmitSetMatrix
+                FT_BitmapHandle LS_PREVIEW_BG_HANDLE
+                FT_BitmapSource LS_PREVIEW_BG_RAMG
+                FT_BitmapLayout FT_ARGB4, LS_PREVIEW_BG_W * 2, LS_PREVIEW_BG_H
+                FT_BitmapSize FT_NEAREST, FT_BORDER, FT_BORDER, LS_PREVIEW_BG_DRAW_W, LS_PREVIEW_BG_DRAW_H
+                FT_Begin FT_BITMAPS
+                FT_Vertex2ii LS_PREVIEW_BG_X, LS_PREVIEW_BG_Y, LS_PREVIEW_BG_HANDLE, 0
+                FT_End
+                CALL LevelSelectDrawPreviewMarkers
+                JP   DrawLevelSelectTitle
+
+DrawLevelSelectTitle:
+                CALL Core.ZL_EmitLoadId
+                CALL Core.ZL_EmitSetMatrix
+                LD   C, 255 : LD D, 255 : LD E, 255
+                CALL FT.Coprocessor.ColorRGB
+                LD   E, 255
+                CALL FT.Coprocessor.ColorA
+                CALL SetFontNative
+                FT_Begin FT_BITMAPS
+                CALL Core.GetCurrentLevelTitlePtr
+                LD   (LevelTitlePtrTmp), HL
+                CALL StrWidth
+                LD   HL, 640
+                AND  A
+                SBC  HL, DE
+                SRL  H
+                RR   L
+                ADD  HL, HL
+                ADD  HL, HL
+                ADD  HL, HL
+                ADD  HL, HL
+                LD   B, H
+                LD   C, L
+                LD   DE, 382 * 16
+                LD   HL, (LevelTitlePtrTmp)
+                JP   DrawString
 
 DrawKillzoneDual:
                 ; Draw every frame. With 400x300 PALETTED4444 bg the baked
                 ; kill-zone area is visibly degraded, so the overlay must also
                 ; cover idle KzFrame=1.
+                CALL UpdateKillzoneDrawXY
                 CALL Core.ZL_EmitLoadId
                 CALL Core.ZL_EmitSetMatrix
                 FT_BitmapHandle 3
@@ -450,15 +645,39 @@ DrawKillzoneDual:
                 ; --- pass 1: hole (Cell 0) ---
                 XOR  A
                 CALL FT.Coprocessor.Cell
-                LD   BC, (KZ_DEFAULT_X - KZ_SPR_HALF) * 16
-                LD   DE, (KZ_DEFAULT_Y - KZ_SPR_HALF) * 16
+                LD   BC, (KzDrawX16)
+                LD   DE, (KzDrawY16)
                 CALL FT.Coprocessor.Vertex2f
                 ; --- pass 2: skull frame (Cell = VDC_KzFrame) ---
                 LD   A, (Core.VDC_KzFrame)
                 CALL FT.Coprocessor.Cell
-                LD   BC, (KZ_DEFAULT_X - KZ_SPR_HALF) * 16
-                LD   DE, (KZ_DEFAULT_Y - KZ_SPR_HALF) * 16
+                LD   BC, (KzDrawX16)
+                LD   DE, (KzDrawY16)
                 JP   FT.Coprocessor.Vertex2f
+
+UpdateKillzoneDrawXY:
+                CALL Core.GetCurrentKzX
+                LD   DE, KZ_SPR_HALF
+                AND  A
+                SBC  HL, DE
+                ADD  HL, HL
+                ADD  HL, HL
+                ADD  HL, HL
+                ADD  HL, HL
+                LD   (KzDrawX16), HL
+                CALL Core.GetCurrentKzY
+                LD   DE, KZ_SPR_HALF
+                AND  A
+                SBC  HL, DE
+                ADD  HL, HL
+                ADD  HL, HL
+                ADD  HL, HL
+                ADD  HL, HL
+                LD   (KzDrawY16), HL
+                RET
+
+KzDrawX16:      DEFW 0
+KzDrawY16:      DEFW 0
 
 ; ----------------------------------------------------------------------------
 ; DrawGameOverText — рисует "GAME OVER" в nativealien48 шрифте, центр X
@@ -486,6 +705,13 @@ UpdateDialog:
                 RET  Z                                  ; диалог не показан
                 LD   A, 1
                 LD   (Core.VDC_HudPointerBlock), A      ; dialog consumes LMB for this frame
+                LD   A, (Core.VDC_DialogState)
+                CP   3
+                JP   Z, Core.UpdatePauseDialog
+                CP   4
+                JP   Z, Core.UpdatePauseFade            ; pause window fade-out -> PLAY
+                CP   Core.DLG_WIN_FADE
+                JP   Z, .udlg_win_fade                  ; LEVEL DONE → OK нажат → fade-out
 
                 ; --- Fire key (SPACE port #7FFE bit 0 OR Kempston FIRE) — bypasses hit-test ---
                 LD   BC, #7FFE
@@ -550,13 +776,33 @@ UpdateDialog:
 
 .udlg_action:   ; Mouse click in OK bounds OR Fire key pressed
                 LD   A, (Core.VDC_DialogState)
+                CP   Core.DLG_WIN_DONE
+                JR   Z, .udlg_winnext                   ; LEVEL DONE → OK → начать fade
                 CP   3
                 JR   NZ, .udlg_restart
                 XOR  A
                 LD   (Core.VDC_DialogState), A          ; PAUSE → resume
                 RET
+.udlg_winnext:  LD   A, Core.DLG_WIN_FADE               ; OK на LEVEL DONE → fade-out фаза
+                LD   (Core.VDC_DialogState), A
+                RET
 .udlg_restart:
                 JP   RestartLevel
+
+; --- LEVEL DONE fade-out: рампим FadeAlpha до чёрного, потом грузим след. уровень.
+; Сцена (поле + диалог) + DrawFadeOverlay рисуются в ZL_DrawFrame каждый кадр.
+.udlg_win_fade: LD   A, (FadeAlpha)
+                CP   255
+                JR   Z, .uwf_done                       ; полностью чёрный → advance
+                ADD  A, Core.VDC_WIN_FADE_STEP
+                JR   NC, .uwf_store
+                LD   A, 255                             ; clamp до full black
+.uwf_store:     LD   (FadeAlpha), A
+                RET
+.uwf_done:      XOR  A
+                LD   (Core.VDC_DialogState), A
+                LD   (FadeAlpha), A
+                JP   Core.AdvanceToNextLevel            ; CurrentLevel++ → LoadGameplayAssets → VDC_Init (state=INTRO)
 
 DialogFirePrev: DEFB 0                                  ; SPACE/Fire debounce для dialog OK
 
@@ -569,6 +815,8 @@ RestartLevel:
                 JR   NZ, .rl_keep_lives
                 LD   A, 3
                 LD   (Core.VDC_Lives), A
+                LD   HL, 0
+                LD   (Core.VDC_PlayerScore), HL         ; full restart (жизни кончились) → счёт с нуля
 .rl_keep_lives:
                 CALL Core.VDC_Init                      ; chain reset, state=INTRO
                 CALL Core.Frog_Init
@@ -586,8 +834,8 @@ DrawRetryDialog:
                 ; --- Dialog frame (400×327 PALETTED4444) ---
                 LD   C, 255 : LD D, 255 : LD E, 255
                 CALL FT.Coprocessor.ColorRGB
-                LD   E, 255
-                CALL FT.Coprocessor.ColorA
+                LD   A, 255
+                CALL Core.PauseColorA
                 FT_PaletteSource DIALOG_PALETTE_RAMG
                 FT_BitmapHandle DIALOG_FRAME_HANDLE
                 FT_BitmapSource DIALOG_FRAME_RAMG
@@ -797,61 +1045,7 @@ LifeDrawCnt:    DEFB 0                                  ; temp clamped lives cou
 ; does not fire when the player clicks the HUD.
 ; ----------------------------------------------------------------------------
 UpdateHudMenu:
-                LD   A, (Core.VDC_DialogState)
-                OR   A
-                JR   Z, .uhm_check
-                XOR  A
-                LD   (Core.VDC_HudMenuState), A
-                INC  A
-                LD   (Core.VDC_HudPointerBlock), A
-                RET
-.uhm_check:
-                ; X in [HUD_MENU_X, HUD_MENU_X + HUD_MENU_W)
-                LD   HL, (Input.Mouse.PositionX)
-                LD   DE, HUD_MENU_X
-                AND  A
-                SBC  HL, DE
-                JR   C, .uhm_out
-                LD   HL, (Input.Mouse.PositionX)
-                LD   DE, HUD_MENU_X + HUD_MENU_W
-                AND  A
-                SBC  HL, DE
-                JR   NC, .uhm_out
-                ; Y in [HUD_MENU_Y, HUD_MENU_Y + HUD_MENU_H)
-                LD   HL, (Input.Mouse.PositionY)
-                LD   DE, HUD_MENU_Y
-                AND  A
-                SBC  HL, DE
-                JR   C, .uhm_out
-                LD   HL, (Input.Mouse.PositionY)
-                LD   DE, HUD_MENU_Y + HUD_MENU_H
-                AND  A
-                SBC  HL, DE
-                JR   NC, .uhm_out
-                LD   A, 1
-                LD   (Core.VDC_HudPointerBlock), A
-                LD   A, (Core.VDC_HudMenuState)
-                LD   B, A                              ; previous state
-                LD   A, Input.Mouse.SVK_LBUTTON
-                CALL Input.Mouse.KeyState
-                LD   A, 1                              ; hover
-                JR   Z, .uhm_store
-                INC  A                                 ; pressed
-.uhm_store:     LD   (Core.VDC_HudMenuState), A
-                LD   C, A                              ; current state
-                LD   A, B
-                CP   2
-                RET  NZ                                ; was not pressed
-                LD   A, C
-                CP   1
-                RET  NZ                                ; release must happen over button
-                LD   A, 3                              ; PAUSE dialog
-                LD   (Core.VDC_DialogState), A
-                RET
-.uhm_out:       XOR  A
-                LD   (Core.VDC_HudMenuState), A
-                LD   (Core.VDC_HudPointerBlock), A
-                RET
+                JP   Core.UpdateHudMenuCore
 
 ; ----------------------------------------------------------------------------
 ; DrawHudProgress — original Zuma bar sprites in top HUD.
@@ -880,18 +1074,25 @@ DrawHudProgress:
                 LD   A, H
                 OR   L
                 RET  Z                                  ; empty: baked red socket remains
-                ; Exact formula: fill_px = (GaugeScore * HUD_PROGRESS_W) / HUD_GAUGE_TARGET
-                ; HUD_GAUGE_TARGET = 1000 = 8 × 125 → делим в два прохода
-                ; (нет Div16x16, но есть VDC_DivHLbyA для /125 и shift для /8).
-                ; GaugeScore < HUD_GAUGE_TARGET (GaugeFull=0 на этой ветке), max
-                ; multiplication 999 × 63 = 62937 — влезает в 16-bit без overflow.
+                ; fill_px = GaugeShown * HUD_PROGRESS_W / target (РЕАЛЬНЫЙ per-level
+                ; target, не фикс. 1000). Чтобы не делить на переменную (overflow +
+                ; нет Div16x16): d = target/63, затем fill = GaugeShown/d — два 16/8.
+                PUSH HL                                 ; save GaugeShown
+                CALL Core.GetCurrentTargetScore         ; DE = per-level target
+                EX   DE, HL                             ; HL = target
                 LD   A, HUD_PROGRESS_W                  ; 63
-                CALL Core.ZL_Mul16x8                    ; HL = score × 63
-                SRL  H : RR  L
-                SRL  H : RR  L
-                SRL  H : RR  L                          ; HL /= 8
-                LD   A, 125
-                CALL Core.VDC_DivHLbyA                  ; HL = HL / 125 = score × 63 / 1000
+                CALL Core.VDC_DivHLbyA                  ; HL = target / 63 = d
+                LD   A, L
+                OR   A
+                JR   NZ, .dhp_dok
+                INC  A                                  ; target < 63 → d = 1
+.dhp_dok:       LD   C, A                               ; C = divisor d (≤63)
+                POP  HL                                 ; HL = GaugeShown
+                LD   A, C
+                CALL Core.VDC_DivHLbyA                  ; HL = GaugeShown / d = fill_px
+                LD   A, H
+                OR   A
+                JR   NZ, .dhp_clampmax                  ; quotient > 255 → clamp
                 LD   A, L
                 OR   A
                 JR   NZ, .dhp_clamp_check
@@ -899,7 +1100,7 @@ DrawHudProgress:
 .dhp_clamp_check:
                 CP   HUD_PROGRESS_W
                 JR   C, .dhp_have_width_a
-                LD   A, HUD_PROGRESS_W
+.dhp_clampmax:  LD   A, HUD_PROGRESS_W
 .dhp_have_width_a:
                 LD   (DhpFillPx), A                     ; B/BC клобается FT_ScissorXY ниже,
                                                         ; поэтому fill_px храним в памяти
@@ -981,32 +1182,78 @@ DrawIntroText:
                 LD   C, 255 : LD D, 255 : LD E, 255
                 CALL FT.Coprocessor.ColorRGB
 
-                ; --- LEVEL 1-1 — apply hardware scale ×16/9 (1.7778) ---
+                ; --- Build "LEVEL N-M" dynamically (N=CurrentLevel+1, M=CurrentDifficulty+1).
+                ; Заменяет запечённую "LEVEL 1-1": теперь реальный номер уровня/сложности. ---
+                LD   HL, .dit_level_prefix             ; "LEVEL "
+                LD   DE, IntroLevelBuf
+                LD   BC, 6
+                LDIR                                    ; copy "LEVEL " → DE past it
+                LD   A, (CurrentLevel)
+                INC  A                                  ; N = 1..22
+                LD   B, '0'
+.dit_n_tens:    CP   10
+                JR   C, .dit_n_units
+                SUB  10
+                INC  B
+                JR   .dit_n_tens
+.dit_n_units:   LD   C, A                               ; C = units (0..9)
+                LD   A, B
+                CP   '0'
+                JR   Z, .dit_n_skip
+                LD   (DE), A : INC DE                   ; tens (no leading zero)
+.dit_n_skip:    LD   A, C : ADD A, '0'
+                LD   (DE), A : INC DE                   ; units
+                LD   A, '-'
+                LD   (DE), A : INC DE
+                LD   A, (CurrentDifficulty)
+                INC  A                                  ; M = 1..4
+                ADD  A, '0'
+                LD   (DE), A : INC DE
+                XOR  A
+                LD   (DE), A                            ; null term
+
+                CALL SetFontNative
+                ; --- LEVEL N-M: 2× scale (вдвое крупнее названия), right-align к x=610 ---
                 CALL Core.ZL_EmitLoadId
                 FT_CMD_BUF FT_CMD_SCALE
-                FT_CMD_BUF #0001C71C                   ; sx = 16/9 ≈ 1.7778 (16.16)
-                FT_CMD_BUF #0001C71C                   ; sy = same
+                FT_CMD_BUF #00020000                     ; sx = 2.0 (16.16)
+                FT_CMD_BUF #00020000                     ; sy = 2.0
                 CALL Core.ZL_EmitSetMatrix
-                FT_BitmapHandle TEXT_LEVEL11_HANDLE
-                FT_BitmapSource TEXT_LEVEL11_RAMG
-                FT_BitmapLayout FT_ARGB4, TEXT_LEVEL11_W * 2, TEXT_LEVEL11_H
-                FT_BitmapSize   FT_BILINEAR, FT_BORDER, FT_BORDER, TEXT_LEVEL11_DRAW_W, TEXT_LEVEL11_DRAW_H
-                XOR  A : CALL FT.Coprocessor.Cell
-                LD   BC, (640 - TEXT_LEVEL11_DRAW_W - 30) * 16
-                LD   DE, (480 - TEXT_LEVEL11_DRAW_H - 90) * 16
-                CALL FT.Coprocessor.Vertex2f
-
-                ; --- Reset matrix to identity для SPIRAL (no scale) ---
+                LD   A, 2
+                LD   (DrawStr_Scale), A                  ; DrawString: ×2 glyph + advance
+                FT_Begin FT_BITMAPS
+                LD   HL, IntroLevelBuf
+                CALL StrWidth                            ; DE = native width
+                EX   DE, HL
+                ADD  HL, HL                              ; HL = 2*width (scaled)
+                EX   DE, HL                              ; DE = 2*width
+                LD   HL, 610
+                AND  A
+                SBC  HL, DE                              ; x = 610 - 2*width
+                ADD  HL, HL : ADD HL, HL : ADD HL, HL : ADD HL, HL
+                LD   B, H : LD C, L
+                LD   DE, (480 - TEXT_SPIRALDOOM_H - 96) * 16   ; выше названия (2× строка высокая)
+                LD   HL, IntroLevelBuf
+                CALL DrawString
+                ; reset scale + matrix → название рисуем native-размером
+                LD   A, 1
+                LD   (DrawStr_Scale), A
                 CALL Core.ZL_EmitLoadId
                 CALL Core.ZL_EmitSetMatrix
-                FT_BitmapHandle TEXT_SPIRALDOOM_HANDLE
-                FT_BitmapSource TEXT_SPIRALDOOM_RAMG
-                FT_BitmapLayout FT_ARGB4, TEXT_SPIRALDOOM_W * 2, TEXT_SPIRALDOOM_H
-                FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, TEXT_SPIRALDOOM_W, TEXT_SPIRALDOOM_H
-                XOR  A : CALL FT.Coprocessor.Cell
-                LD   BC, (640 - TEXT_SPIRALDOOM_W - 30) * 16
+
+                ; --- Selected level title (same font/BITMAPS, line below) ---
+                CALL Core.GetCurrentLevelTitlePtr
+                LD   (LevelTitlePtrTmp), HL
+                CALL StrWidth
+                LD   HL, 610
+                AND  A
+                SBC  HL, DE
+                ADD  HL, HL : ADD HL, HL : ADD HL, HL : ADD HL, HL
+                LD   B, H : LD C, L
                 LD   DE, (480 - TEXT_SPIRALDOOM_H - 30) * 16
-                JP   FT.Coprocessor.Vertex2f
+                LD   HL, (LevelTitlePtrTmp)
+                JP   DrawString
+.dit_level_prefix: DB "LEVEL "
 
 ; ============================================================================
 ; DrawDialogContent — title + 5 stat lines, glyph blit using nativealien font.
@@ -1020,6 +1267,16 @@ DLG_OK_X       EQU 170
 DLG_OK_Y       EQU 315                                  ; moved up 20px — felt area кончается ~Y=360, OK теперь 315..349
 DLG_OK_W       EQU DIALOG_OK_W
 DLG_OK_H       EQU DIALOG_OK_H
+PAUSE_TITLE_CENTER_X EQU 320
+PAUSE_TITLE_Y   EQU 154
+PAUSE_YES_X    EQU 220
+PAUSE_NO_X     EQU 336
+PAUSE_BTN_Y    EQU 302
+PAUSE_BTN_W    EQU 84
+PAUSE_BTN_H    EQU 38
+PAUSE_YES_TEXT_X EQU 246
+PAUSE_NO_TEXT_X  EQU 364
+PAUSE_BTN_TEXT_Y EQU 306
 
 DrawDialogContent:
                 ; --- Tint white ONCE ---
@@ -1031,18 +1288,11 @@ DrawDialogContent:
                 ; --- Setup native font (title) ---
                 CALL SetFontNative
                 LD   A, (Core.VDC_DialogState)
+                CP   Core.DLG_WIN_DONE
+                JP   NC, .dc_win_done                    ; 5/6 = LEVEL DONE
                 CP   3
-                JR   NZ, .dc_not_pause
-                LD   HL, str_paused
-                LD   BC, 260 * 16
-                LD   DE, DLG_TITLE_Y * 16
-                CALL DrawString
-                CALL SetFontCancun8
-                LD   HL, str_click_resume
-                LD   BC, 235 * 16
-                LD   DE, (DLG_STATS_Y + DLG_LINE_H) * 16
-                CALL DrawString
-                RET
+                JR   C, .dc_not_pause                    ; 1/2 = game-over content
+                JP   Core.DrawPauseDialogContent         ; 3 = pause, 4 = pause fade-out
 .dc_not_pause:
 
                 ; --- Title по VDC_Lives ---
@@ -1085,8 +1335,9 @@ DrawDialogContent:
 .dc_title_draw2:
                 CALL DrawString
 
-                ; --- Stats use a separate cancun10 atlas. Do not touch the
-                ; pixel-tuned cancun8 menu/HUD font.
+.dc_stats:      ; --- Stats use a separate cancun10 atlas. Do not touch the
+                ; pixel-tuned cancun8 menu/HUD font. (Win-диалог прыгает сюда после
+                ; своего заголовка — те же статы, что в Game Over.)
                 CALL SetFontCancun10Stats
 
                 ; --- Stats line 1: TIME M:SS ---
@@ -1135,12 +1386,29 @@ DrawDialogContent:
                 CALL DrawString
                 LD   A, (Core.VDC_StatMaxCombo)
                 CALL DrawByteValue
-                ; OK button рисуем для state=1 (SHOW_RETRY, lives>0) и state=2
-                ; (GAME_OVER_FINAL, lives=0). НЕ рисуем для state=3 (PAUSE).
+                ; OK button: state 1/2 (game over) И 5/6 (LEVEL DONE). НЕ для 3/4 (pause).
                 LD   A, (Core.VDC_DialogState)
                 CP   3
-                CALL C, DrawDialogOkButton              ; state < 3 → draw OK
+                CALL C, DrawDialogOkButton              ; 1/2 → OK
+                LD   A, (Core.VDC_DialogState)          ; reload (CALL клобал A)
+                CP   Core.DLG_WIN_DONE
+                CALL NC, DrawDialogOkButton             ; 5/6 → OK
                 RET
+
+.dc_win_done:   ; LEVEL DONE — centered title + OK (та же кнопка/позиция, что Game Over)
+                LD   HL, str_level_done
+                CALL StrWidth                            ; DE = width
+                LD   A, D : SRL A : LD D, A
+                LD   A, E : RRA : LD E, A                ; DE = W/2
+                LD   HL, 320
+                AND  A
+                SBC  HL, DE                              ; x = 320 - W/2
+                ADD  HL, HL : ADD HL, HL : ADD HL, HL : ADD HL, HL
+                LD   B, H : LD C, L
+                LD   DE, DLG_TITLE_Y * 16
+                LD   HL, str_level_done
+                CALL DrawString
+                JP   .dc_stats                           ; статы (TIME/SCORE/...) + OK, как Game Over
 
 DrawDialogOkButton:
                 LD   C, 255 : LD D, 255 : LD E, 255
@@ -1160,10 +1428,10 @@ DrawDialogOkButton:
                 JP   FT.Coprocessor.Vertex2f
 
 ; --- Title strings: lowercase т.к. nativealienextended18 lowercase = декоративный uppercase ---
+str_level_done: DB "LEVEL DONE",0
 str_game_over:  DB "GAME OVER",0
 str_2_lives:    DB "2 LIVES LEFT",0
 str_1_lives:    DB "1 LIFE LEFT",0
-str_paused:      DB "PAUSED",0
 ; --- Stats labels: UPPERCASE т.к. cancun8 содержит ТОЛЬКО uppercase A-Z + digits + symbols ---
 str_time:       DB "TIME ",0
 str_combos:     DB "COMBOS ",0
@@ -1171,8 +1439,39 @@ str_coins:      DB "COINS ",0
 str_max_chain:  DB "MAX CHAIN ",0
 str_max_combo:  DB "MAX COMBO ",0
 str_score_label: DB "SCORE ",0
-str_click_resume: DB "CLICK TO RESUME",0
 str_hud_score:  DB "SCORE",0
+
+LevelTitlePtrTmp: DEFW 0
+IntroLevelBuf:    DEFS 12                                ; "LEVEL NN-M" + null, dynamic intro line
+LevelTitlePtrTable:
+                DW str_level_title_01, str_level_title_02, str_level_title_03, str_level_title_04
+                DW str_level_title_05, str_level_title_06, str_level_title_07, str_level_title_08
+                DW str_level_title_09, str_level_title_10, str_level_title_11, str_level_title_12
+                DW str_level_title_13, str_level_title_14, str_level_title_15, str_level_title_16
+                DW str_level_title_17, str_level_title_18, str_level_title_19, str_level_title_20
+                DW str_level_title_21, str_level_title_22
+str_level_title_01: DB "SPIRAL OF DOOM",0
+str_level_title_02: DB "OSPREY TALON",0
+str_level_title_03: DB "RIVERBED MOSAIC",0
+str_level_title_04: DB "BREATH OF EHECATL",0
+str_level_title_05: DB "DARK VORTEX",0
+str_level_title_06: DB "SWITCHBACK",0
+str_level_title_07: DB "LONG RANGE",0
+str_level_title_08: DB "WHEN SPIRALS ATTACK",0
+str_level_title_09: DB "MUD SLIDE",0
+str_level_title_10: DB "RORSCHACH",0
+str_level_title_11: DB "MOUTH OF CENTEOTL",0
+str_level_title_12: DB "SNAKE PIT",0
+str_level_title_13: DB "SAND GARDEN",0
+str_level_title_14: DB "LAIR OF THE MUD SNAKE",0
+str_level_title_15: DB "LANDING PAD",0
+str_level_title_16: DB "ALTAR OF TLALOC",0
+str_level_title_17: DB "CODEX OF MIXTEC",0
+str_level_title_18: DB "SHRINE OF QUETZALCOATL",0
+str_level_title_19: DB "MIRROR SERPENT",0
+str_level_title_20: DB "SUN STONE",0
+str_level_title_21: DB "ZUMAIC EXODUS",0
+str_level_title_22: DB "SPACE",0
 
 
 ; ============================================================================
@@ -1276,14 +1575,23 @@ DrawString:
                 OR   A
                 JR   Z, .ds_advance_only                ; w=0 (space) → только advance
 
-                ; --- Emit BITMAP_SIZE (NEAREST/BORDER, w, FontHeight) ---
+                ; --- Emit BITMAP_SIZE (NEAREST/BORDER, w*scale, FontHeight*scale) ---
                 LD   H, 0
                 LD   L, A                               ; HL = w
-                ADD  HL, HL : ADD HL, HL : ADD HL, HL   ; <<3
+                LD   A, (DrawStr_Scale)
+                CP   2
+                JR   C, .ds_sz_w1
+                ADD  HL, HL                             ; w *= 2 (scale=2)
+.ds_sz_w1:      ADD  HL, HL : ADD HL, HL : ADD HL, HL   ; <<3
                 ADD  HL, HL : ADD HL, HL : ADD HL, HL   ; <<6
                 ADD  HL, HL : ADD HL, HL : ADD HL, HL   ; <<9 (w << 9)
                 LD   A, (FontHeight)
-                LD   E, A : LD D, 0
+                LD   B, A
+                LD   A, (DrawStr_Scale)
+                CP   2
+                JR   C, .ds_sz_h1
+                SLA  B                                  ; FontHeight *= 2 (scale=2)
+.ds_sz_h1:      LD   E, B : LD D, 0
                 ADD  HL, DE                             ; HL = (w<<9)|H
                 LD   B, #08
                 LD   C, 0
@@ -1319,10 +1627,14 @@ DrawString:
                 CALL FT.Coprocessor.Vertex2f
 
 .ds_advance_only:
-                ; CurX += advance * 16
+                ; CurX += advance * scale * 16
                 LD   A, (DrawStr_Adv)
                 LD   H, 0 : LD L, A
-                ADD  HL, HL : ADD HL, HL : ADD HL, HL : ADD HL, HL   ; *16
+                LD   A, (DrawStr_Scale)
+                CP   2
+                JR   C, .ds_adv1
+                ADD  HL, HL                             ; advance *= 2 (scale=2)
+.ds_adv1:       ADD  HL, HL : ADD HL, HL : ADD HL, HL : ADD HL, HL   ; *16
                 LD   DE, (DrawStr_CurX)
                 ADD  HL, DE
                 LD   (DrawStr_CurX), HL
@@ -1332,6 +1644,7 @@ DrawStr_Ptr:    DEFW 0
 DrawStr_CurX:   DEFW 0
 DrawStr_Y:      DEFW 0
 DrawStr_Adv:    DEFB 0
+DrawStr_Scale:  DEFB 1                                  ; 1 = native, 2 = ×2 (caller сам ставит scale-матрицу)
 
 ; ============================================================================
 ; DrawHudTopText — верхний HUD: clock + cumulative score.
@@ -2048,9 +2361,9 @@ SCRATCH_PAGE    EQU #01
 ;
 ; In:  A = compressed source SPG page; Core.BgRamH/L = FT_RAM_G dest 24-bit
 ; Out: Core.BgRamH/L advanced by 16K
-; Slots после RET: slot 2 = src (не восстановлен), slot 3 = SCRATCH (не восст.).
-;                  Caller обязан восстановить SetPage2 6 / SetPage3 #04 после
-;                  серии вызовов.
+; Slots after RET: slot 2 = src (not restored), slot 3 = page #04 main1_play.
+; Restoring slot 3 here keeps dumps and any call-side code from observing the
+; transient scratch page between compressed uploads.
 ; ----------------------------------------------------------------------------
 UnpackAndUploadPage:
                 DI
@@ -2083,6 +2396,7 @@ UnpackAndUploadPage:
                 JR   NC, .uaup_no_carry
                 LD   A, (Core.BgRamH) : INC A : LD (Core.BgRamH), A
 .uaup_no_carry:
+                LD   A, #04 : LD BC, PAGE3 : OUT (C), A   ; restore slot 3 = main1_play page
                 LD   SP, (.uaup_saved_sp)
                 EI
                 RET
@@ -2119,11 +2433,109 @@ UnpackZX7Page:
 .uzx7_temp_stack: DEFS 64
 .uzx7_temp_stack_top:
 
+; ----------------------------------------------------------------------------
+; SafeInflatePage2: FT812 CMD_INFLATE with compressed source mapped in PAGE2.
+;
+; TSLib FT.Coprocessor.Inflate maps source pages into PAGE3/#C000, which is also
+; our main1_play code slot. Fresh host dumps showed CPU HALT while PAGE3 was a
+; zlib preview page (#F1). This variant keeps PAGE3 untouched and streams the
+; source from PAGE2/#8000 instead.
+;
+; In: same convention as FT.Coprocessor.Inflate for current callers:
+;   A:DE = RAM_G destination, BC = compressed byte count, HL = source offset,
+;   A' = source SPG page. Current assets are all <64K compressed.
+; Out: CF set only if coprocessor write reports fault.
+; Slots after RET: PAGE2 restored to previous value; PAGE3 unchanged.
+; ----------------------------------------------------------------------------
+SafeInflatePage2:
+                CALL FT.Coprocessor.WaitFlush
+                RET  C
+
+                PUSH HL
+                PUSH DE
+                FT_WR32_CMD FT_CMD_INFLATE
+                POP  DE
+
+                LD   H, #00
+                LD   L, A
+                CALL FT.Coprocessor.Write32
+                RET  C
+
+                GetPage2
+                LD   (.sip2_saved_page2), A
+                POP  HL
+
+                ; Move source address from page-local #0000..#3FFF into slot2
+                ; address space #8000..#BFFF.
+                LD   A, H
+                OR   %10000000
+                LD   H, A
+                EX   AF, AF'
+                LD   (.sip2_src_page), A
+                EX   AF, AF'
+
+.loop:          LD   A, (.sip2_src_page)
+                SetPage2_A
+
+                PUSH HL                              ; source CPU address
+                LD   A, H
+                AND  %00111111
+                LD   H, A
+                EX   DE, HL                          ; DE = offset in page
+                LD   HL, #4000
+                OR   A
+                SBC  HL, DE
+                EX   DE, HL                          ; DE = bytes to page end
+
+                LD   H, B
+                LD   L, C                            ; HL = remaining total
+                OR   A
+                SBC  HL, DE
+                JR   NC, .page_chunk
+
+                ADD  HL, DE                          ; HL = final chunk bytes
+                LD   B, H
+                LD   C, L
+                LD   HL, #0000                       ; no remainder
+                SCF                                  ; align final packet
+                JR   .write_chunk
+
+.page_chunk:    LD   B, D
+                LD   C, E                            ; BC = chunk bytes
+                OR   A                               ; not final, no align
+
+.write_chunk:   EX   (SP), HL                         ; HL=source, stack=remainder
+                CALL FT.Coprocessor.Write
+                POP  BC                              ; BC = remaining total
+                JR   C, .restore_error
+                LD   A, B
+                OR   C
+                JR   Z, .restore_ok
+
+                LD   HL, #8000
+                LD   A, (.sip2_src_page)
+                INC  A
+                LD   (.sip2_src_page), A
+                JR   .loop
+
+.restore_ok:    LD   A, (.sip2_saved_page2)
+                SetPage2_A
+                OR   A
+                RET
+.restore_error: LD   A, (.sip2_saved_page2)
+                SetPage2_A
+                SCF
+                RET
+.sip2_saved_page2: DB 0
+.sip2_src_page:    DB 0
+
+                include "LevelSelectPreviewSlot0.asm"
+
 LOG_BLOCK_END:
 
 TSLIB_TOTAL_SIZE EQU LOG_BLOCK_END - TSLIB_Start
                 display "Log:      \t", /A, Log_Init, " end=", /A, LOG_BLOCK_END
-                SAVEBIN "TSLib.bin", TSLIB_Start, TSLIB_TOTAL_SIZE
+                SAVEBIN "Build/TSLib.bin", TSLIB_Start, TSLIB_TOTAL_SIZE
 
 ; --- Core block (page 5) -------------------------------------------------
                 ORG EntryPoint
@@ -2131,8 +2543,17 @@ TSLIB_TOTAL_SIZE EQU LOG_BLOCK_END - TSLIB_Start
 Start:
                 ; ----- EntryPoint -----
                 LD   SP, StackTop
+                ; ----- BOOT CANARY -----
+                ; Доказывает, что WC SPG-loader долистал до Core EntryPoint и
+                ; передал управление НАМ — до любого Init. Пишем "BOOT" в
+                ; резидентный RAM (#5044), не трогая стек/страницы. См. дамп 111:
+                ; если этой метки нет в F2-дампе — hang в фазе загрузки WC.
+                LD   HL, #4F42                          ; 'B','O' (LE → #42 #4F)
+                LD   (BOOT_CANARY_ADDR), HL
+                LD   HL, #544F                          ; 'O','T' (LE → #4F #54)
+                LD   (BOOT_CANARY_ADDR + 2), HL
                 CALL Initialize
-                JP   MainLoop
+                JP   MenuMain
 
                 ; ----- Initialize -----
 Initialize:     CALL Init_Core
@@ -2143,10 +2564,15 @@ Initialize:     CALL Init_Core
                 ; с FT812 vsync 57.25 Hz. Синхронизация в MainLoop через FT_INT_SWAP.
                 DI
                 INT_Setting 0
+                RET
+
+LoadGameplayAssets:
+                CALL LoadGameplayLevelSpecificFromPack
+                JR   C, .LevelSpecificLoaded
 
                 ; Залить bg_level01 400x300 PALETTED4444 (8 страниц #07..#0E)
                 ; в RAM_G #010000, затем 512-байтную ARGB4 palette.
-                LD   A, BG_FIRST_PAGE
+                CALL GetCurrentBgFirstPage
                 LD   (BgPg), A
                 LD   HL, BG_RAMG_ADDR & 0xFFFF
                 LD   (BgRamL), HL
@@ -2175,7 +2601,7 @@ Initialize:     CALL Init_Core
                 INC  A
                 LD   (BgPg), A
                 DJNZ .UploadBg
-                LD   A, BG_PALETTE_PAGE
+                CALL GetCurrentBgPalettePage
                 SetPage2_A
                 LD   HL, #8000
                 LD   BC, 512
@@ -2183,6 +2609,7 @@ Initialize:     CALL Init_Core
                 LD   DE, BG_PALETTE_RAMG & 0xFFFF
                 CALL FT.WriteMem
 
+.LevelSpecificLoaded:
                 ; Залить balls_atlas PALETTED4444.
                 LD   A, BALLS_FIRST_PAGE
                 LD   (BgPg), A
@@ -2203,6 +2630,7 @@ Initialize:     CALL Init_Core
                 ; Palette ARGB4 СТРОГО 512 байт → FT_RAM_G #080000 (PALETTED4444).
                 ; Размер ровно 512: FT812 при больших значениях считывает мусор за
                 ; концом палитры; при меньшем зависает (out-of-range index).
+                if !BALLS_ARGB4_ENABLED
                 LD   A, BALLS_PALETTE_PAGE
                 SetPage2_A
                 LD   HL, #8000
@@ -2210,6 +2638,7 @@ Initialize:     CALL Init_Core
                 LD   A, (BALLS_PALETTE_RAMG >> 16) & 0xFF
                 LD   DE, BALLS_PALETTE_RAMG & 0xFFFF
                 CALL FT.WriteMem
+                endif
 
                 ; Залить frog body / plate / tongue / face-overlay в RAM_G.
                 ; FROG_ARGB4_ENABLED: 122×122×2 = 29768 bytes, 2 pages per sprite.
@@ -2433,8 +2862,8 @@ Initialize:     CALL Init_Core
                 DJNZ .UploadFontC
 
                 ; Восстановить слоты после серии compressed uploads:
-                ; slot 2 = TrackData (page 6), slot 3 = main1_play (page #04).
-                SetPage2 6
+                ; slot 2 = selected TrackData, slot 3 = main1_play (page #04).
+                CALL SetCurrentTrackPage
                 SetPage3 #04
 
                 ; --- VDC physics init (TrackData уже доступен в slot 2) ---
@@ -2442,6 +2871,450 @@ Initialize:     CALL Init_Core
                 CALL Frog_Init
                 CALL Bullet_Init
                 CALL Log_Init                          ; circular RAM log для F12-dump
+                RET
+
+GetCurrentLevelRecord:
+                LD   A, (CurrentLevel)
+                CP   LEVEL_RUNTIME_COUNT
+                JR   C, .idx_ok
+                XOR  A
+.idx_ok:        LD   L, A
+                LD   H, 0
+                LD   E, L
+                LD   D, H                              ; DE = index
+                ADD  HL, HL                            ; *2
+                ADD  HL, HL                            ; *4
+                ADD  HL, HL                            ; *8
+                ADD  HL, HL                            ; *16
+                AND  A
+                SBC  HL, DE                            ; *15
+                LD   DE, LevelRuntimeTable
+                ADD  HL, DE
+                RET
+
+GetCurrentLevelTitlePtr:
+                LD   A, (CurrentLevel)
+                CP   LEVEL_RUNTIME_COUNT
+                JR   C, .idx_ok
+                XOR  A
+.idx_ok:        LD   L, A
+                LD   H, 0
+                ADD  HL, HL
+                LD   DE, LevelTitlePtrTable
+                ADD  HL, DE
+                LD   E, (HL)
+                INC  HL
+                LD   D, (HL)
+                EX   DE, HL
+                RET
+
+GetCurrentBgFirstPage:
+                CALL GetCurrentLevelRecord
+                LD   A, (HL)
+                RET
+
+GetCurrentBgPalettePage:
+                CALL GetCurrentLevelRecord
+                INC  HL
+                LD   A, (HL)
+                RET
+
+GetCurrentTrackPage:
+                CALL GetCurrentLevelRecord
+                INC  HL
+                INC  HL
+                LD   A, (HL)
+                RET
+
+SetCurrentTrackPage:
+                CALL GetCurrentTrackPage
+                SetPage2_A
+                RET
+
+GetCurrentFrogX:
+                CALL GetCurrentLevelRecord
+                LD   DE, LEVEL_RT_FROG_X
+                ADD  HL, DE
+                LD   E, (HL)
+                INC  HL
+                LD   D, (HL)
+                EX   DE, HL
+                RET
+
+GetCurrentFrogY:
+                CALL GetCurrentLevelRecord
+                LD   DE, LEVEL_RT_FROG_Y
+                ADD  HL, DE
+                LD   E, (HL)
+                INC  HL
+                LD   D, (HL)
+                EX   DE, HL
+                RET
+
+GetCurrentKzX:
+                CALL GetCurrentLevelRecord
+                LD   DE, LEVEL_RT_KZ_X
+                ADD  HL, DE
+                LD   E, (HL)
+                INC  HL
+                LD   D, (HL)
+                EX   DE, HL
+                RET
+
+GetCurrentKzY:
+                CALL GetCurrentLevelRecord
+                LD   DE, LEVEL_RT_KZ_Y
+                ADD  HL, DE
+                LD   E, (HL)
+                INC  HL
+                LD   D, (HL)
+                EX   DE, HL
+                RET
+
+GetCurrentLevelSettingIndex:
+                CALL GetCurrentLevelRecord
+                LD   DE, LEVEL_RT_TIER1
+                ADD  HL, DE
+                LD   A, (CurrentDifficulty)
+                CP   4
+                JR   C, .diff_ok
+                XOR  A
+.diff_ok:       LD   E, A
+                LD   D, 0
+                ADD  HL, DE
+                LD   A, (HL)
+                CP   #FF
+                RET  NZ
+                XOR  A                                  ; fallback to lvl11 setting if tier is absent
+                RET
+
+GetCurrentLevelSettingRecord:
+                CALL GetCurrentLevelSettingIndex
+                LD   L, A
+                LD   H, 0
+                LD   E, L
+                LD   D, H
+                ADD  HL, HL
+                ADD  HL, HL
+                ADD  HL, HL
+                ADD  HL, DE                              ; setting index * 9
+                LD   DE, LevelSettingsTable
+                ADD  HL, DE
+                RET
+
+GetCurrentTargetScore:
+                CALL GetCurrentLevelSettingRecord
+                INC  HL
+                INC  HL
+                LD   E, (HL)
+                INC  HL
+                LD   D, (HL)
+                RET
+
+; GetCurrentColors — ball-color count for the current level/difficulty (settings
+; field colors, offset +4). Clamped to 1..VDC_NUM_COLORS; 0/absent → VDC_NUM_COLORS.
+GetCurrentColors:
+                CALL GetCurrentLevelSettingRecord
+                LD   DE, 4
+                ADD  HL, DE
+                LD   A, (HL)
+                OR   A
+                JR   Z, .gcc_def                        ; 0 / absent → default
+                CP   Core.VDC_NUM_COLORS + 1
+                RET  C                                  ; 1..NUM_COLORS → ok
+.gcc_def:       LD   A, Core.VDC_NUM_COLORS
+                RET
+
+; GetCurrentSpeed — chain speed_x100 (settings +0). 0/absent → 50. Out: A.
+GetCurrentSpeed:
+                CALL GetCurrentLevelSettingRecord
+                LD   A, (HL)
+                OR   A
+                RET  NZ
+                LD   A, 50
+                RET
+
+; GetCurrentStart — lead-in ball count (settings +1). 0/absent → 35. Out: A.
+GetCurrentStart:
+                CALL GetCurrentLevelSettingRecord
+                INC  HL
+                LD   A, (HL)
+                OR   A
+                RET  NZ
+                LD   A, 35
+                RET
+
+; VDC_LoadLevelSettings — заполнить per-level runtime-параметры из таблицы
+; (colors/speed/start) + сброс speed-аккумулятора. Core-resident (зовётся из
+; VDC_Init в Main1, который почти полон). Clobbers AF, HL, DE.
+VDC_LoadLevelSettings:
+                CALL GetCurrentColors
+                LD   (Core.VDC_LevelColors), A
+                CALL GetCurrentSpeed
+                LD   (Core.VDC_LevelSpeed), A
+                CALL GetCurrentStart
+                LD   (Core.VDC_LevelStart), A
+                XOR  A
+                LD   (Core.VDC_SpeedAccum), A
+                RET
+
+; VDC_SpeedAdvance — normal-phase chain advance at per-level speed. accum +=
+; speed_x100; когда ≥100 → один VDC_MoveChain (speed/100 продвижений/кадр).
+; Core-resident (Main1 почти полон). Clobbers AF, HL.
+VDC_SpeedAdvance:
+                LD   A, (Core.VDC_SpeedAccum)
+                LD   HL, Core.VDC_LevelSpeed
+                ADD  A, (HL)
+                CP   100
+                JR   C, .vsa_no
+                SUB  100
+                LD   (Core.VDC_SpeedAccum), A
+                JP   Core.VDC_MoveChain                  ; tail: один advance, RET к caller
+.vsa_no:        LD   (Core.VDC_SpeedAccum), A
+                RET
+
+GetCurrentPartime:
+                CALL GetCurrentLevelSettingRecord
+                LD   DE, 8
+                ADD  HL, DE
+                LD   A, (HL)
+                RET
+
+VDC_CheckWinMaybe:
+                LD   A, (VDC_GaugeFull)
+                OR   A
+                RET  Z
+                LD   A, (VDC_SlotsLen)
+                OR   A
+                RET  NZ
+                LD   A, VDC_STATE_WIN
+                LD   (VDC_GameState), A
+                LD   A, VDC_WIN_TICKS
+                LD   (VDC_WinTick), A
+                LD   A, VDC_PREVIEW_TICKS
+                LD   (VDC_PreviewTick), A
+                LD   A, 11
+                LD   (VDC_KzFrame), A
+                CALL WinAwardTimeBonus
+                RET
+
+VDC_UpdateWin:
+                LD   A, (VDC_PreviewTick)
+                OR   A
+                JR   Z, .preview_done
+                DEC  A
+                LD   (VDC_PreviewTick), A
+.preview_done:  LD   A, (VDC_WinTick)
+                OR   A
+                JR   Z, .win_show_done
+                DEC  A
+                LD   (VDC_WinTick), A
+                RET  NZ
+.win_show_done: ; win-анимация закончилась → показать диалог LEVEL DONE (один раз).
+                ; Не advance сразу: ждём OK (UpdateDialog), потом fade-out.
+                LD   A, (VDC_DialogState)
+                CP   DLG_WIN_DONE
+                RET  NC                                  ; уже win-done/fade → не пере-триггерить
+                LD   A, DLG_WIN_DONE
+                LD   (VDC_DialogState), A
+                XOR  A
+                LD   (FadeAlpha), A
+                RET
+
+AdvanceToNextLevel:
+                LD   A, (CurrentLevel)
+                INC  A
+                CP   LEVEL_RUNTIME_COUNT
+                JR   C, .store
+                XOR  A
+.store:         LD   (CurrentLevel), A
+                CALL LoadGameplayAssets
+                RET
+
+WinAwardTimeBonus:
+                CALL GetCurrentPartime
+                LD   B, A                                ; B = par time seconds
+                LD   HL, (VDC_GameSeconds)
+                LD   A, H
+                OR   A
+                RET  NZ                                  ; over 255 sec: no byte-sized bonus
+                LD   A, L
+                CP   B
+                RET  NC                                  ; elapsed >= par
+                LD   A, B
+                SUB  L                                   ; remaining seconds
+                LD   B, A
+                LD   HL, 0
+                LD   DE, 100
+.bonus_loop:    ADD  HL, DE
+                DJNZ .bonus_loop
+                LD   DE, (VDC_PlayerScore)
+                ADD  HL, DE
+                LD   (VDC_PlayerScore), HL
+                RET
+
+VDC_AwardGapBonusSlot0:
+                LD   A, (VDC_BulletGapMinDist)
+                CP   VDC_GAP_HIT_THR + 1
+                JR   NC, .no_gap                         ; > THR -> not a gap shot
+                LD   HL, VDC_BulletGapCount
+                INC  (HL)
+                ; Ported HD-ref shape:
+                ; points = 500 * (GAP_MAX - distance) / GAP_MAX, clamp >= 10.
+                ; In this port distance is Manhattan distance to the nearest GAP slot.
+                LD   B, A                                ; B = distance
+                LD   A, VDC_GAP_MAX
+                SUB  B                                   ; A = GAP_MAX - distance
+                LD   B, A
+                LD   HL, 0
+                LD   DE, 500
+.mul500:        ADD  HL, DE
+                DJNZ .mul500
+                LD   A, VDC_GAP_MAX
+                CALL VDC_DivHLbyA
+                LD   A, H
+                OR   A
+                JR   NZ, .have_bonus
+                LD   A, L
+                CP   10
+                JR   NC, .have_bonus
+                LD   HL, 10
+.have_bonus:    LD   A, (VDC_BulletGapCount)
+                CP   2
+                JR   C, .have_final
+                ADD  HL, HL                              ; consecutive gap bonus x2
+.have_final:    PUSH HL
+                LD   DE, (VDC_PlayerScore)
+                ADD  HL, DE
+                LD   (VDC_PlayerScore), HL
+                POP  HL
+                LD   DE, (VDC_GaugeScore)
+                ADD  HL, DE
+                LD   (VDC_GaugeScore), HL
+                CALL GetCurrentTargetScore
+                AND  A
+                SBC  HL, DE
+                JR   C, .done
+                LD   A, 1
+                LD   (VDC_GaugeFull), A
+.done:          XOR  A
+                LD   (VDC_StatChainCount), A
+                RET
+.no_gap:        XOR  A
+                LD   (VDC_BulletGapCount), A
+                LD   (VDC_StatChainCount), A
+                RET
+
+LoadLevelSelectPreviewAssets:
+                ; Preview backgrounds are now pack-resident raw ARGB4:
+                ; 280x170x2 bytes padded to 6x16K pages. Keep SD and FT
+                ; phases separated because FT812 and SD share Z-Controller SPI.
+                CALL ZiFi_Init
+                JP   NC, .err_init
+                CALL ZiFi_PakOpen
+                JP   NC, .err
+                LD   A, (CurrentLevel)
+                CP   LEVEL_RUNTIME_COUNT
+                JR   C, .idx_ok
+                XOR  A
+.idx_ok:        CALL ZiFi_PakReadToc
+                JP   NC, .err
+
+                ; Require exactly the canonical raw thumbnail size.
+                LD   HL, (ZiFi_LevelTOC + 18)           ; preview_size
+                LD   A, H
+                OR   A
+                JP   NZ, .err
+                LD   A, L
+                CP   192                                ; 6 pages * 32 sectors
+                JP   NZ, .err
+
+                ; SD phase: preview_off -> pages #07..#0C.
+                LD   HL, (ZiFi_LevelTOC + 16)           ; preview_off
+                LD   (RawPak_LogCur), HL
+                LD   A, #07
+                LD   (RawPak_StgPage), A
+                LD   B, 6
+.sd_page:       PUSH BC
+                LD   A, (RawPak_StgPage)
+                SetPage2_A
+                LD   IX, #8000
+                LD   B, 32
+.sd_sec:        PUSH BC
+                CALL RawPak_ReadOneLogicalIX
+                JR   C, .sd_read_err
+                LD   DE, 512
+                ADD  IX, DE
+                POP  BC
+                DJNZ .sd_sec
+                LD   A, (RawPak_StgPage)
+                INC  A
+                LD   (RawPak_StgPage), A
+                POP  BC
+                DJNZ .sd_page
+
+                ; FT phase: pages #07..#0C -> LS_PREVIEW_BG_RAMG.
+                DI
+                SetPage3 #04
+                LD   HL, LS_PREVIEW_BG_RAMG & #FFFF
+                LD   (BgRamL), HL
+                LD   A, (LS_PREVIEW_BG_RAMG >> 16) & #FF
+                LD   (BgRamH), A
+                LD   A, #07
+                LD   (RawPak_StgPage), A
+                LD   B, 6
+.ft_page:       PUSH BC
+                LD   A, (RawPak_StgPage)
+                SetPage2_A
+                LD   HL, #8000
+                LD   BC, 16384
+                LD   A, (BgRamH)
+                LD   DE, (BgRamL)
+                CALL FT.WriteMem
+                LD   HL, (BgRamL)
+                LD   DE, #4000
+                ADD  HL, DE
+                LD   (BgRamL), HL
+                JR   NC, .ft_no_carry
+                LD   A, (BgRamH)
+                INC  A
+                LD   (BgRamH), A
+.ft_no_carry:   LD   A, (RawPak_StgPage)
+                INC  A
+                LD   (RawPak_StgPage), A
+                POP  BC
+                DJNZ .ft_page
+                CALL SetCurrentTrackPage
+                SetPage3 #04
+                EI
+                CALL ZiFi_Done
+                SCF
+                RET
+
+.sd_read_err:   POP  BC
+                POP  BC
+.err:           CALL ZiFi_Done
+.err_init:      CALL SetCurrentTrackPage
+                SetPage3 #04
+                OR   A
+                RET
+
+LoadLevelSelectFontNative:
+                LD   A, FONT_NATIVE_PAGE_BASE
+                LD   (BgPg), A
+                LD   HL, FONT_NATIVE_RAMG & #FFFF
+                LD   (BgRamL), HL
+                LD   A, (FONT_NATIVE_RAMG >> 16) & #FF
+                LD   (BgRamH), A
+                LD   B, FONT_NATIVE_NUM_PAGES
+.upload_font:   PUSH BC
+                LD   A, (BgPg)
+                CALL UnpackAndUploadPage
+                POP  BC
+                LD   A, (BgPg)
+                INC  A
+                LD   (BgPg), A
+                DJNZ .upload_font
                 RET
 
 UploadFrogPalette:
@@ -2456,10 +3329,14 @@ UploadFrogPalette:
 BG_FIRST_PAGE      EQU 7
 BG_PAGE_COUNT      EQU 8                               ; 400×300 PALETTED4444 = 120000 bytes, 8 × 16K pages
 BG_RAMG_ADDR       EQU #010000                         ; bg в RAM_G FT812
-BG_PALETTE_PAGE    EQU #0F
+BG_PALETTE_PAGE    EQU #11      ; moved from #0F: ZiFi SD driver (WDFCVBI2.COD) lives there
 BG_PALETTE_RAMG    EQU #02D500                         ; 4-byte aligned, after useful 400×300 bitmap
-BALLS_FIRST_PAGE   EQU #2D                             ; balls_atlas paletted pages 0x2D..0x38 (12 pages)
+BALLS_FIRST_PAGE   EQU #2D                             ; balls atlas pages
+                if BALLS_ARGB4_ENABLED
+BALLS_PAGE_COUNT   EQU 12                              ; ARGB4 canary: 6×16×32×32×2 = 192 KB
+                else
 BALLS_PAGE_COUNT   EQU 12                              ; PALETTED4444: 6×32×32×32 1bpp = 192 KB
+                endif
 BALLS_RAMG_ADDR    EQU #050000                         ; сразу после bg+padding (#04C000)
 BALLS_PALETTE_PAGE EQU #39                             ; palette ARGB4 СТРОГО 512 байт (256 entries × 2 bytes)
 BALLS_PALETTE_RAMG EQU #080000                         ; FT_RAM_G — после balls (192K=#080000), 4-byte aligned
@@ -2510,7 +3387,16 @@ Init_Core:      FMapAddrInit                          ; FT_EN, MEM_WO, page0=TSL
                 SetPage1 5                            ; #4000 → Core code page (main0 resident)
                 SetPage2 6                            ; #8000 → TrackData (track_640.bin)
                 SetPage3 #04                          ; #C000 → main1_play (scene-specific code)
+                LD   HL, BuildCanaryBytes
+                LD   DE, BUILD_CANARY_ADDR
+                LD   BC, BUILD_CANARY_LEN
+                LDIR
                 RET
+
+BuildCanaryBytes:
+                DB "ZVDAC2 2026-05-24 PAGE3GUARD",0
+                DB #00, #05, #06, #04
+BuildCanaryBytesEnd:
 
 TrackData       EQU #8000                             ; в slot 2 (page 6)
 
@@ -2530,12 +3416,353 @@ Init_Int:       ; Стандартная IM2 + frame INT инициализац�
 
 INT_Handler:    EI
                 RET
-Main0_End:                                            ; MUST be after ALL main0 code (Init_Core/Init_Int/INT_Handler)
+
+; Pause/exit confirmation dialog. Dialog state 3 is a real pause: VDC_Update
+; refreshes RTC baseline and returns, so elapsed game time excludes this menu.
+UpdatePauseDialog:
+                LD   A, 1
+                LD   (VDC_HudPointerBlock), A
+
+                CALL PauseMouseInYes
+                OR   A
+                JR   Z, .upd_check_no_hover
+                XOR  A
+                LD   (PauseMenuChoice), A              ; 0 = Yes
+                JR   .upd_fire
+.upd_check_no_hover:
+                CALL PauseMouseInNo
+                OR   A
+                JR   Z, .upd_fire
+                LD   A, 1
+                LD   (PauseMenuChoice), A              ; 1 = No
+
+.upd_fire:      LD   BC, #7FFE
+                IN   A, (C)
+                BIT  0, A
+                JR   Z, .fire_edge
+                LD   A, Input.VK_KEMPSTON_B
+                CALL Input.Kempston.KeyState
+                JR   NZ, .fire_edge
+                XOR  A
+                LD   (PauseMenuFirePrev), A
+                JR   .mouse
+.fire_edge:     LD   A, (PauseMenuFirePrev)
+                OR   A
+                JR   NZ, .mouse
+                LD   A, 1
+                LD   (PauseMenuFirePrev), A
+                JR   .action
+
+.mouse:         LD   A, Input.Mouse.SVK_LBUTTON
+                CALL Input.Mouse.KeyState
+                LD   A, 0
+                JR   Z, .lmb_set
+                INC  A
+.lmb_set:       LD   C, A
+                LD   A, (VDC_PrevMouseL)
+                LD   B, A
+                LD   A, C
+                LD   (VDC_PrevMouseL), A
+                LD   A, B
+                OR   A
+                RET  Z
+                LD   A, C
+                OR   A
+                RET  NZ
+                CALL PauseMouseInYes
+                OR   A
+                JR   Z, .click_no
+                XOR  A
+                LD   (PauseMenuChoice), A
+                JR   .action
+.click_no:      CALL PauseMouseInNo
+                OR   A
+                RET  Z
+                LD   A, 1
+                LD   (PauseMenuChoice), A
+
+.action:        LD   A, (PauseMenuChoice)
+                OR   A
+                JR   NZ, .resume
+                XOR  A
+                LD   (VDC_DialogState), A
+                LD   (VDC_PrevMouseL), A
+                LD   (PauseMenuFirePrev), A
+                POP  HL                                ; abandon MainLoop CALL UpdateDialog
+                JP   FadeGameplayToMenu
+.resume:        ; "No" -> begin 1 s window fade-out. Stay not-Play (DialogState=4)
+                ; so the frog can't shoot and game time stays frozen; the frog
+                ; sprite starts drawing from this first fade frame.
+                LD   A, 4
+                LD   (VDC_DialogState), A
+                LD   A, PAUSE_FADE_FRAMES
+                LD   (PauseFadeTimer), A
+                LD   A, 255
+                LD   (VDC_PauseAlpha), A
+                XOR  A
+                LD   (VDC_PrevMouseL), A                ; consume the "No" click
+                LD   (PauseMenuFirePrev), A
+                RET
+
+; UpdatePauseFade — runs each frame while VDC_DialogState=4 (pause "No" fade-out).
+; Board stays frozen (not-Play: no shot, no game-time). The pause window alpha
+; ramps down over PAUSE_FADE_FRAMES; when it expires -> DialogState=0 (PLAY).
+UpdatePauseFade:
+                LD   A, 1
+                LD   (VDC_HudPointerBlock), A           ; eat fire edge during fade
+                LD   A, (PauseFadeTimer)
+                DEC  A
+                LD   (PauseFadeTimer), A
+                JR   Z, .pf_done
+                ; VDC_PauseAlpha = min(255, timer * 4)
+                LD   L, A
+                LD   H, 0
+                ADD  HL, HL
+                ADD  HL, HL                             ; HL = timer*4
+                LD   A, H
+                OR   A
+                LD   A, 255
+                JR   NZ, .pf_set                        ; >=256 -> clamp
+                LD   A, L
+.pf_set:        LD   (VDC_PauseAlpha), A
+                RET
+.pf_done:       XOR  A
+                LD   (VDC_DialogState), A                ; -> PLAY
+                LD   (VDC_PrevMouseL), A
+                LD   (PauseMenuFirePrev), A
+                LD   A, 255
+                LD   (VDC_PauseAlpha), A
+                LD   A, 1
+                LD   (Frog_PrevMouseLeft), A             ; consume button edge: no shot on resume frame
+                RET
+
+UpdateHudMenuCore:
+                LD   A, (VDC_DialogState)
+                OR   A
+                JR   Z, .check
+                XOR  A
+                LD   (VDC_HudMenuState), A
+                INC  A
+                LD   (VDC_HudPointerBlock), A
+                RET
+.check:         CALL HudMenuMouseInside
+                OR   A
+                JR   Z, .out
+                LD   A, (VDC_GameState)
+                OR   A
+                JR   NZ, .out
+                LD   A, 1
+                LD   (VDC_HudPointerBlock), A
+                LD   A, Input.Mouse.SVK_LBUTTON
+                CALL Input.Mouse.KeyState
+                LD   A, 0
+                JR   NZ, .have_lmb
+                LD   A, 1
+.have_lmb:      LD   C, A                              ; C = now: 0=released, 1=pressed (HW active-low)
+                LD   A, (VDC_PrevMouseL)
+                LD   B, A                              ; B = prev
+                LD   A, C
+                LD   (VDC_PrevMouseL), A
+                OR   A
+                JR   Z, .hover                         ; no click, hover only
+                LD   A, 2
+                LD   (VDC_HudMenuState), A             ; pressed visual
+                LD   A, B
+                OR   A
+                RET  NZ                                ; held: do not retrigger
+                LD   A, 3
+                LD   (VDC_DialogState), A
+                LD   A, 1
+                LD   (PauseMenuChoice), A
+                XOR  A
+                LD   (VDC_HudMenuState), A
+                LD   (PauseMenuFirePrev), A
+                RET
+.hover:         LD   A, 1
+                LD   (VDC_HudMenuState), A
+                RET
+.out:           XOR  A
+                LD   (VDC_HudMenuState), A
+                LD   (VDC_HudPointerBlock), A
+                LD   (VDC_PrevMouseL), A
+                RET
+
+HudMenuMouseInside:
+                LD   HL, (Input.Mouse.PositionX)
+                LD   DE, HUD_MENU_HIT_X
+                AND  A
+                SBC  HL, DE
+                JR   C, .out
+                LD   HL, (Input.Mouse.PositionX)
+                LD   DE, HUD_MENU_HIT_X + HUD_MENU_HIT_W
+                AND  A
+                SBC  HL, DE
+                JR   NC, .out
+                LD   HL, (Input.Mouse.PositionY)
+                LD   DE, HUD_MENU_HIT_Y
+                AND  A
+                SBC  HL, DE
+                JR   C, .out
+                LD   HL, (Input.Mouse.PositionY)
+                LD   DE, HUD_MENU_HIT_Y + HUD_MENU_HIT_H
+                AND  A
+                SBC  HL, DE
+                JR   NC, .out
+                LD   A, 1
+                RET
+.out:           XOR  A
+                RET
+
+PauseMouseInYes:
+                LD   DE, PAUSE_YES_X
+                JR   PauseMouseInButton
+PauseMouseInNo:
+                LD   DE, PAUSE_NO_X
+PauseMouseInButton:
+                LD   HL, (Input.Mouse.PositionX)
+                AND  A
+                SBC  HL, DE
+                JR   C, .out
+                LD   HL, (Input.Mouse.PositionX)
+                LD   BC, PAUSE_BTN_W
+                EX   DE, HL
+                ADD  HL, BC
+                EX   DE, HL
+                AND  A
+                SBC  HL, DE
+                JR   NC, .out
+                LD   HL, (Input.Mouse.PositionY)
+                LD   DE, PAUSE_BTN_Y
+                AND  A
+                SBC  HL, DE
+                JR   C, .out
+                LD   HL, (Input.Mouse.PositionY)
+                LD   DE, PAUSE_BTN_Y + PAUSE_BTN_H
+                AND  A
+                SBC  HL, DE
+                JR   NC, .out
+                LD   A, 1
+                RET
+.out:           XOR  A
+                RET
+
+; PauseColorA — FT812 global alpha = (A * VDC_PauseAlpha) / 256. Lets the whole
+; pause window fade during the "No" fade-out. VDC_PauseAlpha=255 (the static
+; pause/game-over dialogs) leaves the base alpha A unchanged.
+PauseColorA:
+                LD   D, A                                ; D = base alpha
+                LD   A, (VDC_PauseAlpha)
+                CP   255
+                JR   Z, .pca_full
+                LD   E, A                                ; E = fade alpha
+                CALL Frog_Mul8x8u                        ; HL = base * fade
+                LD   E, H                                ; E = product >> 8
+                JP   FT.Coprocessor.ColorA
+.pca_full:      LD   E, D
+                JP   FT.Coprocessor.ColorA
+
+DrawPauseDialogContent:
+                CALL SetFontNative
+                LD   C, 255 : LD D, 255 : LD E, 255
+                CALL FT.Coprocessor.ColorRGB
+                LD   A, 255
+                CALL PauseColorA
+                LD   HL, str_pause_exit
+                CALL StrWidth
+                EX   DE, HL
+                SRL  H
+                RR   L
+                LD   DE, PAUSE_TITLE_CENTER_X
+                EX   DE, HL
+                AND  A
+                SBC  HL, DE
+                ADD  HL, HL
+                ADD  HL, HL
+                ADD  HL, HL
+                ADD  HL, HL
+                LD   B, H
+                LD   C, L
+                LD   DE, PAUSE_TITLE_Y * 16
+                LD   HL, str_pause_exit
+                CALL DrawString
+
+                FT_End
+                CALL DrawPauseButtonRects
+                FT_Begin FT_BITMAPS
+                CALL SetFontNative
+                LD   C, 255 : LD D, 255 : LD E, 255
+                CALL FT.Coprocessor.ColorRGB
+                LD   A, 255
+                CALL PauseColorA
+                LD   HL, str_yes
+                LD   BC, PAUSE_YES_TEXT_X * 16
+                LD   DE, PAUSE_BTN_TEXT_Y * 16
+                CALL DrawString
+                LD   HL, str_no
+                LD   BC, PAUSE_NO_TEXT_X * 16
+                LD   DE, PAUSE_BTN_TEXT_Y * 16
+                JP   DrawString
+
+DrawPauseButtonRects:
+                LD   A, (PauseMenuChoice)
+                OR   A
+                JR   NZ, .yes_dim
+                LD   C, 245 : LD D, 180 : LD E, 60
+                JR   .yes_color
+.yes_dim:       LD   C, 70 : LD D, 62 : LD E, 48
+.yes_color:     CALL FT.Coprocessor.ColorRGB
+                LD   A, 220
+                CALL PauseColorA
+                FT_Begin FT_RECTS
+                LD   BC, PAUSE_YES_X * 16
+                LD   DE, PAUSE_BTN_Y * 16
+                CALL FT.Coprocessor.Vertex2f
+                LD   BC, (PAUSE_YES_X + PAUSE_BTN_W) * 16
+                LD   DE, (PAUSE_BTN_Y + PAUSE_BTN_H) * 16
+                CALL FT.Coprocessor.Vertex2f
+                FT_End
+
+                LD   A, (PauseMenuChoice)
+                OR   A
+                JR   Z, .no_dim
+                LD   C, 245 : LD D, 180 : LD E, 60
+                JR   .no_color
+.no_dim:        LD   C, 70 : LD D, 62 : LD E, 48
+.no_color:      CALL FT.Coprocessor.ColorRGB
+                LD   A, 220
+                CALL PauseColorA
+                FT_Begin FT_RECTS
+                LD   BC, PAUSE_NO_X * 16
+                LD   DE, PAUSE_BTN_Y * 16
+                CALL FT.Coprocessor.Vertex2f
+                LD   BC, (PAUSE_NO_X + PAUSE_BTN_W) * 16
+                LD   DE, (PAUSE_BTN_Y + PAUSE_BTN_H) * 16
+                CALL FT.Coprocessor.Vertex2f
+                FT_End
+                RET
+
+PauseMenuChoice:   DEFB 1
+PauseMenuFirePrev: DEFB 0
+; Pause "No"/resume fade-out: VDC_DialogState=4 holds the board frozen (not-Play,
+; so frog can't shoot and game time stays frozen) while the pause window fades
+; out over PAUSE_FADE_FRAMES ticks; then -> PLAY. VDC_PauseAlpha (255=opaque)
+; scales the whole window's draw alpha during the fade.
+PAUSE_FADE_FRAMES EQU 74        ; ~1 s at 74 Hz vsync
+PauseFadeTimer:    DEFB 0
+VDC_PauseAlpha:    DEFB 255
+str_pause_exit:    DB "REALLY WANT TO EXIT",0
+str_yes:           DB "YES",0
+str_no:            DB "NO",0
+
+                include "ts-dos.asm"
+Main0_End:                                            ; MUST be after ALL main0 code (Init_Core/Init_Int/INT_Handler/ZiFi)
 
                 ; ----- main1_play (slot 3, page #04) — scene-specific code -----
                 SLOT 3 : PAGE #04 : ORG #C000
 Main1_Start:
                 include "Init_Video.asm"
+                include "MenuMain.asm"
+                include "LevelSelect.asm"
                 include "VDC.asm"
                 include "Frog.asm"
                 include "Bullet.asm"
@@ -2547,7 +3774,7 @@ Main0_Size       EQU Core.Main0_End - Core.Start
 Main1_Size       EQU Core.Main1_End - Core.Main1_Start
                 display "Main0:    \t", /A, Core.Start,       " size=", /D, Main0_Size, " bytes (slot 1 page 5)"
                 display "Main1:    \t", /A, Core.Main1_Start, " size=", /D, Main1_Size, " bytes (slot 3 page #04)"
-                SAVEBIN "Core.bin",        Core.Start,       Main0_Size
-                SAVEBIN "main1_play.bin",  Core.Main1_Start, Main1_Size
+                SAVEBIN "Build/Core.bin",        Core.Start,       Main0_Size
+                SAVEBIN "Build/main1_play.bin",  Core.Main1_Start, Main1_Size
 
                 END EntryPoint

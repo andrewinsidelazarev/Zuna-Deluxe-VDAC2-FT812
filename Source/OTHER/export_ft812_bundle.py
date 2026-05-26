@@ -60,7 +60,11 @@ def build_ram_g(equ: dict[str, int]) -> tuple[bytes, list[dict]]:
     manifest: list[dict] = []
 
     def add_file(label: str, addr_name: str, filename: str, limit: int | None = None) -> None:
-        data = (CONV / filename).read_bytes()
+        p = CONV / filename
+        if not p.exists():
+            print(f"  [skip] {label}: {filename} missing (RAM_G zero-filled; DL count unaffected)")
+            return
+        data = p.read_bytes()
         if limit is not None:
             data = data[:limit]
         put(ram, equ[addr_name], data, label, manifest)
@@ -68,12 +72,19 @@ def build_ram_g(equ: dict[str, int]) -> tuple[bytes, list[dict]]:
     def add_pages(label: str, addr_name: str, pattern: str, count: int) -> None:
         addr = equ[addr_name]
         for i in range(count):
-            put(ram, addr + i * 0x4000, (CONV / (pattern % i)).read_bytes(), f"{label}_{i:02d}", manifest)
+            p = CONV / (pattern % i)
+            if not p.exists():
+                print(f"  [skip] {label}_{i:02d}: {pattern % i} missing (RAM_G zero-filled)")
+                continue
+            put(ram, addr + i * 0x4000, p.read_bytes(), f"{label}_{i:02d}", manifest)
 
     add_pages("bg_paletted", "BG_RAMG_ADDR", "bg_paletted_p%02d.bin", equ["BG_PAGE_COUNT"])
     add_file("bg_palette_argb4", "BG_PALETTE_RAMG", "bg_palette_argb4.bin", 512)
-    add_pages("balls_paletted", "BALLS_RAMG_ADDR", "balls_atlas_paletted_p%02d.bin", equ["BALLS_PAGE_COUNT"])
-    add_file("balls_palette_argb4", "BALLS_PALETTE_RAMG", "balls_palette_argb4.bin", 512)
+    if equ.get("BALLS_ARGB4_ENABLED", 0):
+        add_pages("balls_argb4", "BALLS_RAMG_ADDR", "balls_native_p%02d.bin", equ["BALLS_PAGE_COUNT"])
+    else:
+        add_pages("balls_paletted", "BALLS_RAMG_ADDR", "balls_atlas_paletted_p%02d.bin", equ["BALLS_PAGE_COUNT"])
+        add_file("balls_palette_argb4", "BALLS_PALETTE_RAMG", "balls_palette_argb4.bin", 512)
 
     frog_pages = [
         ("frog_body_paletted", "FROG_RAMG_ADDR", "frog_paletted.bin"),
@@ -229,7 +240,10 @@ def export_frames(out_dir: Path, frames: list[int], force_dialog: int | None = N
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=str(ROOT / "_ft812_bundle"))
+    ap.add_argument(
+        "--out",
+        default=str(ROOT / "Diagnostics" / "FT812Bundles" / "_ft812_bundle"),
+    )
     ap.add_argument("--frames", default="0,240,433,500,650")
     ap.add_argument("--force-dialog", type=int, default=None, help="Force VDC_DialogState (0/1/2) per snapshot")
     ap.add_argument("--force-lives", type=int, default=None, help="Force VDC_Lives (0..3) per snapshot")

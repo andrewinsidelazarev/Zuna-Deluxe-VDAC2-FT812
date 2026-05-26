@@ -113,14 +113,17 @@ class TSConfigMemory:
 
     def load_page_block(self, page: int, offset: int, data: bytes) -> None:
         start = page * PAGE_SIZE + offset
-        end = min(start + len(data), (page + 1) * PAGE_SIZE)
+        # spgbld keeps writing a Block into following 16K pages when the file
+        # does not fit its first page. The harness must mirror that layout for
+        # multi-page compressed streams used by menu assets.
+        end = min(start + len(data), len(self.physical))
         self.physical[start:end] = data[: end - start]
 
 
 class ZumaFullZ80Emulator:
     def __init__(self, root: Path = PROJECT_ROOT, trace: bool = False) -> None:
         self.root = Path(root)
-        self.sym = parse_sym(self.root / "zuma.sym")
+        self.sym = parse_sym(self.root / "Build" / "zuma.sym")
         self.mem = TSConfigMemory()
         self.input = InputState()
         self.ft = FT812State()
@@ -346,11 +349,11 @@ class ZumaFullZ80Emulator:
             return self.input.rtc_seconds_bcd
         if low == 0x1F:
             return self.input.kempston
-        if low == 0xFB:
+        if port == 0xFADF:
             return self.input.mouse_buttons
-        if low == 0xDF:
+        if port == 0xFBDF:
             return self.input.mouse_x & 0xFF
-        if low == 0xFF:
+        if port == 0xFFDF:
             return self.input.mouse_y & 0xFF
         if low == 0xFE:
             return self.input.keyboard_rows.get((port >> 8) & 0xFF, 0xFF)

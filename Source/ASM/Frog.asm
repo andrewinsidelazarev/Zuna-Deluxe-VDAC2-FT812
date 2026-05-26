@@ -43,8 +43,6 @@ FROG_TONGUE_SCR_HALF_NEG EQU -FROG_TONGUE_SCR_HALF & 0xFFFF
 ; Overlay 122×122 (= same size как body — features alignment ✓).
 
 FROG_RECOIL_STEP  EQU 10                                ; BRAD/frame; π/0.25 ≈ 12.6 кадров полу-периода
-FROG_DEFAULT_X    EQU 327
-FROG_DEFAULT_Y    EQU 231
 
 FROG_BALL_IDLE    EQU 24                                ; HD: ballExpand idle 24 (= точное Python значение)
 FROG_NEXT_OFFSET  EQU 28                                ; HD next-ball orbit (= точное Python значение)
@@ -74,10 +72,10 @@ Frog_Init:        XOR  A
                   LD   (Frog_TongueExpand), A
                   LD   A, FROG_BALL_IDLE
                   LD   (Frog_BallExpand), A
-                  LD   HL, FROG_DEFAULT_X
+                  CALL GetCurrentFrogX
                   LD   (Frog_PosX), HL
                   LD   (Frog_PosStartX), HL
-                  LD   HL, FROG_DEFAULT_Y
+                  CALL GetCurrentFrogY
                   LD   (Frog_PosY), HL
                   LD   (Frog_PosStartY), HL
                   ; Initial ball colors via VDC RNG (already seeded by VDC_Init).
@@ -284,6 +282,8 @@ Frog_HandleMouse:
                   JR   Z, .fh_block_save
                   LD   A, 1
 .fh_block_save:   LD   (Frog_PrevMouseLeft), A
+                  XOR  A
+                  LD   (VDC_HudPointerBlock), A
                   RET
 .fh_mouse_free:
                   ; Fire = только LMB (стабильно работает). RMB/SPACE/Kempston —
@@ -745,19 +745,31 @@ Frog_DrawBallNow:
                   LD   A, (Frog_Angle)
                   CALL ZL_EmitBallMatrixFromBRAD
 
-                  ; PALETTED4444 dual handle.
+                  ; Balls atlas: ARGB4 canary uses one 16-phase handle; baseline uses PALETTED4444 dual handle.
+                  if BALLS_ARGB4_ENABLED
+                  XOR  A
+                  else
                   LD   A, (Frog_BallColor)
                   CP   4
                   LD   A, 0
                   JR   C, .fbm_h
                   LD   A, 9
+                  endif
 .fbm_h:           CALL ZL_EmitBallHandle
+                  if BALLS_ARGB4_ENABLED
+                  FT_BitmapLayout FT_ARGB4, FROG_BALL_W * 2, FROG_BALL_W
+                  else
                   FT_PaletteSource BALLS_PALETTE_RAMG
                   FT_BitmapLayout FT_PALETTED4444, FROG_BALL_W, FROG_BALL_W
+                  endif
                   FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, FROG_BALL_DST_W, FROG_BALL_DST_W
                   LD   A, (Frog_BallColor)
+                  if BALLS_ARGB4_ENABLED
+                  ADD  A, A : ADD A, A : ADD A, A : ADD A, A              ; *16 = local cell
+                  else
                   AND  3
                   ADD  A, A : ADD A, A : ADD A, A : ADD A, A : ADD A, A    ; *32 = local cell
+                  endif
                   CALL FT.Coprocessor.Cell
                   CALL Frog_EmitVertex2f_Tmp_BallCentred
 
@@ -798,19 +810,31 @@ Frog_DrawNextBall:
                   ADD  HL, DE
                   LD   (Frog_TmpY), HL
 
-                  ; PALETTED4444 dual handle.
+                  ; Balls atlas: ARGB4 canary uses one 16-phase handle; baseline uses PALETTED4444 dual handle.
+                  if BALLS_ARGB4_ENABLED
+                  XOR  A
+                  else
                   LD   A, (Frog_NextBallColor)
                   CP   4
                   LD   A, 0
                   JR   C, .fbn_h
                   LD   A, 9
+                  endif
 .fbn_h:           CALL ZL_EmitBallHandle
+                  if BALLS_ARGB4_ENABLED
+                  FT_BitmapLayout FT_ARGB4, FROG_BALL_W * 2, FROG_BALL_W
+                  else
                   FT_PaletteSource BALLS_PALETTE_RAMG
                   FT_BitmapLayout FT_PALETTED4444, FROG_BALL_W, FROG_BALL_W
+                  endif
                   FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, FROG_BALL_DST_W, FROG_BALL_DST_W
                   LD   A, (Frog_NextBallColor)
+                  if BALLS_ARGB4_ENABLED
+                  ADD  A, A : ADD A, A : ADD A, A : ADD A, A              ; *16 = local cell
+                  else
                   AND  3
                   ADD  A, A : ADD A, A : ADD A, A : ADD A, A : ADD A, A    ; *32 = local cell
+                  endif
                   CALL FT.Coprocessor.Cell
                   CALL Frog_EmitVertex2f_Tmp_BallCentred
                   RET

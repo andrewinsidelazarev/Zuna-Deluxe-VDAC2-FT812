@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""balls_atlas NATIVE ARGB4 — 6 colors × 8 spin phases @ 32×32.
+"""balls_atlas NATIVE ARGB4 — 6 colors × 16 spin phases @ 32×32.
 
 Source: ~/Desktop/Zuma Deluxe/graphics/spritesheet.png (TS-Conf reference).
 Columns в источнике (28×28 cells начиная с x=8):
@@ -12,7 +12,7 @@ Layout: 48 cells vertically stacked, cell = color*8 + spin.
 Total = 48 × 32×32 × 2 bpp = 96 KB = 6 SPG pages.
 
 Output:
-  balls_native_p00..p05.bin   (6 pages)
+  balls_native_p00..p11.bin   (12 pages)
 """
 import os
 from pathlib import Path
@@ -26,7 +26,7 @@ SRC = Path(os.path.expanduser('~/Desktop/Zuma Deluxe/graphics/Zuma Deluxe - Game
 OUT_DIR = ROOT / 'Graphics' / 'Converted'
 
 CELL = 32
-N_PHASES = 8
+N_PHASES = 16
 N_COLORS = 6
 PAGE_BYTES = 16384
 
@@ -56,15 +56,12 @@ def main():
     img = np.array(Image.open(SRC).convert('RGBA'))
     print('source shape:', img.shape)
 
-    # Source has 32 frames per column; we sample 8 evenly (step = 4).
-    SRC_FRAMES = 32
-    step = SRC_FRAMES // N_PHASES
-
     atlas = bytearray()
     for vdc_color in range(N_COLORS):
         png_col = VDC_TO_PNG[vdc_color]
         for phase in range(N_PHASES):
-            src_frame = phase * step
+            # Blue has 47 valid source frames; use that common cycle for all colors.
+            src_frame = round(phase * 47 / N_PHASES)
             y0 = src_frame * CELL
             x0 = png_col * CELL
             cell = img[y0:y0+CELL, x0:x0+CELL]

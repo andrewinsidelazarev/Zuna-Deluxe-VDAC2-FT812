@@ -61,18 +61,18 @@ class ZumaZ80Sim:
         self.cpu = z80.Z80Machine()
         # kosarev/z80: память адресуется через .memory или прямые методы. API ниже
         # допускает оба варианта — финализируем после первого smoke-теста.
-        self.sym = parse_sym(os.path.join(project_root, 'zuma.sym'))
+        self.sym = parse_sym(os.path.join(project_root, 'Build', 'zuma.sym'))
 
         # IN/OUT перехват: всё FT812/TS-Config заглушено.
         self.cpu.set_input_callback(self._on_in)
         self.cpu.set_output_callback(self._on_out)
 
-        self._load_bin(os.path.join(project_root, 'TSLib.bin'),       0x1000)
-        self._load_bin(os.path.join(project_root, 'Core.bin'),        0x5C00)
+        self._load_bin(os.path.join(project_root, 'Build', 'TSLib.bin'),       0x1000)
+        self._load_bin(os.path.join(project_root, 'Build', 'Core.bin'),        0x5C00)
         # main1_play.bin = slot 3 page #04, ORG #C000. Симулятор плоский, оба
         # сегмента одновременно видны. Real Z80 видит main1 через slot 3 mapping
         # после Init_Core (SetPage3 #04).
-        self._load_bin(os.path.join(project_root, 'main1_play.bin'), 0xC000)
+        self._load_bin(os.path.join(project_root, 'Build', 'main1_play.bin'), 0xC000)
 
         # Stack как в spgbld_vdac2.ini: Stack=0x40F2
         self.cpu.sp = 0x40F2

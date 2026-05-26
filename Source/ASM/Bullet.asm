@@ -409,18 +409,30 @@ Bullet_Draw:        LD   A, (Bullet_Active)
                     CALL ZL_EmitSetMatrix
 
                     ; PALETTED4444 dual handle (color<4 → handle 0, color>=4 → handle 9).
+                    if BALLS_ARGB4_ENABLED
+                    XOR  A
+                    else
                     LD   A, (Bullet_Color)
                     CP   4
                     LD   A, 0
                     JR   C, .bullet_h
                     LD   A, 9
+                    endif
 .bullet_h:          CALL ZL_EmitBallHandle
+                    if BALLS_ARGB4_ENABLED
+                    FT_BitmapLayout FT_ARGB4, 64, 32
+                    else
                     FT_PaletteSource BALLS_PALETTE_RAMG
                     FT_BitmapLayout FT_PALETTED4444, 32, 32
+                    endif
                     FT_BitmapSize   FT_BILINEAR, FT_BORDER, FT_BORDER, 32, 32
                     LD   A, (Bullet_Color)                ; re-read (macros clobber B/C/D/E)
+                    if BALLS_ARGB4_ENABLED
+                    ADD  A, A : ADD A, A : ADD A, A : ADD A, A             ; *16 = local cell
+                    else
                     AND  3                                ; local color (0..3)
                     ADD  A, A : ADD A, A : ADD A, A : ADD A, A : ADD A, A   ; *32 = local cell (spin 0)
+                    endif
                     CALL FT.Coprocessor.Cell
                     ; Vertex2f((X - 28) * 16, (Y - 28) * 16)
                     LD   HL, (Bullet_X)

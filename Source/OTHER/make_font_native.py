@@ -29,7 +29,7 @@ TXT_PATH = HD / f'{FONT_NAME}.txt'
 TARGET_H = 30
 
 # nativealien48 has the real uppercase set used by HD-ref for level titles.
-USED_CHARS = list('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:.')
+USED_CHARS = list('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:.-')
 SPACE_WIDTH = 8   # synthesized — used for ' '
 
 

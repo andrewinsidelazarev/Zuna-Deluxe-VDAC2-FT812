@@ -34,7 +34,7 @@ sys.path.insert(0, str(HERE))
 from zuma_z80_simulator import ZumaZ80Sim  # noqa: E402
 
 CELL_SIZE = 32
-TRACK_BIN = PROJECT_ROOT / "Graphics" / "Converted" / "track_640.bin"
+TRACK_BIN = PROJECT_ROOT / "Graphics" / "levels" / "Converted" / "track_640.bin"
 
 
 def _import_full() -> Any:

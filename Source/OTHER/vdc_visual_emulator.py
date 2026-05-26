@@ -60,7 +60,7 @@ BALL_COLORS = {
 def load_track(path=None):
     if path is None:
         _here = os.path.dirname(os.path.abspath(__file__))
-        _converted = os.path.join(os.path.abspath(os.path.join(_here, '..', '..')), 'Graphics', 'Converted')
+        _converted = os.path.join(os.path.abspath(os.path.join(_here, '..', '..')), 'Graphics', 'levels', 'Converted')
         path = os.path.join(_converted, 'track_640.bin')
     data = open(path, 'rb').read()
     n = struct.unpack_from('<H', data, 0)[0]

@@ -59,9 +59,15 @@ VDC_STATE_GAMEOVER EQU 2                                  ; GAME OVER screen
 VDC_STATE_INTRO    EQU 3                                  ; level intro (LEVEL 1-1 + dispname)
 VDC_STATE_PREVIEW  EQU 4                                  ; sparkle wave вдоль track перед спавном
 VDC_STATE_CLOSING  EQU 5                                  ; череп закрывается (frame 11→1)
+VDC_STATE_WIN      EQU 6                                  ; level clear: sparkles, bonus, next level
 VDC_INTRO_TICKS    EQU 240                                ; ~4 сек @ 60Hz
+; VDC_DialogState values for the win flow (после win-анимации):
+DLG_WIN_DONE       EQU 5                                  ; «LEVEL DONE» диалог, ждём OK
+DLG_WIN_FADE       EQU 6                                  ; OK нажат → fade-out в чёрное, потом AdvanceToNextLevel
+VDC_WIN_FADE_STEP  EQU 16                                 ; FadeAlpha += step/кадр (255/16 ≈ 16 кадров ≈ 0.2с)
 VDC_PREVIEW_TICKS  EQU 193                                ; (NumSamples+trail)/SPEED = (2774+112)/15 ≈ 192.4 → закрытие сразу после влёта последней звезды
 VDC_CLOSING_TICKS  EQU 22                                 ; ~0.37 сек closing anim (2 ticks per frame)
+VDC_WIN_TICKS      EQU VDC_PREVIEW_TICKS                  ; sparkle pass, then load next level
 
 ; ============================================================================
 ; VDC_Init — обнулить state, Slots[] = GAP_STOP. Должен быть вызван 1 раз
@@ -100,6 +106,18 @@ VDC_Init:
                 LD   (VDC_GameOverTick),       A
                 LD   (VDC_HudMenuState),       A
                 LD   (VDC_HudPointerBlock),    A
+                ; Gauge bar reset (BUG fix 2026-05-26): без этого GaugeScore/Full
+                ; тащились с прошлого уровня через Win→AdvanceToNextLevel→VDC_Init,
+                ; и новый уровень стартовал с полным баром → спавн сразу отсекался.
+                LD   (VDC_GaugeFull),          A      ; A=0
+                LD   (VDC_GaugeScore),         A
+                LD   (VDC_GaugeScore + 1),     A
+                LD   (VDC_GaugeShown),         A
+                LD   (VDC_GaugeShown + 1),     A
+                ; Per-level/difficulty ball-color count from the settings table
+                ; (поле colors +4). Раньше цвет всегда катился 0..5 (фикс. NUM=6) —
+                ; ранние уровни должны иметь 4. CurrentLevel/Difficulty уже выставлены.
+                CALL VDC_LoadLevelSettings            ; per-level colors/speed/start + accum reset (Core)
                 LD   A, 11                            ; KzFrame=11 (skull mouth wide open) during intro/preview
                 LD   (VDC_KzFrame),            A
                 ; --- Intro state (3) → Preview (4) → Closing (5) → Play (0) ---
@@ -128,7 +146,9 @@ VDC_Init:
                 LD   (VDC_StatTimeFrames),     HL
                 LD   (VDC_GaugeScore),         HL
                 LD   (VDC_GaugeShown),         HL
-                LD   (VDC_PlayerScore),        HL
+                ; VDC_PlayerScore НЕ сбрасываем здесь — счёт adventure накопительный,
+                ; переносится между уровнями (Win→next). Обнуление только на старте
+                ; прогона (FadeLevelSelectToGameplay) и full-restart (RestartLevel lives=0).
                 LD   (VDC_GameSeconds),        HL
                 CALL ReadRTCSeconds
                 LD   (VDC_RtcLastSecond),      A
@@ -298,7 +318,9 @@ ReadRTCRegister:
 VDC_Update:
                 LD   A, (VDC_DialogState)
                 CP   3
-                JR   NZ, .upd_not_pause
+                JR   C, .upd_not_pause       ; <3 (none/retry/gameover) → normal path
+                ; >=3: pause (3) or pause fade-out (4) — freeze gameplay, refresh
+                ; the RTC baseline so the paused/fading seconds are not counted.
                 CALL ReadRTCSeconds
                 LD   (VDC_RtcLastSecond), A
                 XOR  A
@@ -316,6 +338,8 @@ VDC_Update:
                 JP   Z, VDC_UpdateAbsorb
                 CP   VDC_STATE_GAMEOVER
                 RET  Z
+                CP   VDC_STATE_WIN
+                JP   Z, VDC_UpdateWin
                 JR   .upd_play
 .upd_intro:     ; tick countdown, на 0 → PREVIEW
                 LD   A, (VDC_IntroTick)
@@ -369,7 +393,8 @@ VDC_Update:
                 LD   (VDC_StatTimeFrames), HL
                 CALL VDC_CheckKillzone
                 LD   A, (VDC_BallsSpawned)
-                CP   VDC_LEVEL_START_BALLS
+                LD   HL, VDC_LevelStart                 ; per-level lead-in count
+                CP   (HL)
                 JR   NC, .upd_normal
                 ; Fast phase: ×12 MoveChain (35 шаров «поездом»).
                 ; В fast phase spawn без hsub-gate — иначе при wrap-частоте
@@ -380,17 +405,15 @@ VDC_Update:
                 POP  BC
                 DJNZ .upd_fast
                 CALL VDC_AnimateChain
-                JP   VDC_TrySpawn_NoHsubGate
-.upd_normal:    ; Normal phase: VDC_TrySpawn сам gate'ится по HSub==0.
-                ; ЗАКОММЕНТИРОВАН 2026-05-18 — физика теперь 60 Гц вместо 30 Гц.
-                ; Эффект: цепь и spin в 2× быстрее реал-тайм vs baseline.
-                ; Если слишком быстро — раскомментировать AND 1 + RET NZ ниже.
-                LD   A, (ZL_FrameCounter)
-                ; AND  1
-                ; RET  NZ                              ; odd frame → skip всё
-                CALL VDC_MoveChain
+                CALL VDC_TrySpawn_NoHsubGate
+                JP   VDC_CheckWinMaybe
+.upd_normal:    ; Normal phase: per-level chain speed via Core helper (accum +=
+                ; speed_x100; ≥100 → один MoveChain = speed/100 продвижений/кадр).
+                ; Вынесено в Core — Main1/slot3 почти полон. VDC_TrySpawn gate'ится HSub==0.
+                CALL VDC_SpeedAdvance
                 CALL VDC_AnimateChain
-                JP   VDC_TrySpawn
+                CALL VDC_TrySpawn
+                JP   VDC_CheckWinMaybe
 
 ; ============================================================================
 ; VDC_UpdateRtcElapsed — real-time game clock from RTC seconds.
@@ -508,26 +531,12 @@ VDC_SlotPosAllowGap:
                 JR   C, .t_in
                 LD   HL, (TrackData)
                 DEC  HL
-.t_in:
-                ; expose t для caller (используется для spin frame по track-advance)
-                LD   (VDC_LastT), HL
-                ; HL_addr = TrackData + 2 + t*5  (stride 5 = X word + Y word + tangent byte)
-                LD   D, H : LD E, L                    ; DE = t
-                ADD  HL, HL : ADD HL, HL               ; *4
-                ADD  HL, DE                            ; *5
-                LD   DE, TrackData + 2
-                ADD  HL, DE
-                LD   E, (HL) : INC HL
-                LD   D, (HL) : INC HL                  ; DE = X
-                LD   C, (HL) : INC HL
-                LD   B, (HL) : INC HL                  ; BC = Y
-                LD   A, (HL)                           ; A = tangent byte 0..255
-                LD   (VDC_LastTangent), A              ; expose для caller
-                EX   DE, HL                            ; HL = X (free up DE)
-                LD   D, B : LD E, C                    ; DE = Y
-                LD   B, H : LD C, L                    ; BC = X
-                AND  A                                 ; CF = 0
-                RET
+.t_in:          ; HL = t (clamped). Read the sample via a Core-resident helper
+                ; (2-page track split lives there) so this hot path stays tiny —
+                ; Main1/slot3 is nearly full. Core is always mapped in slot 1, so
+                ; the tail-call resolves at runtime. Helper: out BC=X, DE=Y, CF=0,
+                ; sets VDC_LastT / VDC_LastTangent.
+                JP   VDC_ReadSampleAtHL
 
 ; ============================================================================
 ; VDC_TrySpawn — спавн нового шара в хвост (если разрешено).
@@ -1154,9 +1163,10 @@ VDC_CheckMatch3:
                 LD   DE, (VDC_GaugeScore)
                 ADD  HL, DE
                 LD   (VDC_GaugeScore), HL
-                LD   DE, HUD_GAUGE_TARGET
+                CALL GetCurrentTargetScore             ; DE = per-level target (BUG fix: clobbers HL!)
+                LD   HL, (VDC_GaugeScore)               ; reload GaugeScore — CALL above trashed HL
                 AND  A
-                SBC  HL, DE
+                SBC  HL, DE                             ; GaugeScore - target; CF=1 if still below
                 JR   C, .m3_gauge_not_full
                 LD   A, 1
                 LD   (VDC_GaugeFull), A
@@ -1981,9 +1991,9 @@ VDC_RandomColor:
                 XOR  H                                 ; A = 8-bit random
                 LD   L, A
                 LD   H, 0                              ; HL = rand byte (0..255)
-                LD   A, VDC_NUM_COLORS
-                CALL ZL_Mul16x8                        ; HL = rand * NUM (max 6*255 = 1530)
-                LD   A, H                              ; A = (rand * NUM) >> 8 = 0..NUM-1
+                LD   A, (VDC_LevelColors)              ; per-level color count (set in VDC_Init)
+                CALL ZL_Mul16x8                        ; HL = rand * N (max 6*255 = 1530)
+                LD   A, H                              ; A = (rand * N) >> 8 = 0..N-1
                 RET
 
 ; ============================================================================
@@ -2073,69 +2083,13 @@ VDC_UpdateBulletGapTracking:
 ; ============================================================================
 ; VDC_AwardGapBonus — bullet expired без hit'а. Если был gap-pass — начислить
 ; очки по формуле HD-ref Statistics.c::Statistics_AddBulletGap.
-;   points = 500 × (MAX_GAP − distance) / MAX_GAP, clamp ≥10
-;   if gapCount > 1: points *= 2
-; Также: shot без match → BreakChain (StatChainCount = 0).
-;
-; В нашей дискретной 1D модели «distance» = Manhattan-dist bullet→GAP slot.
-; Threshold: gap-pass засчитывается если MinDist <= GAP_HIT_THR (= 24).
-; Bonus scaled DOWN vs original (500) — для target=1000 такой жирный bonus
-; одним промахом заполнял бы бар на 50%. Делаем gap_bonus ~ match-3 magnitude.
+; Реализация вынесена в main0: main1_play сейчас почти заполнен.
 ; ============================================================================
 VDC_GAP_HIT_THR    EQU 24                              ; ~ball radius
 VDC_GAP_MAX        EQU 32
 
 VDC_AwardGapBonus:
-                LD   A, (VDC_BulletGapMinDist)
-                CP   VDC_GAP_HIT_THR + 1
-                JR   NC, .agb_no_gap                   ; > THR → не gap shot
-                ; gap-shot: gapCount++ для consecutive ×2
-                LD   HL, VDC_BulletGapCount
-                INC  (HL)
-                ; bonus = (GAP_MAX − dist), clamp ≥10
-                ; max при dist=0: 32, при dist=THR=24: 8 → bumped до 10 минимум
-                LD   B, A                              ; B = dist
-                LD   A, VDC_GAP_MAX
-                SUB  B                                 ; A = MAX − dist (8..32)
-                LD   L, A : LD H, 0
-                ; clamp ≥ 10
-                LD   A, L
-                CP   10
-                JR   NC, .agb_have_bonus
-                LD   HL, 10
-.agb_have_bonus:
-                ; ×2 если gapCount > 1
-                LD   A, (VDC_BulletGapCount)
-                CP   2
-                JR   C, .agb_have_final
-                ADD  HL, HL
-.agb_have_final:
-                ; HL = final gap bonus. Add to GaugeScore + PlayerScore.
-                PUSH HL
-                LD   DE, (VDC_PlayerScore)
-                ADD  HL, DE
-                LD   (VDC_PlayerScore), HL
-                POP  HL
-                LD   DE, (VDC_GaugeScore)
-                ADD  HL, DE
-                LD   (VDC_GaugeScore), HL
-                LD   DE, HUD_GAUGE_TARGET
-                AND  A
-                SBC  HL, DE
-                JR   C, .agb_done
-                LD   A, 1
-                LD   (VDC_GaugeFull), A
-.agb_done:
-                ; Shot exit без match-3 ломает chain независимо от gap success
-                XOR  A
-                LD   (VDC_StatChainCount), A
-                RET
-.agb_no_gap:
-                ; Не gap-shot — consecutive streak сброшен, chain тоже.
-                XOR  A
-                LD   (VDC_BulletGapCount), A
-                LD   (VDC_StatChainCount), A
-                RET
+                JP   VDC_AwardGapBonusSlot0
 
 
 ; ============================================================================
@@ -2163,6 +2117,7 @@ VDC_GameOverTick:  DEFB 0
 VDC_IntroTick:     DEFB 0   ; intro countdown (frames until state→PREVIEW)
 VDC_PreviewTick:   DEFB 0   ; preview countdown (frames until state→CLOSING)
 VDC_KzCloseTick:   DEFB 0   ; closing countdown (skull 11→1 animation)
+VDC_WinTick:       DEFB 0   ; win-state countdown before next level load
 VDC_KzFrame:       DEFB 0
 VDC_KzEndSub:      DEFB 0
 VDC_HeadAbsorbAlpha: DEFB 255 ; head-ball fade alpha во время state=1 (255→191→127→63→remove)
@@ -2171,6 +2126,10 @@ VDC_DialogState:  DEFB 0    ; 0=NONE, 1=SHOW_RETRY (lives>0), 2=GAME_OVER_FINAL 
 VDC_PrevMouseL:   DEFB 0    ; previous LMB state для edge detection
 VDC_HudMenuState: DEFB 0    ; 0=inactive, 1=hover, 2=pressed
 VDC_HudPointerBlock: DEFB 0 ; pointer over HUD button: suppress frog fire edge
+VDC_LevelColors:  DEFB VDC_NUM_COLORS ; per-level ball-color count (set from settings table in VDC_Init; default 6)
+VDC_LevelSpeed:   DEFB 50              ; per-level chain speed_x100 (set in VDC_Init); normal-phase advance = speed/100 MoveChain/frame
+VDC_LevelStart:   DEFB VDC_LEVEL_START_BALLS ; per-level lead-in ball count (fast-fill threshold)
+VDC_SpeedAccum:   DEFB 0               ; sub-frame speed accumulator for VDC_LevelSpeed
 ; --- Stats counters (показываются в game-over диалоге, reset на VDC_Init) ---
 VDC_StatTimeFrames: DEFW 0  ; сколько frame'ов прошло в state=PLAY (60Hz tick)
 VDC_StatCombos:     DEFB 0  ; текущее combo (≥2 explosions одного цвета подряд)

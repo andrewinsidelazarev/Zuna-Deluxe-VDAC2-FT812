@@ -4465,8 +4465,8 @@ TRACK_NUM_POINTS EQU (TrackEnd - TrackData - 2) / 4
     SLOT 1 : PAGE 5
 
     ; Экспорт в бинарники для SPG-сборки.
-    SAVEBIN "main0.bin", #6000, #2000     ; slot 1 part — 8K
-    SAVEBIN "main1.bin", #8000, #4000     ; slot 2 part — 16K (TrackData spillover + zeros)
+    SAVEBIN "Build/Legacy/main0.bin", #6000, #2000     ; slot 1 part — 8K
+    SAVEBIN "Build/Legacy/main1.bin", #8000, #4000     ; slot 2 part — 16K (TrackData spillover + zeros)
 
     SLOT 1 : PAGE 6
     SAVEBIN "frog_p0.bin", #4000, #4000   ; frog 64×64 page 6 — 16K
@@ -4477,10 +4477,9 @@ TRACK_NUM_POINTS EQU (TrackEnd - TrackData - 2) / 4
     SLOT 1 : PAGE 9
     SAVEBIN "frog_p3.bin", #4000, #4000   ; frog 64×64 page 9 — 16K
     SLOT 1 : PAGE 10
-    SAVEBIN "page_a.bin", #4000, #4000    ; cursor+balls+preview — 16K
+    SAVEBIN "Build/Legacy/page_a.bin", #4000, #4000    ; cursor+balls+preview — 16K
 
-    LABELSLIST "user.l"
-
+    LABELSLIST "Build/Legacy/user.l"
 
 
 

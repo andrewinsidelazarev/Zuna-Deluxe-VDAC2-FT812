@@ -157,7 +157,11 @@ ZL_BALL_HALF     EQU ZL_BALL_DIAM_PX / 2              ; центр rect'а (= pi
 ;   K = 256*16*113/(355*16) ≈ 81.49 → 81.
 ;
 ; K держится в RAM (ZL_SpinK) — runtime, можно менять per-level. Default = compile-time.
+                if BALLS_ARGB4_ENABLED
+ZL_ATLAS_PHASES            EQU 16
+                else
 ZL_ATLAS_PHASES            EQU 32
+                endif
 ZL_SPIN_DIAM_SAMPLES       EQU VDC_CELL_SIZE / 2
 ZL_SPIN_K_NUM              EQU 256 * ZL_ATLAS_PHASES * 113
 ZL_SPIN_K_DEN              EQU 355 * ZL_SPIN_DIAM_SAMPLES
@@ -271,11 +275,17 @@ ZL_DrawFrame:
                 CALL DrawKillzoneDual
 
                 ; ============================================================
-                ; Frog composition — SKIP при показанном dialog
+                ; Frog composition — SKIP при показанном dialog (states 1/2/3).
+                ; Draw during PLAY (0) AND during pause fade-out (4): the frog
+                ; appears from the first fade frame so it is ready when the
+                ; window finishes fading and PLAY resumes.
                 ; ============================================================
                 LD   A, (Core.VDC_DialogState)
                 OR   A
+                JR   Z, .draw_frog
+                CP   4
                 JR   NZ, .skip_frog
+.draw_frog:
                 if ZL_FROG_DRAW_ENABLED
                 XOR  A
                 CALL FT.Coprocessor.Cell
@@ -307,14 +317,20 @@ ZL_DrawFrame:
                 ; Palette ARGB4 (256 × 2 = 512 байт) в FT_RAM_G #080000.
                 ; FT_PaletteSource устанавливает указатель для текущей primitive.
                 ; ============================================================
+                if !BALLS_ARGB4_ENABLED
                 FT_PaletteSource BALLS_PALETTE_RAMG
                 LD   A, 9
                 CALL ZL_EmitBallHandle
                 FT_BitmapLayout FT_PALETTED4444, ZL_BALL_W, ZL_BALL_H
                 FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, ZL_BALL_W, ZL_BALL_H
+                endif
                 XOR  A
                 CALL ZL_EmitBallHandle
+                if BALLS_ARGB4_ENABLED
+                FT_BitmapLayout FT_ARGB4, ZL_BALL_W * 2, ZL_BALL_H
+                else
                 FT_BitmapLayout FT_PALETTED4444, ZL_BALL_W, ZL_BALL_H
+                endif
                 FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, ZL_BALL_W, ZL_BALL_H
 
                 ; --- VDC chain rendering: per-ball tangent + grouped matrix emit.
@@ -362,7 +378,11 @@ ZL_DrawFrame:
                 AND  ZL_SPIN_MASK                      ; spin 0..31
                 LD   D, A
                 LD   A, (ZL_TmpFrame)                 ; color
+                if BALLS_ARGB4_ENABLED
+                ADD  A, A : ADD A, A : ADD A, A : ADD A, A               ; x16
+                else
                 ADD  A, A : ADD A, A : ADD A, A : ADD A, A : ADD A, A    ; x32
+                endif
                 ADD  A, D                             ; cell = color*32 + spin
                 LD   (ZL_TmpFrame), A
                 ; --- stable raw tangent (per-ball matrix замена bucket-loop 2026-05-18) ---
@@ -461,7 +481,15 @@ ZL_DrawFrame:
                 ; --- Skip matrix emit если quantized tangent совпал с предыдущим
                 ; emit'ом (соседи цепи часто в одном bucket'е). 16 BRAD canary quantization.
                 LD   A, (IX+0)                        ; stable tangent
-                AND  #F0                              ; round to 16 BRAD (16 buckets)
+                LD   D, A
+                LD   A, (ZL_BallCount)
+                CP   70
+                LD   A, D
+                JR   C, .PBQuant16
+                AND  #E0                              ; 8 buckets only at full chain
+                JR   .PBQuantDone
+.PBQuant16:     AND  #F0                              ; 16 buckets normally
+.PBQuantDone:
                 LD   HL, ZL_TmpLastTangent
                 CP   (HL)
                 JR   Z, .PBNoMatrix                   ; same bucket → reuse matrix
@@ -471,11 +499,15 @@ ZL_DrawFrame:
                 CALL ZL_EmitBallMatrixFromBRAD
 .PBNoMatrix:
                 ; --- dual handle: cell<128 → handle 0; cell>=128 → handle 9 ---
+                if BALLS_ARGB4_ENABLED
+                XOR  A
+                else
                 LD   A, (IX+1)                        ; cell (= color*32 + spin)
                 AND  #80
                 LD   A, 0
                 JR   Z, .PBHSet
                 LD   A, 9
+                endif
 .PBHSet:        ; lazy: skip BITMAP_HANDLE emit если same как previous ball
                 LD   HL, ZL_TmpLastHandle
                 CP   (HL)
@@ -484,7 +516,9 @@ ZL_DrawFrame:
                 CALL ZL_EmitBitmapHandle              ; clobbers BCDE
 .PBHandleSame:
                 LD   A, (IX+1)
+                if !BALLS_ARGB4_ENABLED
                 AND  #7F                              ; local cell within handle
+                endif
                 CALL FT.Coprocessor.Cell
                 ; Match-3 visual phase: draw the normal ball with hardware fade-out.
                 ; ColorA is persistent, so restore 255 immediately after this vertex.
@@ -603,6 +637,13 @@ ZL_DrawFrame:
                 LD   A, (VDC_GameState)
                 CP   VDC_STATE_PREVIEW
                 CALL Z, DrawPreviewSparkles
+                LD   A, (VDC_GameState)
+                CP   VDC_STATE_WIN
+                CALL Z, DrawPreviewSparkles
+
+                ; --- LEVEL DONE fade-out overlay (поверх всего). При FadeAlpha=0
+                ; (обычный геймплей) DrawFadeOverlay сразу RET — безвредно. ---
+                CALL DrawFadeOverlay
 
                 ; ============================================================
                 ; SPI/GPU load indicator (temporary):

@@ -335,6 +335,7 @@ strong {
 <li><a href="#20-lesson">20.4 Универсальный урок</a></li>
 </ul>
 </li>
+<li><a href="#21-fs-tsconf-2026-05-26">Глава 21. Файловая система TS-Conf: загрузка ассетов с SD/FAT32 — проблемы и решения (2026-05-26)</a></li>
 </ul>
 </div>
 
@@ -2273,6 +2274,56 @@ overlay   handle 6   Vertex2f  без Cell  → cell НАСЛЕДОВАН от n
 <p><strong>Sync на vsync должен быть ПЕРЕД сторонним I/O write, не ПОСЛЕ.</strong> Z80-only работа (input read из port, game state update в RAM, DL build в Z80 buffer) НЕ трогает FT812 → может идти в любое время, в т.ч. параллельно с render.</p>
 
 <p>Только I/O в FT812 (<code>FT_CMD_Write</code>, <code>FT_WR_REG</code>) требует vblank window. Поэтому правильный sync = «build в любое время, sync прямо перед I/O burst».</p>
+
+<h2 id="21-fs-tsconf-2026-05-26">Глава 21. Файловая система TS-Conf: загрузка ассетов с SD/FAT32 — проблемы и решения (2026-05-26)</h2>
+
+<p>Игра не помещается целиком в SPG (640×480 ассеты × 22 уровня). Решение: код в SPG, а данные уровней (фон/палитра/трек/превью/титул) — во внешнем паке <code>ZUMALVL.PAK</code> на FAT32-разделе, который игра читает <strong>в рантайме своим драйвером</strong>. Ниже — грабли пути «SD → RAM → FT812» и как их обошли.</p>
+
+<h3 id="21-1-arch">21.1. Архитектура: PAK + свой FAT32-драйвер (RawPak)</h3>
+<ul>
+<li><strong>Формат PAK:</strong> сектор 0 = header (magic <code>ZLVP</code>), сектор 1 = TOC[22]×20 байт (offset+size каждой секции: bg/pal/track/title/preview), далее данные по уровням, sector-aligned.</li>
+<li><strong>Драйвер RawPak</strong> (<code>Source/ASM/ts-dos.asm</code> + <code>sd_zc.asm</code>): свой парсинг BPB (superfloppy: bps=512, spc=1, reserved=32, fats=2), FAT-walk (<code>FatNext</code>: cluster&gt;&gt;7 + FatStart, отдельный <code>FatBuf</code>), LFN-сопоставление имён, чтение секторов через <code>CMD17</code>.</li>
+<li><strong>Почему свой, а не бандл-драйвер WC:</strong> штатный CORE32 LOAD512 (page #0F) дрейфил −128 секторов из SPG-контекста (stateful, stale high-word при mount). Свой self-contained драйвер надёжнее.</li>
+</ul>
+
+<h3 id="21-2-cmd17">21.2. Проблема: CMD18 (multi-block) нестабилен → CMD17 (single-block)</h3>
+<p>Чтение пачкой (CMD18) на Z-Controller (#57/#77) давало битые сектора. <strong>Решение:</strong> читать по одному сектору CMD17 (байтовая адресация, аргумент = LBA×512). Медленнее, но снимок BPB и данные корректны на железе. <code>sd_wait</code> сделать <strong>боундед</strong> (таймаут, не вечный спин — иначе зависшая карта вешает шину).</p>
+
+<h3 id="21-3-twophase">21.3. Проблема: FT812 и SD на ОДНОЙ SPI-шине → двухфазная загрузка</h3>
+<p>FT812 и SD-карта висят на одном Z-Controller SPI (#57/#77). <strong>Чередование</strong> SD-чтения и <code>FT.WriteMem</code> крашит шину (garbage в RAM_G). <strong>Решение — двухфазно:</strong> сначала ВСЁ читаем с SD в Z80 RAM (bg→стейдж-страницы, pal, track), потом ОДНИМ переходом всё заливаем <code>FT.WriteMem</code> в RAM_G FT812. Один переход SD→FT вместо чередования.</p>
+
+<h3 id="21-4-lfn">21.4. Проблема: 8.3 short-name алиасы инжектора → LFN-сопоставление</h3>
+<p>Инжектор создаёт каталоги с короткими алиасами (<code>GAMES~1</code>, <code>ZUMADE~1</code>). <strong>Решение:</strong> искать по ДЛИННЫМ именам (<code>Games</code> / <code>Zuma Deluxe VDAC2</code> / <code>ZUMALVL.PAK</code>) — собирать LFN-фрагменты (offsets 1,3,5,7,9,14,16,18,20,22,24,28,30 в LFN-записи) и сравнивать. Robustно к любым алиасам.</p>
+
+<h3 id="21-5-bclobber">21.5. Грабли: B-clobber в FAT-walk</h3>
+<p><code>RawPak_FatNext</code> клобал регистр B, а <code>RawPak_SkipB</code> держал в B счётчик DJNZ → <code>LoadNon(1)</code> уходил по всей FAT-цепочке до EOC → нулевой TOC. <strong>Решение:</strong> <code>RawPak_AdvanceOne = PUSH BC : CALL FatNext : POP BC</code>. Урок: на Z80 любая helper-функция в цикле должна сохранять регистры цикла.</p>
+
+<h3 id="21-6-contig">21.6. Допущение непрерывности PAK (LBA = PakLba + N)</h3>
+<p>Чтобы не идти по FAT-цепочке на каждый сектор, кэшируем LBA первого сектора файла (<code>RawPak_PakLba</code>) и считаем <code>LBA = PakLba + N</code>. Это <strong>верно только для непрерывного (contiguous) файла</strong>. На практике инжектор кладёт PAK непрерывно (проверка <code>check_pak_chain.py</code>: 0 разрывов FAT-цепочки). ⚠️ Если бы PAK фрагментировался — верхние сектора читались бы не те. <strong>Диагностика:</strong> при «битых верхних уровнях» НЕ кидаться чинить непрерывность вслепую — сначала проверить FAT-цепочку и сверить байты данных на образе с локальным ассетом (SHA). В нашем случае непрерывность была ни при чём (см. 21.7).</p>
+
+<h3 id="21-7-trackpage">21.7. Баг: трек &gt; одной 16K-страницы → верхние уровни не грузились</h3>
+<p>Симптом: L04/07/16/17/18/20-22 — мусорный фон + трек от L1. Причина <strong>НЕ</strong> фрагментация (PAK непрерывен, данные на месте), а <strong>лимит размера трека</strong>: загрузчик читал трек в ОДНУ 16K-страницу (#06) и валидацией отвергал трек ≥33 секторов (<code>CP 33 : JP NC,.Err</code>). У длинных треков &gt;3276 сэмплов (5 байт/сэмпл) не лезло. <strong>Решение — трек на 2 страницы:</strong></p>
+<ul>
+<li><strong>Pack</strong> (<code>make_level_pack.py pagesplit_track</code>): длинный трек кладётся page-aligned — chunkA (header + сэмплы 0..3275, добито до 16384) + chunkB (сэмплы 3276..). Запись не пересекает границу страницы.</li>
+<li><strong>Loader:</strong> валидация <code>CP 65</code> (до 64 сект = 2 стр); читать ≤32 сект в #06, остаток — в #0F (свободна после v039).</li>
+<li><strong>Рантайм</strong> (<code>VDC_SlotPos</code>): page-aware чтение сэмпла — sample&lt;3276 → #06 addr <code>#8002+s*5</code>; иначе → #0F addr <code>#8000+(s-3276)*5</code>, с восстановлением страницы. Вынесено в Core-хелпер (Main1 почти полон).</li>
+</ul>
+<p>Урок: «трек ≤ 1 страница» был сквозным неявным лимитом (loader + рантайм). Любой ассет, который мапится в slot и читается по offset, ограничен 16K — для большего нужен явный page-split на границе записи.</p>
+
+<h3 id="21-8-spgsize">21.8. Миф: «размер SPG ломает загрузку» — ОПРОВЕРГНУТ</h3>
+<p>Долго казалось, что WC SPG-loader виснет на раздутом SPG (наши 1.93МБ не грузились, после среза до 1.28МБ — грузились). <strong>Но</strong> у Сергея Слободчикова Street Fighter <code>SFv1.1.spg</code> = 3.17МБ грузится тем же загрузчиком прекрасно. Значит жёсткого потолка размера НЕТ; наши фейлы были <strong>флака SD-чтения</strong> (v037 грузился со 2-й попытки) или конкретный битый/неудачно лёгший блок, а не размер. Урок: корреляция «размер ↔ не грузится» может быть ложной; искать структурную/флака-причину.</p>
+
+<h3 id="21-9-fadealpha">21.9. Грабли: stale-альфа при переходе room→gameplay</h3>
+<p><code>FadeOutRoom</code> (переход level-select→gameplay) оставляет <code>FadeAlpha=255</code>. Когда в gameplay добавили <code>DrawFadeOverlay</code> (для win-fade), он стал заливать экран чёрным (видны только часы — они рисуются ПОСЛЕ оверлея). <strong>Решение:</strong> сбрасывать <code>FadeAlpha=0</code> на входе в gameplay. Урок: общий state (альфа перехода) надо явно сбрасывать на границе режимов; добавляя per-frame оверлей — проверь, что управляющая им переменная инициализирована во всех путях входа.</p>
+
+<h3 id="21-10-diag">21.10. Диагностические инструменты файловой системы</h3>
+<ul>
+<li><code>Source/OTHER/test_rawpak_z80.py</code> — реальный Z80 RawPak в эмуляторе с хуком <code>sd_read_sector</code> на FAT-образ инжектора (без хостовых циклов). Поймал B-clobber, проверил two-phase.</li>
+<li><code>verify_lfn_walk.py</code> — сверка LFN-walk на реальном хост-образе.</li>
+<li><code>check_pak_chain.py</code> / <code>check_host_wc_img.py</code> — непрерывность FAT-цепочки PAK + целостность (SHA).</li>
+<li><code>test_gameplay_level_load_ramg.py --level-index N</code> — гоняет <code>LoadGameplayLevelSpecificFromPack</code> для уровня N, проверяет bg/pal в RAM_G + CF=1 (загрузилось vs fallback).</li>
+<li><strong>RAM-дамп при сломанном пейджинге БЕСПОЛЕЗЕН</strong> (slot1 ≠ Core). Но при штатном геймплее дамп валиден: flat 64K, slot1=Core, slot3=main1 — читай переменные по адресам из <code>zuma.sym</code> (напр. FadeAlpha@0x6E40 подтвердил 21.9).</li>
+</ul>
 
 </body>
 </html>

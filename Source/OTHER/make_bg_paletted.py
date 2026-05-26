@@ -2,10 +2,10 @@
 """Build 400x300 PALETTED4444 background for FT812.
 
 Output:
-  Graphics/Converted/bg_paletted.bin          400*300 8bpp indices
-  Graphics/Converted/bg_paletted_p00..p07.bin 8 padded 16K pages
-  Graphics/Converted/bg_palette_argb4.bin     512-byte ARGB4 LE palette
-  Graphics/Converted/bg_paletted.zlib         zlib stream for FT812 CMD_INFLATE
+  Graphics/levels/Converted/bg_paletted.bin          400*300 8bpp indices
+  Graphics/levels/Converted/bg_paletted_p00..p07.bin 8 padded 16K pages
+  Graphics/levels/Converted/bg_palette_argb4.bin     512-byte ARGB4 LE palette
+  Graphics/levels/Converted/bg_paletted.zlib         zlib stream for FT812 CMD_INFLATE
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from PIL import Image
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
-OUT = ROOT / "Graphics" / "Converted"
+OUT = ROOT / "Graphics" / "levels" / "Converted"
 LEVELS_SRC = Path.home() / "Desktop" / "Zuma Deluxe" / "graphics" / "levels"
 PAGE_SZ = 0x4000
 W, H = 400, 300

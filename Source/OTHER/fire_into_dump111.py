@@ -20,7 +20,7 @@ CELL_SIZE = 32
 DELTA_THR = 4
 
 # Load dump 111 — 64KB Z80 memory snapshot.
-DUMP_PATH = Path(PROJECT_ROOT) / '111'
+DUMP_PATH = Path(PROJECT_ROOT) / 'Diagnostics' / 'Dumps' / '111'
 with open(DUMP_PATH, 'rb') as f:
     dump = f.read()
 print(f'dump 111: {len(dump)} bytes')

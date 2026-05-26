@@ -38,7 +38,7 @@ LEVEL_ORDER = [
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
-CONVERTED = os.path.join(PROJECT_ROOT, 'Graphics', 'Converted')
+CONVERTED = os.path.join(PROJECT_ROOT, 'Graphics', 'levels', 'Converted')
 TEMP_DIR = PROJECT_ROOT
 LEVELS_HD = os.path.join(os.path.expanduser('~'), 'Desktop', 'Zuma Deluxe',
                          'graphics', 'levels-HD')

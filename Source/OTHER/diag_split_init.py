@@ -52,7 +52,7 @@ def main():
     print(f"  slot 3 -> page {emu.mem.pages[3]:#04x} (expected 0x04 main1_play)")
 
     # Verify main1_play.bin visible at #C000
-    main1_path = PROJECT_ROOT / 'main1_play.bin'
+    main1_path = PROJECT_ROOT / 'Build' / 'main1_play.bin'
     if main1_path.exists():
         m1 = main1_path.read_bytes()
         visible = emu.get_memory(0xC000, 32)
