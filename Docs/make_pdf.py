@@ -246,7 +246,7 @@ def main():
         <div class="meta">
             ZX-Evo · TS-Conf · Z80 · FT81x<br>
             Сквозной пример: классическая Zuma на нативном железе<br>
-            Версия: baseline 2026-05-10 (full HD frog composition)
+            Версия: baseline v041 (2026-05-26) · 31 глава
         </div>
     </div>
     '''

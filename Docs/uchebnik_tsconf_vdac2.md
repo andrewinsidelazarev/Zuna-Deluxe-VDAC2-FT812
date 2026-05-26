@@ -7,14 +7,44 @@
 **Целевая аудитория:** разработчики на Z80 (sjasmplus / asm), знакомые с TS-Conf,
 расширяющие свой код на работу с FT812 через VDAC2.
 
-**Источники, осмысленные на сегодня:**
-- `VDAC2 #2 - Первые шаги.docx` (русскоязычный учебник #2 — порты ZX-Evo, SPI обвязка, Z80 asm-функции FT_RD/FT_WR)
-- `FT81x.pdf` (FTDI FT_001165, datasheet FT81X Embedded Video Engine, v1.2 / 2015) — memory map, регистры, RGB-таймминги
-- `FT81X_Series_Programmer_Guide.pdf` (FTDI, 4 МБ) — полное программерское руководство с opcode таблицами
-- `BRT_AN_033_BT81X-Series-Programming-Guide.pdf` (Bridgetek, 4.8 МБ) — расширение для BT81x (совместимая семья)
-- `AN_303 FT800 Image File Conversion.pdf` — конвертация изображений в FT-форматы
-- `The_Gameduino_2_Tutorial,_Reference_and_Cookbook` (J. Bowman, 2013) — высокоуровневое API через C++ Gameduino wrapper, Cookbook с практиками
-- **`TSLib`** (DeadlyKom, GitHub) — готовая asm-библиотека для ZX-Evo + FT812. Лежит локально в `Docs\TSLib\` (исходники + полная FTDI документация в `Docs\TSLib\FT812\Docs\`). Главный практический референс.
+**Источники, осмысленные на сегодня** (локальные копии — в `Docs/`; ссылки — на оригиналы):
+- `VDAC2 #2 - Первые шаги.docx` — русскоязычный учебник #2 (порты ZX-Evo, SPI-обвязка, Z80 asm-функции FT_RD/FT_WR). Железо VDAC2 — [TS-Labs / ZX-Evolution](https://zx.andrew-lazarev.com/our-products/vdac2-videoreview-ru/).
+- `FT81x.pdf` — Bridgetek **FT81X Embedded Video Engine Datasheet** (memory map, регистры, RGB-таймминги): <https://brtchip.com/wp-content/uploads/Support/Documentation/Datasheets/ICs/EVE/DS_FT81x.pdf>
+- `FT81X_Series_Programmer_Guide.pdf` — Bridgetek **FT81X Series Programmer Guide** (opcode-таблицы DL/coprocessor): <https://brtchip.com/wp-content/uploads/Support/Documentation/Programming_Guides/ICs/EVE/FT81X_Series_Programmer_Guide.pdf>
+- `BRT_AN_033_BT81X-Series-Programming-Guide.pdf` — Bridgetek **BT81X Series Programming Guide** (расширение для совместимой BT81x; ASTC, CMD_FLASH*): <https://brtchip.com/wp-content/uploads/2023/12/BT81X-Series-Programming-Guide.pdf>
+- `AN_303 FT800 Image File Conversion.pdf` — конвертация изображений в FT-форматы (Bridgetek App Notes: <https://brtchip.com/document/application-notes/>).
+- **AN_340** — Bridgetek App Note про DXT1-эмуляцию на EVE (основа глав 18–19; см. портал App Notes выше).
+- `The_Gameduino_2_Tutorial,_Reference_and_Cookbook` — J. Bowman, 2013 (высокоуровневое API EVE через Gameduino-обёртку + Cookbook): PDF <https://excamera.com/files/gd2book_v0.pdf>, исходник книги <https://github.com/jamesbowman/gd2-book>.
+- **`TSLib`** — готовая asm-библиотека для ZX-Evo + FT812 (DeadlyKom). Лежит локально в `Docs\TSLib\` (исходники + полная FTDI-документация в `Docs\TSLib\FT812\Docs\`). Главный практический референс. FT812-SDK для ZX-Evo: <https://hype.retroscene.org/blog/734.html>; общий репозиторий ZX-Evolution: <https://github.com/tslabs/zx-evo>.
+- **Bridgetek EveApps** — официальные демо + эмулятор EVE (используется в главе 25): <https://github.com/Bridgetek/EveApps>.
+
+---
+
+## Структура учебника
+
+Учебник состоит из двух частей. Подробное оглавление со ссылками генерируется
+автоматически (раздел «Содержание» выше в HTML/PDF).
+
+**Часть I. Основы FT812 / VDAC2 (главы 1–11)** — фундамент, выведенный из
+датшитов и TSLib: аппаратная связка ZX-Evo+VDAC2, SPI-протокол, memory map,
+видеотайминги 640×480, Display List, bitmap-форматы, производительность/DMA,
+главный цикл рендера и карта TSLib API. Читается линейно как введение.
+
+**Часть II. Журнал разработки Zuma (главы 12–30)** — практический опыт в
+хронологическом порядке: каждая глава фиксирует конкретную задачу/баг/решение
+с датой и ссылками на код, baseline и память. Главы самодостаточны — можно
+читать выборочно по теме. Сквозные темы:
+
+- **Рендеринг и оптимизация DL:** 12 (bitmap matrix/scale/paletted), 16 (persistent DL state), 17 (vsync-first), 20 (render-loop приёмы), 21 (адаптивная группировка матриц шаров), 23 (PALETTED4444 шаров), 24 (бюджет строки FT812), 26 (BITMAP_HANDLE binding), 27 (matrix LUT, ARGB4 frog → fix tearing).
+- **Фон уровня:** 18–19 (DXT1-эмуляция L2/L4), 24 (почему перешли на единый PALETTED4444-проход).
+- **Игровые объекты:** 13, 15 (композиция лягушки), 14 (RNG), 28 (RTC-часы).
+- **Инструменты и методология:** 25 (эмулятор EveApps + дамп RAM_DL), 29 (когда эмулятор сам врёт — источник истины = RAM dump).
+- **Загрузка с SD:** 30 (FAT32-драйвер: эволюция от WC ZiFi к собственному CMD17+LFN).
+- **Игровые системы (adventure):** 31 (выбор уровня, параметры из таблицы, перенос счёта, Win/Pause).
+
+> Нумерация глав сквозная (1→31). Историческое примечание: ранние версии
+> учебника использовали отдельные пометки `§N/§M/§R` и нумерацию журнала
+> с 18 — в ревизии 2026-05-26 всё приведено к сплошной нумерации.
 
 ---
 
@@ -798,9 +828,9 @@ Smoke-test: `_test_init_video.asm` — точка входа `Init_Video → Mai
 
 ---
 
-## §N. Bitmap rendering — matrix transform, scale, paletted formats (опыт 2026-05-09)
+## Глава 12. Bitmap rendering — matrix transform, scale, paletted formats (опыт 2026-05-09)
 
-### N.1 Главный урок: BITMAP_TRANSFORM работает на bitmap UV, не на screen position
+### 12.1 Главный урок: BITMAP_TRANSFORM работает на bitmap UV, не на screen position
 
 В FT81x матрица `BITMAP_TRANSFORM_A..F` (set через `cmd_setmatrix` после `cmd_loadidentity` + операций) трансформирует **bitmap UV-coordinates** (= какой пиксель bitmap читать), не screen position.
 
@@ -829,13 +859,13 @@ FT_End
 
 Matrix формула: `M = T(28,28) * R(angle) * T(-28,-28)`. Combined rotations (tangent + spin) можно складывать в одну: `R(tangent + spin)` → один `cmd_rotate`.
 
-### N.2 cmd_scale convention
+### 12.2 cmd_scale convention
 
 `cmd_scale(sx, sy)` где `sx, sy` — f16.16 fixed-point. **`scale(N, N)` отображает bitmap в N раз больше** на экране (= sprite displayed at N× native size), не наоборот. Counter-intuitive потому что matrix transforms UV.
 
 Пример: bg хранится 400×300 в RAM_G, нужно отобразить 640×480. Scale factor = 640/400 = 480/300 = 1.6. `cmd_scale(0x1999A, 0x1999A)` (= 1.6 in f16.16).
 
-### N.3 BITMAP_SIZE при upscale
+### 12.3 BITMAP_SIZE при upscale
 
 `FT_BitmapSize filter, wrap_x, wrap_y, screen_width, screen_height` определяет **output area on screen** (clipping bounds). При upscale указываем целевой размер 640×480, не native размер bitmap.
 
@@ -843,7 +873,7 @@ Matrix формула: `M = T(28,28) * R(angle) * T(-28,-28)`. Combined rotation
 
 Filter `FT_BILINEAR` (vs `FT_NEAREST`) даёт smooth interpolation между native pixels при upscale — обязательно для качественного render scaled bitmap.
 
-### N.4 Memory budget для bg (1 MB RAM_G FT812)
+### 12.4 Memory budget для bg (1 MB RAM_G FT812)
 
 bg 640×480 в разных форматах:
 | Format | Size | Quality | Эмулятор Unreal |
@@ -858,13 +888,13 @@ bg 640×480 в разных форматах:
 
 **Unreal эмулятор НЕ реализует palette-formats** — серый фон при попытке. На реальном железе ZX-Evo+FT812 PALETTED должен работать (стандарт FT81x).
 
-### N.5 Asymmetric downscale (X≠Y)
+### 12.5 Asymmetric downscale (X≠Y)
 
 Можно хранить bg с разными scale по осям. Пример: 480×240 RGB565 (X=0.75×, Y=0.5×) = 230 KB. cmd_scale(640/480, 480/240) = cmd_scale(1.33×, 2×). Полезно если detail неравномерно: больше горизонтально (Y blur приемлем) или вертикально.
 
 Для типичных Zuma backgrounds (rotational symmetry — спираль, swirley) — detail изотропен, симметричный downscale (320×240, 400×300) лучше.
 
-### N.6 spgbld page-padding gotcha
+### 12.6 spgbld page-padding gotcha
 
 Каждая spgbld page = 16384 байт. Если data меньше → padding zeros. При upload через циклы `FT.WriteMem 16384` → padding zeros пишутся в RAM_G **после** реальных данных.
 
@@ -873,9 +903,9 @@ bg 640×480 в разных форматах:
 2. Gap: ≥16384 байт между блоками.
 3. Точный last-page byte count: передавать `BC = real_size mod 16384` для last page.
 
-См. также §N.X (root cause flicker chain 2026-05-09: bg-padding затирал atlas).
+См. также Главу 12 (root cause flicker chain 2026-05-09: bg-padding затирал atlas).
 
-### N.7 Compression: PNG/JPEG
+### 12.7 Compression: PNG/JPEG
 
 GPU FT812 рендерит **только uncompressed pixel buffer** в RAM_G (нужен random pixel access). PNG/JPEG как source — только для compression в spg-файле:
 - `cmd_loadimage` (coprocessor): JPEG/PNG → uncompressed RAM_G (single-pass decode).
@@ -883,14 +913,14 @@ GPU FT812 рендерит **только uncompressed pixel buffer** в RAM_G (
 
 Это уменьшает spg-file, но НЕ RAM_G. RAM_G всегда хранит uncompressed.
 
-### N.8 Финальный выбор для Zuma VDAC2 (level 1 spiral)
+### 12.8 Финальный выбор для Zuma VDAC2 (level 1 spiral)
 
 `make_bg_level01.py`: source `levels/level_src_<NN>.png` (clean 640×480) → resize 400×300 LANCZOS → RGB565 LE.
 `MainLoop.asm` ZL_DrawFrame: cmd_loadidentity + cmd_scale(0x1999A, 0x1999A) + cmd_setmatrix + bg setup + Begin/Vertex2ii(0,0,1,0)/End.
 
 Memory: 240 KB bg + ~310 KB atlas + freedom для дальнейших assets (frog, score, particles).
 
-### N.8.1 Полный pipeline компрессии bg (нюансы практики)
+### 12.8.1 Полный pipeline компрессии bg (нюансы практики)
 
 **Workflow `make_bg_level01.py` → spg → RAM_G:**
 
@@ -904,158 +934,9 @@ Memory: 240 KB bg + ~310 KB atlas + freedom для дальнейших assets (
 
 ---
 
-## Глава 18. Frog с полной HD-композицией (2026-05-10)
+### 12.8.2 Bug retro: bg-padding затирает atlas (#0A6000..#0A8000)
 
-### 18.1 Render order (HD-1:1)
-
-```
-plate (no rotation)         — диск под лягушкой
-body (rotation matrix)      — frog с лапами + face/mouth
-tongue (rotation matrix)    — язык, position = pos + tongueExpand·dir
-ball-now (no rotation)      — выстреливаемый шар, position = pos + ballExpand·dir
-next-ball (no rotation)     — индикатор на спине, position = pos - 28·dir
-overlay (rotation matrix)   — face без лап (HD blink frame 0), маскирует корни tongue
-```
-
-Все 4 rotated спрайта (body, tongue, overlay) — **одного размера 122×122**. Это критично для **feature alignment**: после rotation eyes body и eyes overlay должны совпадать → они должны быть на одинаковых **относительных** pixel-offsets от sprite centra. Разный размер → разные относительные offsets → "moon-like" дрейф features при rotation.
-
-### 18.2 RAM_G layout (1 МБ, baseline 2026-05-10)
-
-```
-#010000..#04C000  bg (15 pages, 400×300 RGB565 + scale 1.6 upscale)
-#04C000..#04E000  killzone (1 page real, в bg padding zone)
-#050000..#09C000  balls atlas (19 pages — 6 colors × 8 phases × 56×56 ARGB4)
-#09C000..#0A4000  body 122×122 ARGB4 (2 pages)
-#0A4000..#0AC000  plate 122×122
-#0AC000..#0B4000  tongue 122×122
-#0B4000..#0BC000  overlay 122×122 (HD blink frame 0)
-свободно           272 КБ для будущих assets
-```
-
-**Balls atlas сжат с 16 phases до 8** — освободило 18 pages для overlay full-size.
-Chain spin formula поменялась: `& 7` вместо `& 15`, `cell = color*8` вместо `*16`.
-
-### 18.3 Tongue — pos + tongueExpand·dir (HD orbit)
-
-В отличие от tight-cropped sprite (32×80) с pivot (16, 29) — full 122×122 sprite даёт ту же rotation pattern что body:
-
-```asm
-; Frog_DrawTongue:
-;   matrix = T(61, 61) · R(angle + 192) · T(-61, -61)
-;   Vertex2f at (TmpX-61, TmpY-61), screen rect 122×122
-;   TmpX = PosX + cos·tongueExpand/128
-;   TmpY = PosY + sin·tongueExpand/128
-```
-
-`tongueExpand = 24` idle (HD), 0..24 при выстреле. Tongue native асимметричный (stripe внутри 162×162 native занимает y=53..133), поэтому при rotation вокруг centra (61, 61) tongue tip "выходит" из mouth area body.
-
-### 18.4 Ball-now / Next-ball через chain atlas (handle 0)
-
-Используется **тот же** atlas что и chain rendering. Cell = `color*8 + 0` (frame 0, не вращается). Native размер 56×56, рендерится без cmd_scale.
-
-```asm
-; Frog_DrawBallNow:
-;   no rotation matrix (identity).
-;   BITMAP_HANDLE 0 / SOURCE BALLS_RAMG_ADDR / LAYOUT 56*2/56 / SIZE 56/56.
-;   Cell(ballColor*8) → frame 0 selected color.
-;   Vertex2f((TmpX-28)*16, (TmpY-28)*16), centred at TmpX, TmpY.
-;   TmpX = PosX + cos·ballExpand/128 (idle = 24).
-```
-
-Next-ball аналогично, но `pos - NEXT_OFFSET·dir` (= -28·dir, на спине после rotation body).
-
-### 18.5 Recoil cycle (HD-style fire animation)
-
-ЛКМ rise-edge → `isFire=1, recoilTick=0, ballExpand=0, ballColor=nextBallColor, nextBallColor=random(0..3)`.
-
-Каждый кадр:
-- `recoilTick += 10 BRAD` (≈0.245 rad, HD = 0.25).
-- `recoil = sin(recoilTick)` (signed byte, -127..127).
-- Пока recoil ≥ 0:
-  - `tongueExpand = 24 - (recoil·24)>>7` → язык втягивается в рот (24→0).
-  - `ballExpand += 2` (cap 24) → шар выезжает.
-  - `pos = posStart - (cos·recoil)/2048, posStart - (sin·recoil)/2048` → тело откатывается на ~8 px max.
-- recoil < 0 → end fire, всё в idle.
-
-Полу-цикл синуса = 13 кадров (≈260ms на 50fps), полное возврат ballExpand до 24 — ещё ~5 кадров.
-
-### 18.6 FT81x cmd_scale: matrix хранит INVERSE
-
-Param scale = visual ratio = output/native:
-- bg upscale 400→640: `cmd_scale(1.6)` = 0x1999A. Matrix внутри S(1/1.6) = S(0.625). UV = 0.625·screen → UV(640) = 400. ✓ samples full bg.
-- ball downscale 56→32: `cmd_scale(0.5714)` = 0x9249. Matrix S(1.75). UV = 1.75·screen → UV(32) = 56. ✓ samples full ball.
-
-Документация FT81x неоднозначна — проверять empirically через bg upscale.
-
-### 18.7 Critical bugs found and fixed (2026-05-10 session)
-
-**Bug 1 — Frog_ComputeAngle truncate без clamp.**
-`LD C, L` для `|dx| > 255` обрезает high byte H, остаётся младший байт. E.g., dx=313=0x139 → C=0x39=57. Swap-логика `|dy| > |dx|` инвертируется → frog резко крутится у краёв экрана.
-
-Fix:
-```asm
-.dx_pos:
-    LD   A, H
-    OR   A
-    JR   Z, .dx_clamped
-    LD   L, 255              ; saturate to 255 if H ≠ 0
-.dx_clamped:
-    LD   C, L                ; true 8-bit clamp
-```
-
-То же для `.dy_pos`.
-
-**Bug 2 — Frog_DrawNextBall забывал cmd_scale.**
-DrawBallNow применял scale matrix, DrawNextBall пропускал → next-ball рендерился at native 56×56 в screen rect 32×32, центрирован через 16-px half → визуально "огромный шар" с неправильной позицией.
-
-Fix: либо добавить scale matrix в DrawNextBall, либо (как в baseline 2026-05-10) убрать scale из обеих функций и рендерить native 56×56.
-
-**Bug 3 — Multi-sprite feature alignment.**
-Body 122 + overlay 80 → eyes на разных pixel-offsets от sprite centra → после rotation eyes body и overlay расходятся → "две точки вращения как Луна".
-
-Fix: все спрайты с одинаковыми features ОДНОГО размера. Required: balls atlas 16→8 phases для освобождения RAM_G.
-
-### 18.8 Python visual_emulator.py — prototype-first workflow
-
-Прототипирование parameters (rotation formula, pivot, offsets, recoil curve) в `visual_emulator.py` (tkinter+PIL) даёт Х30-Х100 ускорение vs цикла sjasmplus → spgbld → Unreal. Параметры подбираются интерактивно через keys (стрелки, `[`/`]`, `,`/`.`, `r`), затем переносятся в asm как численные EQU.
-
-Visual emulator не симулирует FT812 cmd_translate/rotate/scale 1:1 — но даёт визуальный **target behavior** для asm transfer. Различия rendering pipeline (PIL bilinear vs FT812 BILINEAR + cmd_scale convention) могут давать ±1-2 px смещения, но архитектурные параметры (radii, pivots, formulas) переносятся точно.
-
-
-**Ключевые количественные приёмы:**
-
-- **scale 1.6 = `0x1999A`** в f16.16 (0.6×65536 ≈ 0x9999, целая 1 = 0x10000). **Не `0x19999`, не `0x1A000`** — точное значение.
-- **stride = native_width × bpp**, НЕ display_width. Для 400×300 RGB565 stride = 400×2 = 800. Если поставить 1280 (= 640×2 для display) — bitmap читается из неправильных адресов в RAM_G, на экране каша.
-- **BITMAP_SIZE.W/H = display, BITMAP_LAYOUT.height = native.** Это обязательная асимметрия: SIZE определяет output rect (для clipping), LAYOUT — storage в RAM_G.
-- **FT_BILINEAR обязательно** для качества. С `FT_NEAREST` 400×300→640×480 даёт ступеньки на диагоналях.
-
-**Что НЕ использовали и почему:**
-
-| Approach | Причина отказа |
-|---|---|
-| Full 640×480 RGB565 (614 KB) | занимает 60% RAM_G, не оставляет места под atlas (300+ KB) |
-| 320×240 RGB565 + scale 2× (154 KB) | заметная потеря деталей на детализированной spirale |
-| RGB332 (307 KB) | работает, но 256 цветов + dithering = грязный gradient на воде |
-| PALETTED8 (308 KB + 1 KB palette) | **Unreal эмулятор не поддерживает** — серый экран. На реальном железе должно работать (стандарт FT81x), но без возможности отладки на эмуляторе — не используем. |
-| `cmd_loadimage` JPEG decode | RAM_CMD coprocessor decode 640×480 на загрузку (overhead ~2 сек), нужен `cmd_inflate` для zlib потоков; spg-файл становится меньше, но RAM_G всё равно uncompressed. Не оправдано когда spg ёмкость не критична. |
-
-**Полученный bg memory layout:**
-
-```
-RAM_G:
-  #000000..#040FFF  → reserved (DL/FONT/HANDLES area FT812)
-  #010000..#04A8FF  → bg_level01 (240 000 bytes RGB565 400×300)
-  #04A900..#04FFFF  → bg padding (~5 KB) + free
-  #050000..#0E4FFF  → balls atlas (602 112 bytes ARGB4 6×16×56×56)
-  #0E5000..#0FCFFF  → frog body/plate/tongue (3×30 KB ARGB4 122×122)
-  #0FD000..#0FEFFF  → killzone (8 KB)
-```
-
-Дальше по AvailableRamG ещё ~6 KB до 1 MB конца — запас для score, particles.
-
-### N.8.2 Bug retro: bg-padding затирает atlas (#0A6000..#0A8000)
-
-Эта история относится к §N.6 page-padding gotcha. **Хронология:**
+Эта история относится к §12.6 page-padding gotcha. **Хронология:**
 - bg первый раз грузился ПОСЛЕ atlas. atlas в `#050000..#0A6000` (302 KB старая версия 6×8 frames). bg в `#010000..#04A800` (240 KB).
 - spgbld bg padding = `0A8000 - 04A800 = 5C800` нулей. Они шли в `#04A800..#0A8000`, **затирая первые 8 KB atlas** (`#0A6000..#0A8000`) — это были последние пара cells, рендерились как пустые → flicker chain.
 - Fix: bg грузится **первым**, atlas — вторым. Atlas pages пишут поверх bg-padding в `#0A6000+` свежими данными → atlas цел.
@@ -1064,11 +945,11 @@ RAM_G:
 
 ---
 
-## §M. Frog composition: HD-стиль pipeline (опыт 2026-05-09/10)
+## Глава 13. Frog composition: HD-стиль pipeline (опыт 2026-05-09/10)
 
 Композиция лягушки в Zuma-Deluxe (HD-версия `github.com/GalaxyShad/Zuma-Deluxe-HD`) — multi-sprite c rotation matrix. В VDAC2 реализуется через FT812 multiple BITMAP_HANDLE + matrix manipulation.
 
-### M.1 Источники подспрайтов в `frog.png`
+### 13.1 Источники подспрайтов в `frog.png`
 
 `frog.png` (324×648 RGBA) — sprite-sheet. Координаты 1:1 из `Zuma-Deluxe-HD/src/zuma/ResourceStore.c`:
 
@@ -1082,7 +963,7 @@ RAM_G:
 
 Resize 162→122 (LANCZOS) даёт scale ≈ 0.753. Соотношение body/ball = 122/40 ≈ 3.05 (HD соотношение 162/48 = 3.375; -10% — компромисс под 640×480).
 
-### M.2 Render pipeline (Frog_Draw порядок)
+### 13.2 Render pipeline (Frog_Draw порядок)
 
 Из HD `Frog.c`:
 ```c
@@ -1103,7 +984,7 @@ VDAC2 эквивалент в `Frog.asm`:
 2. **`Frog_DrawBody`** — handle 2, matrix `T(61,61) · R(angle-64) · T(-61,-61)` (где 61 = sprite_W/2, -64 = -π/2 для native face=south).
 3. **`Frog_DrawTongue`** — handle 5, та же matrix как body + offset Vertex2f на `tongueExpand·dir`. (на текущем этапе отключён до реализации recoil).
 
-### M.3 Rotation matrix pattern (см. также §N.1)
+### 13.3 Rotation matrix pattern (см. также §12.1)
 
 ```z80
 Frog_DrawBody:
@@ -1131,7 +1012,7 @@ Frog_DrawBody:
 
 **Ключевой урок:** matrix НЕ задаёт screen position (это делает Vertex2f), matrix трансформирует **UV-чтение** внутри bitmap-rect. T(+61,+61) переносит UV-origin в центр sprite, R(angle) вращает UV вокруг этого origin, T(-61,-61) возвращает; результат — rotated bitmap внутри своего фиксированного screen-rect.
 
-### M.4 Atan2 от курсора → angle
+### 13.4 Atan2 от курсора → angle
 
 Источник: `c:\z80\zuma\zuma_new_spg.asm:793 ComputeFrogAngle` (TS-Conf версия, скопирован 1:1 в `Frog.asm`). Алгоритм:
 
@@ -1145,7 +1026,7 @@ Frog_DrawBody:
 
 Возвращает BRAD 0..255: 0=east, 64=south, 128=west, 192=north.
 
-### M.5 Hybrid follow для плавного rotation
+### 13.5 Hybrid follow для плавного rotation
 
 Прямое присваивание `Frog_Angle = computed` даёт jitter при mouse-jitter (kempston через Hyper-V — особенно):
 - Big diff (≥4 BRAD = >5.6°) → snap
@@ -1155,7 +1036,7 @@ Frog_DrawBody:
 
 Subjective результат: при медленном движении мыши лягушка плавно догоняет, при быстром — мгновенно прыгает. То же самое было в TS-Conf версии, проверено годами.
 
-### M.6 Tongue bbox (для будущего расчёта tongueExpand)
+### 13.6 Tongue bbox (для будущего расчёта tongueExpand)
 
 Native tongue (162×162 region из frog.png):
 - bbox непрозрачных пикселей: x=59..103, y=53..132 (45×80)
@@ -1173,9 +1054,9 @@ Vertex2f((tongueX-61)*16, (tongueY-61)*16)
 
 ---
 
-## §R. RNG: LFSR Galois + bias + RTC-scramble (опыт 2026-05-10)
+## Глава 14. RNG: LFSR Galois + bias + RTC-scramble (опыт 2026-05-10)
 
-### R.1 LFSR Galois 16-bit
+### 14.1 LFSR Galois 16-bit
 
 Базовый PRNG, периодом 65535 (на любом non-zero seed):
 ```z80
@@ -1191,7 +1072,7 @@ LFSR16:                          ; state в HL
 ```
 Альтернативные полиномы `#D008`, `#A005` — те же свойства period-65535.
 
-### R.2 Bias-ловушка: `AND N + clamp` на не-степени двойки
+### 14.2 Bias-ловушка: `AND N + clamp` на не-степени двойки
 
 Распространённая ошибка для распределения LFSR-output на N значений:
 ```z80
@@ -1209,7 +1090,7 @@ RET                  ; A в 0..5
 
 Visible эффект: на экране **в 2 раза больше синих и красных шаров** (если color 0=blue, 1=red).
 
-### R.3 Mul-then-shift: равномерное распределение
+### 14.3 Mul-then-shift: равномерное распределение
 
 ```z80
 LD A, L : XOR H              ; смешать обе половины LFSR (8 бит entropy)
@@ -1239,7 +1120,7 @@ LD A, H                      ; (A * N) >> 8
 RET
 ```
 
-### R.4 RTC-scramble seed (для разнообразия per launch)
+### 14.4 RTC-scramble seed (для разнообразия per launch)
 
 LFSR с фиксированным seed → одна и та же последовательность каждый запуск. Решение — scramble через TS-Conf RTC секунды:
 ```z80
@@ -1278,7 +1159,156 @@ VDC_Init:
 Каждая секунда (RTC ticks) = разный multiplier → разное seed → разная LFSR-цепочка цветов в каждом запуске.
 
 
-## Глава 19. FT81x DL persistent state — Cell, BITMAP_HANDLE и ловушки наследования (2026-05-10)
+## Глава 15. Frog с полной HD-композицией (2026-05-10)
+
+### 15.1 Render order (HD-1:1)
+
+```
+plate (no rotation)         — диск под лягушкой
+body (rotation matrix)      — frog с лапами + face/mouth
+tongue (rotation matrix)    — язык, position = pos + tongueExpand·dir
+ball-now (no rotation)      — выстреливаемый шар, position = pos + ballExpand·dir
+next-ball (no rotation)     — индикатор на спине, position = pos - 28·dir
+overlay (rotation matrix)   — face без лап (HD blink frame 0), маскирует корни tongue
+```
+
+Все 4 rotated спрайта (body, tongue, overlay) — **одного размера 122×122**. Это критично для **feature alignment**: после rotation eyes body и eyes overlay должны совпадать → они должны быть на одинаковых **относительных** pixel-offsets от sprite centra. Разный размер → разные относительные offsets → "moon-like" дрейф features при rotation.
+
+### 15.2 RAM_G layout (1 МБ, baseline 2026-05-10)
+
+```
+#010000..#04C000  bg (15 pages, 400×300 RGB565 + scale 1.6 upscale)
+#04C000..#04E000  killzone (1 page real, в bg padding zone)
+#050000..#09C000  balls atlas (19 pages — 6 colors × 8 phases × 56×56 ARGB4)
+#09C000..#0A4000  body 122×122 ARGB4 (2 pages)
+#0A4000..#0AC000  plate 122×122
+#0AC000..#0B4000  tongue 122×122
+#0B4000..#0BC000  overlay 122×122 (HD blink frame 0)
+свободно           272 КБ для будущих assets
+```
+
+**Balls atlas сжат с 16 phases до 8** — освободило 18 pages для overlay full-size.
+Chain spin formula поменялась: `& 7` вместо `& 15`, `cell = color*8` вместо `*16`.
+
+### 15.3 Tongue — pos + tongueExpand·dir (HD orbit)
+
+В отличие от tight-cropped sprite (32×80) с pivot (16, 29) — full 122×122 sprite даёт ту же rotation pattern что body:
+
+```asm
+; Frog_DrawTongue:
+;   matrix = T(61, 61) · R(angle + 192) · T(-61, -61)
+;   Vertex2f at (TmpX-61, TmpY-61), screen rect 122×122
+;   TmpX = PosX + cos·tongueExpand/128
+;   TmpY = PosY + sin·tongueExpand/128
+```
+
+`tongueExpand = 24` idle (HD), 0..24 при выстреле. Tongue native асимметричный (stripe внутри 162×162 native занимает y=53..133), поэтому при rotation вокруг centra (61, 61) tongue tip "выходит" из mouth area body.
+
+### 15.4 Ball-now / Next-ball через chain atlas (handle 0)
+
+Используется **тот же** atlas что и chain rendering. Cell = `color*8 + 0` (frame 0, не вращается). Native размер 56×56, рендерится без cmd_scale.
+
+```asm
+; Frog_DrawBallNow:
+;   no rotation matrix (identity).
+;   BITMAP_HANDLE 0 / SOURCE BALLS_RAMG_ADDR / LAYOUT 56*2/56 / SIZE 56/56.
+;   Cell(ballColor*8) → frame 0 selected color.
+;   Vertex2f((TmpX-28)*16, (TmpY-28)*16), centred at TmpX, TmpY.
+;   TmpX = PosX + cos·ballExpand/128 (idle = 24).
+```
+
+Next-ball аналогично, но `pos - NEXT_OFFSET·dir` (= -28·dir, на спине после rotation body).
+
+### 15.5 Recoil cycle (HD-style fire animation)
+
+ЛКМ rise-edge → `isFire=1, recoilTick=0, ballExpand=0, ballColor=nextBallColor, nextBallColor=random(0..3)`.
+
+Каждый кадр:
+- `recoilTick += 10 BRAD` (≈0.245 rad, HD = 0.25).
+- `recoil = sin(recoilTick)` (signed byte, -127..127).
+- Пока recoil ≥ 0:
+  - `tongueExpand = 24 - (recoil·24)>>7` → язык втягивается в рот (24→0).
+  - `ballExpand += 2` (cap 24) → шар выезжает.
+  - `pos = posStart - (cos·recoil)/2048, posStart - (sin·recoil)/2048` → тело откатывается на ~8 px max.
+- recoil < 0 → end fire, всё в idle.
+
+Полу-цикл синуса = 13 кадров (≈260ms на 50fps), полное возврат ballExpand до 24 — ещё ~5 кадров.
+
+### 15.6 FT81x cmd_scale: matrix хранит INVERSE
+
+Param scale = visual ratio = output/native:
+- bg upscale 400→640: `cmd_scale(1.6)` = 0x1999A. Matrix внутри S(1/1.6) = S(0.625). UV = 0.625·screen → UV(640) = 400. ✓ samples full bg.
+- ball downscale 56→32: `cmd_scale(0.5714)` = 0x9249. Matrix S(1.75). UV = 1.75·screen → UV(32) = 56. ✓ samples full ball.
+
+Документация FT81x неоднозначна — проверять empirically через bg upscale.
+
+### 15.7 Critical bugs found and fixed (2026-05-10 session)
+
+**Bug 1 — Frog_ComputeAngle truncate без clamp.**
+`LD C, L` для `|dx| > 255` обрезает high byte H, остаётся младший байт. E.g., dx=313=0x139 → C=0x39=57. Swap-логика `|dy| > |dx|` инвертируется → frog резко крутится у краёв экрана.
+
+Fix:
+```asm
+.dx_pos:
+    LD   A, H
+    OR   A
+    JR   Z, .dx_clamped
+    LD   L, 255              ; saturate to 255 if H ≠ 0
+.dx_clamped:
+    LD   C, L                ; true 8-bit clamp
+```
+
+То же для `.dy_pos`.
+
+**Bug 2 — Frog_DrawNextBall забывал cmd_scale.**
+DrawBallNow применял scale matrix, DrawNextBall пропускал → next-ball рендерился at native 56×56 в screen rect 32×32, центрирован через 16-px half → визуально "огромный шар" с неправильной позицией.
+
+Fix: либо добавить scale matrix в DrawNextBall, либо (как в baseline 2026-05-10) убрать scale из обеих функций и рендерить native 56×56.
+
+**Bug 3 — Multi-sprite feature alignment.**
+Body 122 + overlay 80 → eyes на разных pixel-offsets от sprite centra → после rotation eyes body и overlay расходятся → "две точки вращения как Луна".
+
+Fix: все спрайты с одинаковыми features ОДНОГО размера. Required: balls atlas 16→8 phases для освобождения RAM_G.
+
+### 15.8 Python visual_emulator.py — prototype-first workflow
+
+Прототипирование parameters (rotation formula, pivot, offsets, recoil curve) в `visual_emulator.py` (tkinter+PIL) даёт Х30-Х100 ускорение vs цикла sjasmplus → spgbld → Unreal. Параметры подбираются интерактивно через keys (стрелки, `[`/`]`, `,`/`.`, `r`), затем переносятся в asm как численные EQU.
+
+Visual emulator не симулирует FT812 cmd_translate/rotate/scale 1:1 — но даёт визуальный **target behavior** для asm transfer. Различия rendering pipeline (PIL bilinear vs FT812 BILINEAR + cmd_scale convention) могут давать ±1-2 px смещения, но архитектурные параметры (radii, pivots, formulas) переносятся точно.
+
+
+**Ключевые количественные приёмы:**
+
+- **scale 1.6 = `0x1999A`** в f16.16 (0.6×65536 ≈ 0x9999, целая 1 = 0x10000). **Не `0x19999`, не `0x1A000`** — точное значение.
+- **stride = native_width × bpp**, НЕ display_width. Для 400×300 RGB565 stride = 400×2 = 800. Если поставить 1280 (= 640×2 для display) — bitmap читается из неправильных адресов в RAM_G, на экране каша.
+- **BITMAP_SIZE.W/H = display, BITMAP_LAYOUT.height = native.** Это обязательная асимметрия: SIZE определяет output rect (для clipping), LAYOUT — storage в RAM_G.
+- **FT_BILINEAR обязательно** для качества. С `FT_NEAREST` 400×300→640×480 даёт ступеньки на диагоналях.
+
+**Что НЕ использовали и почему:**
+
+| Approach | Причина отказа |
+|---|---|
+| Full 640×480 RGB565 (614 KB) | занимает 60% RAM_G, не оставляет места под atlas (300+ KB) |
+| 320×240 RGB565 + scale 2× (154 KB) | заметная потеря деталей на детализированной spirale |
+| RGB332 (307 KB) | работает, но 256 цветов + dithering = грязный gradient на воде |
+| PALETTED8 (308 KB + 1 KB palette) | **Unreal эмулятор не поддерживает** — серый экран. На реальном железе должно работать (стандарт FT81x), но без возможности отладки на эмуляторе — не используем. |
+| `cmd_loadimage` JPEG decode | RAM_CMD coprocessor decode 640×480 на загрузку (overhead ~2 сек), нужен `cmd_inflate` для zlib потоков; spg-файл становится меньше, но RAM_G всё равно uncompressed. Не оправдано когда spg ёмкость не критична. |
+
+**Полученный bg memory layout:**
+
+```
+RAM_G:
+  #000000..#040FFF  → reserved (DL/FONT/HANDLES area FT812)
+  #010000..#04A8FF  → bg_level01 (240 000 bytes RGB565 400×300)
+  #04A900..#04FFFF  → bg padding (~5 KB) + free
+  #050000..#0E4FFF  → balls atlas (602 112 bytes ARGB4 6×16×56×56)
+  #0E5000..#0FCFFF  → frog body/plate/tongue (3×30 KB ARGB4 122×122)
+  #0FD000..#0FEFFF  → killzone (8 KB)
+```
+
+Дальше по AvailableRamG ещё ~6 KB до 1 MB конца — запас для score, particles.
+
+## Глава 16. FT81x DL persistent state — Cell, BITMAP_HANDLE и ловушки наследования (2026-05-10)
 
 После сборки полной HD-композиции лягушки (глава 18) проявился неприятный
 интермиттент-баг: **«крышка» (face overlay) иногда исчезала на N кадров
@@ -1405,7 +1435,7 @@ sprite ПОСЛЕ atlas-блока) и привело к Cell.
 текущий sprite их не наследует случайно (или явно ресетит).
 
 
-## Глава 20. Vsync-first sync: race между Z80 build и FT812 render (2026-05-10)
+## Глава 17. Vsync-first sync: race между Z80 build и FT812 render (2026-05-10)
 
 После сборки полного gameplay loop (chain physics + bullet + match-3) на реальном
 железе ZX-Evo + FT812 проявился класс артефактов: «цветной мусор / линии посередине
@@ -1512,7 +1542,7 @@ build делается в render time, write строго в vblank.
 - Hemisphere insert (target = i vs i+1 по ближайшему neighbour).
 
 
-## Глава 21. DXT1-эмуляция на FT812: компрессия фона до 0.5 байт/пикс через L2-mask + RGB565 blend (2026-05-12)
+## Глава 18. DXT1-эмуляция на FT812: компрессия фона до 0.5 байт/пикс через L2-mask + RGB565 blend (2026-05-12)
 
 ### Задача
 
@@ -1549,7 +1579,7 @@ FT812 умеет каждый из этих кусков по-отдельнос
   L2 пишет alpha канал, c0/c1 рисуются с `DST_ALPHA` / `ONE_MINUS_DST_ALPHA` blend
 
 Это классический трюк из EVE Application Note **AN_340** (DXT1 emulation,
-Bridgetek). Конвертер `ft812_dxt_convert.py` (автор — Lina, TSL community)
+Bridgetek). Конвертер `ft812_dxt_convert.py` (автор — TS-Labs)
 раскладывает обычный DXT1 в нужный layout.
 
 ### Формат raw файла
@@ -1727,7 +1757,7 @@ NOT Текст и UI — здесь DXT1 даёт «лесенки» из-за �
 
 Опции качества (effort `-e 0..10`):
 - `-e 0` — быстро, шумный (видны блоки 4×4 на градиентах)
-- `-e 3` — почти неотличим от оригинала (рекомендация Lina)
+- `-e 3` — почти неотличим от оригинала (рекомендация TS-Labs)
 - `-e 6+` — perceptual weights + seam smoothing + residual diffusion, медленно
 
 Базовый запуск:
@@ -1758,15 +1788,15 @@ DXT1-эмуляция выигрывает по uncompressed size (тот же �
 ### Источники
 
 - **EVE Application Note AN_340** (Bridgetek, "Compressing texture using DXT1 with EVE2/EVE3 chipsets") — оригинальная идея трюка.
-- `ft812_dxt_convert.py` — реализация конвертера, автор Lina (TSL community).
+- `ft812_dxt_convert.py` — реализация конвертера, автор TS-Labs.
 - `reference_zuma_vdac2_dxt1_emulation_l2_blend.md` — компактная памятка по технике.
 - `feedback_sjasmplus_macro_or_parens.md` — про скобки в FT_CMD_BUF.
 
-## Глава 22. Апгрейд DXT1-эмуляции с L2 до L4: +50% SPI за фотокачество (2026-05-12)
+## Глава 19. Апгрейд DXT1-эмуляции с L2 до L4: +50% SPI за фотокачество (2026-05-12)
 
 ### Зачем понадобился L4
 
-Глава 21 описала DXT1 на L2-маске: 0.5 байт/пикс, 153 600 байт на 640×480.
+Глава 18 описала DXT1 на L2-маске: 0.5 байт/пикс, 153 600 байт на 640×480.
 Объёмно идеально, но на каменной текстуре фона `level_src_01` оставалась
 заметная **блочность 4×4**.
 
@@ -1935,7 +1965,7 @@ Block = #0000, #16, killzone_p00.bin     ; следом, без overlap
 |---------------------------------------|-----------|---------|-----------------|
 | Raw RGB565 640×480                    | 614 400   | 1.00×   | reference       |
 | 400×300 RGB565 + scale 1.6 NEAREST    | 240 000   | 0.39×   | ступенька 1.6×  |
-| DXT1_L2 (Глава 21)                    | 153 600   | 0.25×   | блочность 4×4   |
+| DXT1_L2 (Глава 18)                    | 153 600   | 0.25×   | блочность 4×4   |
 | **DXT1_L4 (эта глава)**               | **230 400** | **0.38×** | **фоторовно** |
 | ARGB4 native 640×480                  | 614 400   | 1.00×   | reference       |
 
@@ -1958,14 +1988,14 @@ L4 даёт **2/3 объёма** native RGB565 при визуально нео�
   после интеграции.
 - FT81x PG §4.7.7 — таблица `BITMAP_LAYOUT.format` (FT_L1/L2/L4/L8 codes).
 
-## Глава 23. Render-loop оптимизации и DL-emit ловушки (2026-05-17)
+## Глава 20. Render-loop оптимизации и DL-emit ловушки (2026-05-17)
 
-Главы 18-22 закрыли визуальную часть Zuma. Эта глава — три приёма, которые
+Главы 15-19 закрыли визуальную часть Zuma. Эта глава — три приёма, которые
 выжали из FT812 ещё несколько процентов и закрыли тонкий баг рендера.
 Появились в процессе финального полировок kill-zone (плавное поглощение
 шаров) и frog-композиции.
 
-### 23.1 Bucket-grouped tangent rotation: 32 cmd_rotate → 16, а потом обратно
+### 20.1 Bucket-grouped tangent rotation: 32 cmd_rotate → 16, а потом обратно
 
 VDC выдаёт каждому шару в цепи `tangent` 0..255 — направление трека в точке.
 HD-источник вращает каждый шар своим `cmd_rotate(angle)`, но на FT812 это
@@ -2001,7 +2031,7 @@ CALL ZL_EmitRotate                     ; A = BRAD 0..255
 jitter** — глаз ловит ступеньки. Откатили обратно в 32. Урок: не оптимизируй
 "на глаз" в статике; смотри на самые быстрые моменты gameplay.
 
-### 23.2 Per-sprite alpha fade через COLOR_A — плавное поглощение
+### 20.2 Per-sprite alpha fade через COLOR_A — плавное поглощение
 
 FT812 имеет команду `COLOR_A(alpha)` — умножает alpha-канал последующего
 bitmap'а на 0..255. Это позволяет делать **dissolve-эффект на спрайте без
@@ -2036,7 +2066,7 @@ CALL FT.Coprocessor.ColorA      ; восстановить для остальн
 (PUSH IX / POP HL / CP HIGH / CP LOW) — это slot[0]. COLOR_A применяется только
 к этому одному `Vertex2f`.
 
-### 23.3 Cell/ColorA корраптят BC/DE — координаты грузить ПОСЛЕ, а не ДО
+### 20.3 Cell/ColorA корраптят BC/DE — координаты грузить ПОСЛЕ, а не ДО
 
 Все одноаргументные DL-команды TSLib (`Cell`, `ColorA`, `Tag`, `LineWidth`...)
 эмитятся через `Command_BCDE` — формируют 4 байта опкода в BC/DE и пишут в
@@ -2070,7 +2100,7 @@ Bug-symptom при wrong ordering: спрайт рисуется в верхне
 Vertex2f нет ли промежуточного CALL'а к Cell/ColorA/Tag/etc. Если есть —
 переставить порядок.
 
-### 23.4 Скип лишнего DL: bg-baked = overlay не нужен
+### 20.4 Скип лишнего DL: bg-baked = overlay не нужен
 
 Иногда самый быстрый рендер — **не рисовать вообще**. Kill-zone "закрытый
 череп" уже запечён в bg-арте (golden 8-pointed sun); рисовать overlay
@@ -2088,7 +2118,7 @@ DrawKillzoneDual:
 освобождает Z80 cycles для chain physics + input + sound. Микроптимизация,
 но накладывается на каждый "статичный" sprite в render-loop'е.
 
-### 23.5 Continuous-motion absorb через HSub-advance (mirror of fast-spawn)
+### 20.5 Continuous-motion absorb через HSub-advance (mirror of fast-spawn)
 
 Last optimization-pattern: **используй существующий механизм движения, не пиши
 свой**. Игра уже умеет двигать цепь плавно — в fast-spawn phase chain
@@ -2137,9 +2167,9 @@ alpha в 255. **Visual continuity = 1 px разрыв** вместо discrete ce
 - FT81x PG §4.5 — `COLOR_A` opcode + persistent DL state.
 
 
-## Глава 24. Per-ball matrix с per-slot hysteresis и grouped emit (2026-05-18)
+## Глава 21. Per-ball matrix с per-slot hysteresis и grouped emit (2026-05-18)
 
-### 24.1 Постановка задачи
+### 21.1 Постановка задачи
 
 Шары цепи Zuma вращаются по тангенсу трека: на изгибе спрайт повёрнут так,
 чтобы рисунок (рельеф/блик) шёл по направлению движения, а не «лежал на
@@ -2169,7 +2199,7 @@ Translate(+16) → Rotate(θ) → Translate(-16) — стандартная св
 
 FT812 coproc'у на это не хватает vblank-окна даже на 74Hz → **тиринг на реале.**
 
-### 24.2 Альтернатива #1: бакеты — почему не подошло
+### 21.2 Альтернатива #1: бакеты — почему не подошло
 
 Классический способ дёшево покрыть N шаров: разбить tangent диапазон 0..255 BRAD
 на K корзин (buckets), назначить каждому шару ближайшую корзину, и в outer-loop
@@ -2190,7 +2220,7 @@ K=32 → 11.25° на bucket, ~6× быстрее чем per-ball. Так и б�
 
 Это была реальная жалоба пользователя за всю прошедшую неделю работы.
 
-### 24.3 Альтернатива #2: чистый per-ball — почему сломалось на реале
+### 21.3 Альтернатива #2: чистый per-ball — почему сломалось на реале
 
 Прямой переход к per-ball matrix (для каждого шара свой `cmd_setmatrix`) убирает
 эффект «сегмент мигает» начисто — каждый шар вращается независимо. Visual quality
@@ -2203,18 +2233,18 @@ K=32 → 11.25° на bucket, ~6× быстрее чем per-ball. Так и б�
 Симптом: верхняя половина — frame N, нижняя — frame N−1, с горизонтальной чертой
 разрыва. Появляется в самых нагруженных моментах (длинная цепь + жаба + bullet).
 
-### 24.4 Гибрид: per-slot hysteresis + run-length grouped emit
+### 21.4 Гибрид: per-slot hysteresis + run-length grouped emit
 
 Идея: **хранить tangent per-ball независимо** (это уже даёт per-slot stability —
 flicker нет), но **эмитить матрицу только когда у соседних шаров в цепи tangent
 действительно поменялся**.
 
 На спирали Zuma соседние шары цепи находятся на одной дуге трека, поэтому их
-tangent'ы очень близки. С разумной квантизацией (8 BRAD = ширина бакета)
-адъяцентные шары часто попадают в **одинаковую дольку** — для них достаточно
-одной матрицы.
+tangent'ы очень близки. С разумной квантизацией (16 BRAD, на длинной цепи 32 —
+адаптивно, см. §21.4.2) адъяцентные шары часто попадают в **одинаковую дольку** —
+для них достаточно одной матрицы.
 
-#### 24.4.1 Per-slot byte-level hysteresis
+#### 21.4.1 Per-slot byte-level hysteresis
 
 Pre-pass для каждого шара хранит **свой** «стабильный» tangent в page-5 RAM
 (`#4100 + slot_idx`), обновляется только когда raw отличается на ≥ THR=8 BRAD:
@@ -2251,55 +2281,73 @@ LD   (HL), A
 slot index ставился прямо в L без сложения. Сохраняет регистр D (с raw
 tangent) от затирания через `LD DE, addr`.
 
-#### 24.4.2 Quantize-then-compare в draw loop
+#### 21.4.2 Адаптивная квантизация: грубее по мере роста цепи
 
-В per-ball loop **квантуем** stable tangent к ближайшему 8 BRAD (`AND #F8` =
-32 корзины) и сравниваем с tangent'ом, для которого мы УЖЕ эмитили матрицу.
-Если совпал — пропускаем `cmd_setmatrix` пакет:
+В per-ball loop **квантуем** stable tangent к корзине и сравниваем с tangent'ом,
+для которого мы УЖЕ эмитили матрицу. Совпал — пропускаем эмит матрицы.
+
+**Адаптивная грубость по длине цепи** (ключевой приём — `MainLoop.asm:.PerBallLoop`):
+ширина корзины зависит от `ZL_BallCount` (= длина цепи). На короткой цепи запас
+DL-бюджета большой → можно квантовать мелко (плавнее поворот); на длинной цепи
+бюджет на исходе → квантуем грубее, чтобы число эмитов матриц не росло линейно
+с числом шаров:
+
+- `BallCount < 70` → `AND #F0` = **16 корзин** (шаг 16 BRAD = 22.5°);
+- `BallCount ≥ 70` → `AND #E0` = **8 корзин** (шаг 32 BRAD = 45°) — грубее.
 
 ```asm
-.ChainDraw:
-                LD   A, #01                         ; sentinel (не multiple-of-8)
+.ChainDraw:     LD   A, #01                         ; sentinel (не кратен 16/32)
                 LD   (ZL_TmpLastTangent), A
                 LD   A, (ZL_BallCount)
                 LD   B, A                            ; loop count
                 LD   IX, ZL_BALL_CACHE_ADDR
 .PerBallLoop:   LD   A, (IX+1)                       ; cell (+1) = 0xFF marks gap
                 CP   #FF
-                JP   Z, .PBSkip
+                JP   Z, .PBSkip                      ; (JR out of range — body grew)
                 PUSH BC
-                ; Skip matrix emit если quantized tangent совпал с предыдущим.
                 LD   A, (IX+0)                       ; stable tangent
-                AND  #F8                              ; quantize к multiple-of-8
-                LD   HL, ZL_TmpLastTangent
+                LD   D, A
+                LD   A, (ZL_BallCount)
+                CP   70                              ; адаптивный порог
+                LD   A, D
+                JR   C, .PBQuant16
+                AND  #E0                             ; длинная цепь (≥70): 8 корзин — грубее
+                JR   .PBQuantDone
+.PBQuant16:     AND  #F0                             ; обычно: 16 корзин
+.PBQuantDone:   LD   HL, ZL_TmpLastTangent
                 CP   (HL)
-                JR   Z, .PBNoMatrix                  ; same bucket → reuse матрицу
-                LD   (HL), A                          ; новый bucket → save
-                ; emit full matrix pack (5 coproc-cmds)
-                CALL ZL_EmitLoadId
-                LD   HL, ZL_BALL_HALF
-                LD   DE, ZL_BALL_HALF
-                CALL ZL_EmitTranslate
+                JR   Z, .PBNoMatrix                  ; та же корзина → переиспользуем матрицу
+                LD   (HL), A                          ; новая корзина → save
+                ; матрица из ПРЕДРАСЧЁТНОГО LUT (минуя coproc, см. §27.6)
                 LD   A, (ZL_TmpLastTangent)
-                CALL ZL_EmitRotate
-                LD   HL, -ZL_BALL_HALF
-                LD   DE, -ZL_BALL_HALF
-                CALL ZL_EmitTranslate
-                CALL ZL_EmitSetMatrix
+                CALL ZL_EmitBallMatrixFromBRAD
 .PBNoMatrix:
                 ; ... handle, cell, vertex2f для текущего шара (без матрицы) ...
 ```
 
-Sentinel `#01` гарантирует что первый шар всегда триггерит matrix emit
-(никакой реальный quantized stable tangent не равен 1, т.к. они кратны 8).
+Два рычага вместе: **(1) предрасчёт** — матрица не строится coproc-командами на
+лету, а копируется готовой из `ZL_ChainMatrixLUT` (32×24 байта, генератор
+`make_chain_matrix_lut.py`, см. §27.6); **(2) адаптивная группировка** — соседи
+по дуге попадают в одну корзину, эмит делается раз на корзину, а ширина корзины
+растёт с длиной цепи. Итог — число матриц на кадр почти не зависит от длины цепи.
 
-#### 24.4.3 Что в итоге
+Sentinel `#01` гарантирует что первый шар всегда триггерит эмит матрицы:
+реальные quantized tangent'ы кратны 16 (или 32), значению 1 никогда не равны.
+
+#### 21.4.3 Что в итоге
 
 На спирали с 35 шарами цепи статистически на цепь приходится ~8–15 уникальных
 quantized buckets, и balls внутри bucket'а лежат подряд (соседи по track) →
 matrix emit срабатывает ~8–15 раз вместо 35. **3–4× падение coproc-нагрузки.**
+Адаптивная грубость (§21.4.2) удерживает это число и на длинных цепях: при
+`BallCount ≥ 70` корзины вдвое шире (8 вместо 16), так что эмитов не больше.
 
-Метрики:
+> **Доводка v030 (§27.6):** сам эмит матрицы позже перевели на предрасчётный
+> LUT (`ZL_EmitBallMatrixFromBRAD`) — матрица копируется готовой, coproc-команды
+> на построение матрицы больше не тратятся вообще (строка `coproc-cmd/frame` ниже
+> относится к реализации 2026-05-18 *до* LUT).
+
+Метрики (snapshot 2026-05-18, до LUT):
 ```
               Bucketed (старое)    Per-ball naive     Per-ball + grouped
 matrix/frame         32              35                  8-15
@@ -2309,7 +2357,7 @@ flip-flicker         YES             NO                  NO
 vblank ok @ 74Hz     YES             NO (tear)           YES
 ```
 
-### 24.5 Ловушки реализации
+### 21.5 Ловушки реализации
 
 #### Регистр-сейв (B-clobber)
 
@@ -2368,7 +2416,7 @@ Sentinel `#01` гарантированно не совпадает ни с од
 absolute address). Уроки прошлых сессий: при росте кода всегда чекать
 JR-distances через `--lst`.
 
-### 24.6 RNG bias как побочный bug (2026-05-18)
+### 21.6 RNG bias как побочный bug (2026-05-18)
 
 Параллельно с per-ball рефакторингом расширил `VDC_NUM_COLORS` с 4 до 6 (атлас
 уже содержал colors 4-5: white + yellow). Жёлтый не появлялся в цепи СОВСЕМ.
@@ -2421,7 +2469,7 @@ RET
 Дистрибуция всё ещё неравномерна из-за самой неравномерности LFSR-байта,
 но **колор 5 теперь в игре**.
 
-### 24.7 Применимость в других случаях
+### 21.7 Применимость в других случаях
 
 Паттерн «per-slot hysteresis + run-length grouped emit» обобщается:
 
@@ -2447,9 +2495,9 @@ RET
   для отката.
 - FT81x PG §4.7 — BITMAP_TRANSFORM_A..F state, persistent across vertex2f.
 
-## Глава 25. Расщепление Core на main0 + main1 (slot 1 + slot 3) и невидимая ловушка CMD_ADDRESS_PTR (2026-05-18)
+## Глава 22. Расщепление Core на main0 + main1 (slot 1 + slot 3) и невидимая ловушка CMD_ADDRESS_PTR (2026-05-18)
 
-### 25.1 Проблема: лимит "считать байты Core" 9216
+### 22.1 Проблема: лимит "считать байты Core" 9216
 
 К v020 в Core (slot 1 page 5, ORG #5C00) набралось 9210 байт из 9216 — 6 байт
 запаса. Каждая новая фича режется на размере: match-3 explode pass добавили
@@ -2457,7 +2505,7 @@ RET
 slot 0 ещё раньше. Дальше расти некуда — а впереди 22 уровня + стартовый
 экран + level select + сжатие данных.
 
-### 25.2 Архитектура split
+### 22.2 Архитектура split
 
 В соседнем TS-Conf проекте `~/Desktop/Zuma Deluxe` уже работает паттерн
 **main0 / main1**:
@@ -2513,7 +2561,7 @@ Main1_End:
 Block = #C000, #04, main1_play.bin
 ```
 
-### 25.3 Cross-slot CALL работает без thunks
+### 22.3 Cross-slot CALL работает без thunks
 
 Z80 видит slot 1 (#4000..#7FFF) и slot 3 (#C000..#FFFF) **одновременно** — они
 разные адресные диапазоны, оба маппятся через TS-Conf mapping регистры.
@@ -2526,7 +2574,7 @@ Thunks потребуются позже, когда добавим Title/LevelS
 будет свапать slot 3 на разные main1-страницы и JP в общую entry-точку
 сцены.
 
-### 25.4 Ловушка 1: Main0_End в неправильном месте
+### 22.4 Ловушка 1: Main0_End в неправильном месте
 
 В первой попытке split метка `Main0_End:` стояла сразу после `RET` функции
 `Init_Core`. Но `Init_Int:` и `INT_Handler:` определены ниже в файле —
@@ -2547,7 +2595,7 @@ Thunks потребуются позже, когда добавим Title/LevelS
 **Урок:** `Main0_End:` ВСЕГДА последняя строчка main0 секции. Любая код-строка
 ниже неё (но выше SLOT 3 директивы) выпадает из SAVEBIN.
 
-### 25.5 Ловушка 2: TSLib CMD_ADDRESS_PTR = #C000 молча затирает main1
+### 22.5 Ловушка 2: TSLib CMD_ADDRESS_PTR = #C000 молча затирает main1
 
 После исправления Main0_End игра запустилась — frog/bg/cursor видны.
 Но **цепочки шаров не появляются, фрог не стреляет, при попытке выстрела
@@ -2593,7 +2641,7 @@ buffer ещё не достиг этих адресов), второй — VDC �
 `#5E00` — slot 1 page 5 после main0 (415 байт = ends at #5D9F). До конца
 slot 1 (#7FFF) → 8.5 KB запаса, в избытке для 3.5 KB буфера.
 
-### 25.6 Чек-лист split-проекта
+### 22.6 Чек-лист split-проекта
 
 Любой split, в котором код переезжает в slot 3 (#C000+), должен пройти:
 
@@ -2622,7 +2670,7 @@ slot 1 (#7FFF) → 8.5 KB запаса, в избытке для 3.5 KB буфе
    после F12 не отражает состояние во время виса. Для диагностики hang-а —
    F12 не подходит, нужен paged simulator или hardware-marker.
 
-### 25.7 Запас на будущее
+### 22.7 Запас на будущее
 
 После v021 split (2026-05-18):
 
@@ -2645,9 +2693,9 @@ per-level данных (15 страниц bg L4 × 22 уровня = 330 стр�
 - `releases/v021-2026-05-18-main0-main1-split.spg` — рабочий baseline.
 
 
-## Глава 26. Экономия RAM_G шаров: путь к PALETTED4444 (v025)
+## Глава 23. Экономия RAM_G шаров: путь к PALETTED4444 (v025)
 
-### 26.1 Постановка задачи
+### 23.1 Постановка задачи
 
 Изначальный atlas шаров — 6 цветов × 32 spin-фазы × 32×32 px ARGB4
 (2 байта/пиксель) = **384 KB**. Из 1 MB RAM_G на FT812 после bg, frog,
@@ -2657,7 +2705,7 @@ UI-фрейма (gameinterface) требует ещё ~80 KB, остаётся 6
 Цель: ужать atlas минимум вдвое, **сохранив**: 6 цветов, 32 spin-фазы,
 native цвета из source PNG, per-pixel alpha (anti-aliased силуэт).
 
-### 26.2 Опции форматов FT812
+### 23.2 Опции форматов FT812
 
 | Формат | Bytes/px | 6×32×32×32 atlas | Alpha |
 |---|---|---|---|
@@ -2673,7 +2721,7 @@ L4/L8 на FT812 — alpha mask: output = `tint × pixel/255`. Это
 «силуэт + tint», тело шара теряется. Не годится для многоцветных балов
 с собственным shading.
 
-### 26.3 Неудачные попытки (mid-may 2026)
+### 23.3 Неудачные попытки (mid-may 2026)
 
 **Попытка 1: MONO ARGB4 + COLOR_RGB tint (64 KB).** Один atlas
 silver-шара (R=G=B=L, A=alpha) + tint per ball. Maya-faces на всех
@@ -2691,7 +2739,7 @@ silver-шара (R=G=B=L, A=alpha) + tint per ball. Maya-faces на всех
 (chip-revision quirk). Вывод после 4-х неудач — «PALETTED не работает».
 **Этот вывод был ложным.**
 
-### 26.4 PALETTED4444: три условия
+### 23.4 PALETTED4444: три условия
 
 User-инсайт: PALETTED4444 (формат = 15) использует палитру **СТРОГО
 512 байт** (256 × 2 ARGB4). Прошлые попытки попадали в одну из трёх
@@ -2712,7 +2760,7 @@ User-инсайт: PALETTED4444 (формат = 15) использует пал�
 3. **Адрес не выровнен на 4 байта.** FT_PaletteSource берёт младшие
    22 бита; FT812 требует 4-byte aligned. Невыровненный → junk.
 
-### 26.5 Setup PALETTED4444 (baseline v025)
+### 23.5 Setup PALETTED4444 (baseline v025)
 
 Palette generation (Python):
 ```python
@@ -2751,7 +2799,7 @@ FT_BitmapLayout FT_PALETTED4444, ZL_BALL_W, ZL_BALL_H
 FT_BitmapSize FT_NEAREST, FT_BORDER, FT_BORDER, ZL_BALL_W, ZL_BALL_H
 ```
 
-### 26.6 Результаты v025 (HW-verified)
+### 23.6 Результаты v025 (HW-verified)
 
 | Аспект | v019 (original) | v025 (PALETTED4444) |
 |---|---|---|
@@ -2763,7 +2811,7 @@ FT_BitmapSize FT_NEAREST, FT_BORDER, FT_BORDER, ZL_BALL_W, ZL_BALL_H
 Экономия **192 KB**. 4 точки в коде (chain, bullet, frog hand, frog
 back) используют один FT_PaletteSource per frame.
 
-### 26.7 Урок: «не работает» ≠ «формат не поддерживается»
+### 23.7 Урок: «не работает» ≠ «формат не поддерживается»
 
 Из 4-х неудач легко сделать вывод «PALETTED unsupported». Прежде:
 
@@ -2787,11 +2835,11 @@ chip revisions FT812 поведение PALETTED8 / 4444 различается.
   `_baseline_v025_paletted4444_fix/`.
 
 
-## Глава 27. Почему отказались от псевдо-DXT фона (2026-05-19)
+## Глава 24. Почему отказались от псевдо-DXT фона (2026-05-19)
 
 ### TL;DR
 
-Псевдо-DXT (Глава 21–22) занимал ~80 КБ RAM_G и весил 0.5–0.75 байт/пикс — отличный
+Псевдо-DXT (Глава 18–19) занимал ~80 КБ RAM_G и весил 0.5–0.75 байт/пикс — отличный
 компромисс по памяти. **Но на реальном железе ZX-Evo вызывал то, что выглядело как
 «срыв строчной синхронизации»**: дрожание строк, цветные полосы, мерцание. На
 Unreal x64 эмуляторе всё было идеально. Причина оказалась в **переполнении
@@ -2821,7 +2869,7 @@ bitmap-проход. Канарейка v028-эпохи (2026-05-19) подтв�
 - При движении frog/шаров — артефакты усиливались
 - На Unreal x64 эмуляторе — **всё чисто**, никакого тиринга
 
-Первая гипотеза была tearing — попробовали VM_640_480_74Hz (Глава 13). Не помогло.
+Первая гипотеза была tearing — попробовали VM_640_480_74Hz (§4.2). Не помогло.
 Вторая — буфер DL переполняется. Замеры через REG_CLOCK профайлер показали что
 DL build не превышал vblank window. То есть Z80 ничего не зашкаливает.
 
@@ -2913,15 +2961,51 @@ sum(такты/пикс на каждый bitmap-проход) × (видима�
 4 параллельных engine), или будет важна экономия 40 КБ RAM_G в ущерб качеству.
 В текущей VDAC2 архитектуре — нет.
 
+### Уточнение модели (ground-truth через эмулятор, см. главу 25)
+
+Модель выше («800 тактов на строку, ~1 такт/пиксель на проход») — рабочее
+**первое приближение**: она верно предсказывает, что три полноэкранных прохода
+рвут картинку, а один — нет. Но позже, сняв через эмулятор EveApps **реальный
+RAM_DL** (глава 25) и сверившись с аппаратной моделью FT812 от TS-Labs, мы
+уточнили механизм:
+
+- Движок FT812 **заново проходит весь Display List на КАЖДОЙ строке** растра,
+  тратя примерно **1 такт на DL-команду**. Этот «проход по командам» — а не
+  заливка — часто и есть доминанта нагрузки.
+- Заливка пикселей дешевле, чем казалось: **~16 пикс/такт** для не-палитровых
+  форматов; палитра медленнее (lookup на пиксель); `BILINEAR` вдвое медленнее
+  `NEAREST`.
+- Реальный бюджет строки — это `REG_HCYCLE` (для нашего 640×480 ≈ **832 такта**),
+  а не ровно 800.
+
+**Ground truth.** Дамп RAM_DL тяжёлого кадра (frame 0650) показал **439 DL-команд**,
+из которых ~192 — матрицы разворота шаров (≈44% бюджета). Итог ≈ **104–106%** от
+832 → строка не успевает достроиться → tearing на верхней полосе. То есть
+tearing = **переполнение бюджета строки**, и виноват прежде всего объём DL, а не
+заливка как таковая.
+
+**Рычаги** (без потери качества картинки):
+1. Сократить **число DL-команд** — адаптивная группировка + предрасчётный LUT
+   матриц шаров (§21.4) уже снижает их в разы.
+2. Избегать `BILINEAR`/`PALETTED` на крупных спрайтах (§27.9 — frog).
+3. Не дробить фон на полосы со scissor под полупрозрачной рамкой — фон виден
+   сквозь неё, scissor исказил бы картинку.
+
+⚠️ **Ограничение проекта (2026-05-26):** матрицы разворота шаров по касательной
+**не убираются** — они заметно улучшают восприятие (решение пользователя).
+Поэтому дальнейшая tearing-оптимизация отложена: режем что угодно, кроме матриц
+шаров и читаемости фона.
+
 ### Источники
 
-- Memory: `reference_zuma_vdac2_pixel_clock_budget` — бюджет 800 тактов/линия.
+- Memory: `reference_zuma_vdac2_ft812_line_budget_command_walk` — уточнённая модель: доминирует проход по командам DL (HCYCLE≈832, 16 пикс/такт), ground-truth через RAM_DL.
+- Memory: `reference_zuma_vdac2_eve_emulator_dl_readback` — readback реального RAM_DL через EveApps (см. главу 25).
 - Memory: `reference_zuma_vdac2_baseline_2026-05-19_bg400_killzone88_real_hw_ok` — финальный baseline с 400×300 PALETTED4444 фоном, верифицирован на реале.
 - Чат.txt: `[2026-05-19 22:55] Codex -> BG 400x300 PALETTED4444 nearest upscale canary` — диагностика и переход.
-- Глава 21 (DXT1 L2) + Глава 22 (L4 апгрейд) — описание того что отказались делать.
+- Глава 18 (DXT1 L2) + Глава 19 (L4 апгрейд) — описание того что отказались делать.
 
 
-## Глава 28. Bridgetek EveApps FT812 Emulator — настоящая эмуляция чипа (2026-05-19)
+## Глава 25. Bridgetek EveApps FT812 Emulator — настоящая эмуляция чипа (2026-05-19)
 
 ### Зачем понадобился новый эмулятор
 
@@ -2935,8 +3019,8 @@ sum(такты/пикс на каждый bitmap-проход) × (видима�
 
 **Проблема Unreal x64:** он эмулирует FT812 **семантически**, выполняет DL команды и
 выводит картинку, но **не моделирует hardware constraints**:
-- pixel-clock budget per line (см. Главу 27)
-- BITMAP_HANDLE binding rules (см. Главу 29 ниже)
+- pixel-clock budget per line (см. Главу 24)
+- BITMAP_HANDLE binding rules (см. Главу 26 ниже)
 - SPI bandwidth, DMA timing, BFLB swap latency
 
 Поэтому на Unreal x64 всё работало, а на реальном ZX-Evo + VDAC2 — глюки.
@@ -3082,11 +3166,11 @@ Start-Process -FilePath $exe -ArgumentList "`"$bundle`"" -WorkingDirectory (Spli
 
 ### Что дало в v028
 
-Глава 28 написана *после* того как эмулятор нашёл нам реальный баг которого Unreal x64 не видел.
+Глава 25 написана *после* того как эмулятор нашёл нам реальный баг которого Unreal x64 не видел.
 
 **Кейс:** при рендере game-over диалога текст должен показывать "2 lives left",
 "GAME OVER" и т.д. В Unreal x64 текст рисовался корректно. На FT812 эмуляторе —
-**rainbow color noise** в позиции текста (Главу 29 см. ниже про сам баг).
+**rainbow color noise** в позиции текста (Главу 26 см. ниже про сам баг).
 
 Сценарий который сработал:
 1. Написали DrawString routine, проверили в Unreal x64 — выглядит ОК.
@@ -3119,13 +3203,34 @@ EveApps умеет и **interactive mode** — где C код напрямую 
 (анимации, animations, transitions). Тогда напишем C harness который вызывает Z80
 функции через ctypes или socket bridge.
 
+### Readback реального RAM_DL — ground-truth аудит Display List (доводка)
+
+Главное, что дал этот эмулятор после первоначальной настройки, — **достоверный
+снимок настоящего Display List**. Наш Z80-код собирает кадр через co-processor
+(RAM_CMD FIFO); команды FIFO (`cmd_*`) — это НЕ готовый DL: копроцессор сам
+разворачивает их в реальные DL-команды. Поэтому «сколько команд в DL» по нашему
+cmd-потоку посчитать нельзя — нужно прочитать то, что копроцессор реально положил
+в `RAM_DL`.
+
+`ZumaPlayback.c` пропатчен так: после `EVE_Cmd_waitFlush` (FIFO допроигран) читаем
+**`RAM_DL` (адрес `0x300000`, 8 КБ)** и пишем в `dl_frame_NNNN.bin`, затем
+**headless-выход** (без удержания окна — для пакетного прогона). Сборка —
+`Debug|Win32` через MSBuild; в этом прогоне target эмулятора = **BT817**
+(совместимый EVE из того же EveApps). Bundle тот же (ram_g.bin + cmd_frame_*).
+
+Парсер (`analyze_dl_*`) читает `dl_frame_*.bin` до команды `DISPLAY` и считает
+DL-команды по типам. Так мы впервые увидели реальные цифры бюджета строки
+(глава 24): тяжёлый кадр = **439 DL-команд**, ~192 из них — матрицы разворота
+шаров. **Только этот путь** разворачивает FIFO-копроцессорные команды в настоящий
+DL — Unreal x64 и наши Python-эмуляторы этого не делают.
+
 ### Что осталось сделать
 
-- **Авто-скриншот после запуска** — сейчас вручную через PowerShell `CopyFromScreen`.
-  Можно добавить в C код `Sleep(N) + glReadPixels` → PNG.
-- **CI integration** — запускать в headless mode для автотестов. Bridgetek SDK
-  поддерживает но требует X server или offscreen flag.
-- **Diff-tests** — сравнивать скриншот с эталонным PNG, fail если diff > N пикселей.
+- ✅ ~~Headless-режим для пакетного прогона~~ — сделано (DL-readback патч,
+  см. выше): эмулятор пишет дампы и выходит без удержания окна.
+- **Авто-скриншот пикселей (PNG)** — сейчас картинку снимаем вручную через
+  PowerShell `CopyFromScreen`; можно добавить `glReadPixels` → PNG в C-код.
+- **Diff-tests** — сравнивать скриншот/дамп DL с эталоном, fail если diff > N.
 
 ### Ссылки
 
@@ -3136,7 +3241,7 @@ EveApps умеет и **interactive mode** — где C код напрямую 
 - Чат.txt: `[2026-05-20 02:40] VDAC2 → VDC: v028 Game Over dialog` — описание bug который эмулятор нашёл.
 
 
-## Глава 29. BITMAP_HANDLE binding ловушка FT812 (2026-05-20)
+## Глава 26. BITMAP_HANDLE binding ловушка FT812 (2026-05-20)
 
 ### TL;DR
 
@@ -3244,11 +3349,11 @@ Unreal x64 эмулирует FT812 как «один глобальный bitma
 - FT81x Programmers Guide §4.30 BITMAP_HANDLE — описание slot binding (но не явно про порядок emit'а — нашли через эмулятор debugging).
 
 
-## Глава 30. Сессия 2026-05-20: scoring engine, matrix LUT, ARGB4 frog → tearing fix
+## Глава 27. Сессия 2026-05-20: scoring engine, matrix LUT, ARGB4 frog → tearing fix
 
 Серия оптимизаций и багфиксов за один день, кульминация — устранение tearing на реальном железе через смену формата frog слоёв.
 
-### 30.1 Match-3 «синие шары вместо gap» — критический bug
+### 27.1 Match-3 «синие шары вместо gap» — критический bug
 
 Симптом: после анимации match-3 на месте удалённой группы появлялись 3 синих шара (color 0) вместо пустых ячеек.
 
@@ -3258,7 +3363,7 @@ Fix: `PUSH BC` сразу после `.m3_have_marker:`, `POP BC` перед з�
 
 Урок: при добавлении кода в существующую функцию — отметить все клобаемые регистры. B и C особо опасны в scoring/UI коде где много `LD B, A` для loop counter.
 
-### 30.2 Scoring engine 1:1 с HD-ref Statistics.c
+### 27.2 Scoring engine 1:1 с HD-ref Statistics.c
 
 Реализована полная формула очков из `Statistics.c:37`:
 
@@ -3275,11 +3380,11 @@ Spawn gate: `VDC_TrySpawn_NoHsubGate` блокируется при `VDC_GaugeFu
 
 Тесты: `test_gauge_score_z80.py` верифицирует формулы через реальный CALL `VDC_CheckMatch3`.
 
-### 30.3 Точный fill_px для прогресс-бара
+### 27.3 Точный fill_px для прогресс-бара
 
 Заменил `score/16` на математически точную `(GaugeShown * 63) / 1000`. На Z80 нет 16-bit division, делим в два прохода через `ZL_Mul16x8` + `>> 3` + `VDC_DivHLbyA(125)`.
 
-### 30.4 FT_ScissorXY клобает B — повторение pattern
+### 27.4 FT_ScissorXY клобает B — повторение pattern
 
 Симптом: при score=30 бар показывал ~27 px вместо 1.
 
@@ -3291,11 +3396,11 @@ Fix: `LD (DhpFillPx), A` ПЕРЕД FT_ScissorXY, `LD A, (DhpFillPx)` ПОСЛЕ
 
 Поймал через `test_draw_progress_z80.py` — Z80 тест вызывает CALL DrawHudProgress и парсит SCISSOR_SIZE opcode из emitted CMD buffer.
 
-### 30.5 GaugeShown animated LERP — плавный бар
+### 27.5 GaugeShown animated LERP — плавный бар
 
 Score прыгает мгновенно (chain bonus +100), но бар анимируется +8 pts/frame через `VDC_TickGaugeShown` в конце `VDC_AnimateChain`. ~12 кадров до полного догона = ~0.2 сек = выглядит плавно.
 
-### 30.6 Pre-baked rotation matrix LUT
+### 27.6 Pre-baked rotation matrix LUT
 
 CMD-цепочка (`LOADIDENTITY → 2x TRANSLATE → ROTATE → SETMATRIX`, 40 bytes + coproc work) заменена на **LUT 32 x 24 bytes = 768 bytes**. Генератор `make_chain_matrix_lut.py` считает Q8.8 cos/sin + Q23.8 translation.
 
@@ -3309,15 +3414,15 @@ Lazy BITMAP_HANDLE switching (`ZL_TmpLastHandle`) — skip emit если same ha
 
 DL byte savings: v028 ~2900 → v030 2232 bytes/frame (-23%).
 
-### 30.7 OK button hit-test + Fire trigger
+### 27.7 OK button hit-test + Fire trigger
 
 OK button рисуется при state ∈ {1, 2}. Click hit-test bounds [170..470, 315..349]. Также Fire trigger через SPACE/Kempston с rising edge debounce.
 
-### 30.8 MENU sprite skip baked при idle
+### 27.8 MENU sprite skip baked при idle
 
 `DrawHudMenu RET Z if HudMenuState=0`. Idle state уже запечён в `frame_top.png`.
 
-### 30.9 Главный фикс tearing: ARGB4 + NEAREST для frog
+### 27.9 Главный фикс tearing: ARGB4 + NEAREST для frog
 
 После всех оптимизаций tearing продолжался на реале. Pixel-clock analyzer показывал budget 14% — НЕ виноват.
 
@@ -3340,7 +3445,7 @@ Tearing устранён. v031 опорная (`releases/v031-2026-05-20-argb4-f
 
 Урок: мой analyzer использовал упрощённую модель (NEAREST=16 px/clk, BILINEAR=2 px/clk) и **не учитывал palette lookup overhead** PALETTED формата. Если tearing на реале — сначала проверить crucial sprites на BILINEAR/PALETTED и пробовать ARGB4+NEAREST.
 
-### 30.10 Outcome дня
+### 27.10 Outcome дня
 
 После Codex v028 baseline:
 - **v029**: scoring engine + match-3 blue fix + FT_ScissorXY clobber fix
@@ -3349,9 +3454,9 @@ Tearing устранён. v031 опорная (`releases/v031-2026-05-20-argb4-f
 
 Все харнесс тесты PASS. Цель сессии достигнута — играбельный билд без видимого tearing на реальном железе ZX Evo + FT812 @ 74Hz.
 
-## Глава 31. Mr.Gluk RTC чтение и часы на экране (2026-05-20)
+## Глава 28. Mr.Gluk RTC чтение и часы на экране (2026-05-20)
 
-### 31.1 Постановка
+### 28.1 Постановка
 
 После добавления cluster-RNG для chain spawn'а юзер заметил: на каждом запуске игры выпадает **одна и та же последовательность шаров**. RTC не влияет на seed.
 
@@ -3360,7 +3465,7 @@ Tearing устранён. v031 опорная (`releases/v031-2026-05-20-argb4-f
 - F12 dump показывал `VDC_LfsrSeed = 0x9624` для каждого запуска
 - Распределение синих шаров (color 0) почти нулевое
 
-### 31.2 Диагностика
+### 28.2 Диагностика
 
 **Шаг 1.** Сохранил entropy-источники в фиксированную RAM область:
 
@@ -3404,7 +3509,7 @@ write_rtc
 
 Я использовал `#DEF7` (ошибочно из памяти, никогда не работало). Правильный порт активации — **#EFF7**.
 
-### 31.3 Правильная процедура чтения Mr.Gluk
+### 28.3 Правильная процедура чтения Mr.Gluk
 
 ```
 1. OUT #EFF7, #80       — enable Mr.Gluk (включает порты DFF7/BFF7)
@@ -3415,14 +3520,14 @@ write_rtc
 
 BCD → binary: `value = (raw>>4)*10 + (raw&0xF)`.
 
-### 31.4 Применение к Zuma VDAC2
+### 28.4 Применение к Zuma VDAC2
 
 После замены `#DEF7` на `#EFF7` в `ReadRTCSeconds` и `ReadRTCRegister`:
 - RTC возвращает реальное wall-clock значение
 - Каждый запуск с другой секундой → seed для chain spawn разный
 - `VDC_GameSeconds` правильно инкрементируется в `VDC_UpdateRtcElapsed`
 
-### 31.5 Часы в нижней рамке
+### 28.5 Часы в нижней рамке
 
 `DrawDebugClock` в `MainLoop.asm:204`:
 
@@ -3462,18 +3567,18 @@ DrawDebugClock:
 
 `FT_Text` для двоеточия: после cmd word передаётся 4-byte aligned NUL-terminated строка через `FT_CMD_BUF #0000003A` (":\0\0\0" в LE).
 
-### 31.6 Фикс TIME в Game Over dialog
+### 28.6 Фикс TIME в Game Over dialog
 
 `DrawTimeValue` раньше использовал `VDC_StatTimeFrames / 60` — это давало неверный результат при 74Hz видеорежиме (74 frames/sec ≠ 60). Заменено на `VDC_GameSeconds` (RTC-based секунды, pause excluded).
 
-### 31.7 Что в memory
+### 28.7 Что в memory
 
 - `[[feedback_zuma_vdac2_ft_cmd_buf_clobbers_bcde]]` — Mr.Gluk activation port = #EFF7.
 
 
-## Глава 32. Когда эмулятор сам с багом — горький урок (2026-05-20)
+## Глава 29. Когда эмулятор сам с багом — горький урок (2026-05-20)
 
-### 32.1 Симптомы
+### 29.1 Симптомы
 
 Два разных бага в match-3 одновременно:
 - **Ложный** match-3 после gap closure без реального схлопывания одноцветных шаров.
@@ -3481,7 +3586,7 @@ DrawDebugClock:
 
 Я пытался лечить через `Source/OTHER/vdc_visual_emulator.py` — это Python mirror VDC physics с 2D визуализацией. Тесты показывали зелёное, но на реальном железе симптомы оставались.
 
-### 32.2 Корень проблемы — Python эмулятор фазово drift'ил от ASM
+### 29.2 Корень проблемы — Python эмулятор фазово drift'ил от ASM
 
 Python emulator имел старый update-order на тике:
 ```
@@ -3501,7 +3606,7 @@ ASM фактически использовал:
 
 Эмулятор как oracle подсовывал ЛОЖНЫЕ объяснения: я «чинил» симптомы в модели, не реальные invariants в RAM.
 
-### 32.3 Кто закрыл — Codex через RAM dump
+### 29.3 Кто закрыл — Codex через RAM dump
 
 Codex отказался от Python-эмулятора как ground truth и взял за источник истины **прямой RAM dump** (F12 в Unreal → `parse_log_dump.py` + чтение `VDC_Slots`, `VDC_Offsets`, `VDC_Shot2`, `VDC_ExplodeFrame`, `VDC_ExplodeMarker` по адресам из `main.lst`).
 
@@ -3510,7 +3615,7 @@ Codex отказался от Python-эмулятора как ground truth и �
 - В 222 — settled одноцветные ряды, но Shot2 уже очищен (преждевременная очистка).
 - В свежем 111 — `BallsSpawned=35`, `Slots=GAP_STOP`, `GaugeScore=110`, `GaugeFull=0` → normal spawn вообще не срабатывает.
 
-### 32.4 Применённые ASM-фиксы
+### 29.4 Применённые ASM-фиксы
 
 1. **`VDC_SetShot2OnNeighbors`** — narrow trigger:
    - Было: Shot2 на K-1 и K если оба non-gap.
@@ -3522,7 +3627,7 @@ Codex отказался от Python-эмулятора как ground truth и �
 4. **Убран `HSA == TrackNumSlots` ранний stop** — обработка конца track теперь через `VDC_CheckKillzone`.
 5. **Убран gate `FrameCounter & 63 == 0`** в normal phase — он фазово конфликтовал с внутренним `HSub == 0`, spawn никогда не срабатывал после fast phase. `VDC_TrySpawn` сам gate'ится по HSub.
 
-### 32.5 Что синхронизировано в Python эмуляторе
+### 29.5 Что синхронизировано в Python эмуляторе
 
 `vdc_visual_emulator.py` приведён к ASM:
 - fast/normal update order совпадает с ASM
@@ -3531,7 +3636,7 @@ Codex отказался от Python-эмулятора как ground truth и �
 - narrow Shot2 trigger (same-color closure only)
 - pending Shot2 до settled offsets
 
-### 32.6 Урок
+### 29.6 Урок
 
 **Правило:** Когда баг phase-sensitive (timing'и `Shot2`, `ExplodeFrame`, half-cell insert), **НЕ доверять** визуальному Python-эмулятору как oracle. Источник истины:
 1. F12 dump → `parse_log_dump.py` для ring buffer событий
@@ -3542,9 +3647,358 @@ Python emulator может «показывать что баг исправле
 
 **Аналогия** — это как чинить машину по симулятору, у которого двигатель работает не так, как в реальном железе. Можно «исправить» проблему в симуляторе и думать что готово, а реальное авто продолжает глохнуть на том же месте.
 
-### 32.7 Память на будущее
+### 29.7 Память на будущее
 
 - `[[feedback_zuma_vdac2_emulator_oracle_drift]]` — правило не доверять Python emu для phase-sensitive багов.
 - `[[feedback_zuma_vdac2_full_z80_emulator_unreliable_for_render]]` — full Z80 emu тоже не годится для render-багов.
 - `[[reference_zuma_debug_env_methodology]]` — официальная методичка SOP для VDC регрессий через RAM dump.
 
+## Глава 30. FAT32 с SD-карты в TS-Conf: от WC ZiFi к собственному драйверу RawPak (CMD17 + LFN)
+
+### 30.0 Зачем эта глава
+
+В TS-Conf нет полноценного DOS. SPG-программа запускается из Wild Commander (WC) с
+минимальным runtime, без привычной файловой системы. Когда мы решили выносить 22
+уровня (и будущее GS2MB-аудио) в отдельный файл на SD-карте, выяснилось — это
+отдельный кусок науки.
+
+Глава прошла **две эпохи**. Сначала грузили через готовый драйвер **WC ZiFi** —
+и упёрлись в порчу RAM_G (см. §30.1). Затем написали **собственный FAT32-ридер
+`RawPak`** поверх прямого `CMD17` к SD через Z-Controller — он и работает на
+железе (опорная v039+). Текущий раздел ведёт от current-подхода; ZiFi оставлен
+как разобранный тупик.
+
+### 30.1 Историческая развилка: почему отказались от WC ZiFi
+
+**Что такое ZiFi.** Драйвер file-I/O (Koshi, `WC/ZiFi/zifi.asm`) с JP-таблицей API
+на странице `#0F` от адреса `#2002` (`CORE`): `DEV_INI`/`HDD`/`LOAD512`/`FENTRY`/
+`LOADNON`/`SETDIR`/`SEEK0` и т.д. Драйвер кладётся в наш SPG как блок на `#0F`,
+инициализация: **`DOS_SWP` первым** (распаковывает trampoline в `#3C00+`), потом
+`DEV_INI` → `HDD` → `SETROOT`. Slot-0 swap — только через MMIO-макрос `SetPage0_A`
+(порт `#10AF` write-only, читать нельзя — вернёт `#FF`).
+
+**Где сломалось.** ZiFi-стриминг фона уровня **клал мусор в RAM_G на реальном
+железе** (в эмуляторе было чисто — fake-ZiFi путь не воспроизводил баг). Данные,
+палитра и сам draw были корректны (Python-рендер давал чистую спираль), но именно
+ZiFi-путь портил выгруженные в FT812 байты. Сопутствующее: `CurrentLevel` в
+TSLib-region (#1938) корраптился; `StreamSection` зацикливался; на части уровней
+`cmd_inflate` вис. Корень — гонка SPI-шины / MMU вокруг `FT.WriteMem` при
+чередовании с чтением SD внутри ZiFi.
+
+Вывод: чужой драйвер с непрозрачным mount-state и собственным управлением шиной
+давал баги, которые мы не могли ни увидеть в эмуляторе, ни поправить. Решили
+написать **свой** минимальный ридер, где мы контролируем каждый SPI-такт.
+
+### 30.2 RawPak: собственный FAT32-ридер на прямом CMD17
+
+`Source/ASM/ts-dos.asm`, символы `RawPak_*`. Принципы:
+
+- **Прямой `CMD17`** (single-block read, опкод `%01000000+17`) к SD через
+  Z-Controller (`#57`/`#77`). Никакого mount-state: каждый LBA-сектор RawPak
+  вычисляет сам (`cluster>>7 + FatStart`), поэтому ничему «дрейфовать» нечем.
+- **CMD17, не CMD18.** Multi-block `CMD18` на этом железе вёл себя нестабильно;
+  одиночный `CMD17` на хосте Unreal и на реале работает идеально (снимок BPB
+  корректен). Совет подтверждён практикой.
+- **Self-contained**: BPB, FAT-цепочки, LFN-поиск — всё своё, минимально
+  достаточное под одну задачу «найти и прочитать `ZUMALVL.PAK`».
+
+> Низкоуровневый CMD17 — в `Source/ASM/sd_zc.asm` (`sd_read_sector`/`sd_cmd17`/
+> `sd_wait_token`). Адресация байтовая (host `sd_blkt=0`), `sd_wait` **ограничен
+> таймаутом** (а не вечный спин — иначе виснет шина).
+
+### 30.3 BPB и открытие тома — `RawPak_OpenRoot`
+
+Читаем сектор 0 (BPB «superfloppy», без MBR), валидируем и кэшируем геометрию:
+
+```
+RawPak_OpenRoot:
+  ; CMD17 sector 0 -> BPB в IX-буфер
+  ; требуем bytes/sector == 512   (иначе ошибка #A2)
+  ; требуем sectors/cluster != 0  (иначе #A3)
+  ; FatStart   = (IX+14) reserved sectors        (32-бит)
+  ; DataStart  = FatStart + NumFATs*FATSz32
+  ; RootClus   = BPB+44
+  ; CMD17-ошибка чтения BPB -> #A1
+```
+
+Коды ошибок (`A` при возврате): `#A1` BPB CMD17 fail, `#A2` bytes/sec≠512, `#A3`
+spc==0. Дальше `CurClus = RootClus` — мы «в корне».
+
+### 30.4 LFN-сопоставление пути `/Games/Zuma Deluxe VDAC2/ZUMALVL.PAK`
+
+`RawPak_FindInCurrentDir` ищет одно имя в текущей директории, **сопоставляя по
+ДЛИННОМУ имени (LFN)**, а если LFN нет — по 8.3. Это робастно к коротким алиасам
+инжектора (`GAMES~1`, `ZUMAD~1`):
+
+- `RawPak_StoreLfn` — собирает фрагменты LFN (offsets 1,3,5,7,9, 14,16,18,20,22,24,
+  28,30) в `RawPak_EntName` по `(seq-1)*13`.
+- `RawPak_Upcase` + `RawPak_Build83` + `RawPak_NameMatch` — регистронезависимое
+  сравнение с `RawPak_TargetName`.
+
+Путь проходим по шагам: найти `Games` → `SETDIR` (CurClus = найденный кластер) →
+найти `Zuma Deluxe VDAC2` → найти `ZUMALVL.PAK`. Проверено на реальном хост-образе
+(`verify_lfn_walk.py`).
+
+### 30.5 FAT-цепочка: `FatNext` + ловушка `AdvanceOne`
+
+`RawPak_FatNext` по номеру кластера читает запись FAT: сектор = `cluster>>7 +
+FatStart`, смещение в секторе = `(cluster & 127)*4`. Использует **отдельный буфер**
+`RawPak_FatBuf` (512 Б, резидент в Core/slot 1), чтобы не конфликтовать с буфером
+данных.
+
+🔴 **B-clobber (исправлено).** `FatNext` клобает `B`. `RawPak_SkipB` держал в `B`
+счётчик `DJNZ` для пропуска секторов → после первого `FatNext` счётчик ломался,
+`SkipB(1)` уезжал по всей цепочке до EOC → нулевой TOC. Фикс — обёртка
+`RawPak_AdvanceOne = PUSH BC : CALL FatNext : POP BC`. (Воспроизведено локально на
+харнессе — §30.9.)
+
+### 30.6 Таблица секторов: `LBA = PakLba + N` (допущение непрерывности)
+
+PAK выложен непрерывно, поэтому вместо пер-секторного FAT-walk кэшируем LBA
+логического сектора 0 файла (`RawPak_SetPakLba` → `RawPak_PakLba`), а дальше
+любой логический сектор N читается как `LBA = PakLba + N` (верно для непрерывных
+кластеров при любом spc). Убраны seek-by-read и пер-секторный обход FAT —
+быстро и просто.
+
+⚠️ **Граница допущения:** если файл фрагментирован (логический сектор N лежит за
+разрывом цепочки), `PakLba + N` укажет не туда. Поэтому инжектор должен класть
+PAK **непрерывно** (проверено — `check_pak_chain.py`). Чинить «по-взрослому» —
+мультиран-таблица секторов по FAT-цепочке (бэклог).
+
+### 30.7 Двухфазная загрузка: FT812 и SD на одной SPI-шине
+
+FT812 и SD-карта висят на **одной** SPI-шине (`#57`/`#77`). Чередование чтения
+сектора SD и `FT.WriteMem` крашило шину. Решение — **двухфазно**:
+
+1. **Фаза 1:** прочитать с SD в RAM ВСЁ нужное (bg → страницы `#07..#0E`,
+   palette → `#03`, track → `#06`(+`#0F`)).
+2. **Фаза 2:** залить ВСЁ в FT812 одним проходом `FT.WriteMem`.
+
+Один переход SD→FT за загрузку вместо тысяч чередований — шина стабильна.
+
+### 30.8 Трек на 2 страницы (`#06` + `#0F`) — верхние уровни
+
+Самостоятельная подзадача (v040→v041). Загрузчик отвергал трек ≥ 33 секторов
+(трек не влезал в одну 16-КБ страницу `#06`) → падал на L04/07/16/17/18/20–22
+(их трек > 3276 сэмплов). Это был **не** эффект фрагментации PAK (PAK непрерывен).
+
+Фикс — трек на **две страницы**:
+
+- Pack (`make_level_pack.pagesplit_track`): chunk A → `#06`, chunk B → `#0F`
+  (page-aligned).
+- Loader: лимит `CP 65` (вместо 33), читаем 32 сектора в `#06` + остаток в `#0F`.
+- Runtime (`RawPak_ReadSampleAtHL`, вынесен в Core): чтение сэмпла трека
+  **page-aware**. Константы: `TRACK_PAGE2 EQU #0F`, `TRACK_SPLIT_SAMPLE EQU 3276`
+  (= `(16384-2)/5`; сэмпл трека = 5 байт, в `#06` первые 2 байта — заголовок,
+  адрес сэмпла `t` = `#8000+2+t*5`; для `t ≥ 3276` берём из `#0F` по `t-split`).
+
+Проверено harness'ом (L21 CF=1, round-trip PASS) и на хосте.
+
+### 30.9 Инструмент: локальный Z80-харнесс FAT (не гонять хост зря)
+
+`Source/OTHER/test_rawpak_z80.py` — гоняет **реальный Z80 `RawPak`** в эмуляторе
+(`zuma_full_z80_emulator`) с хуком `sd_read_sector` на FAT-образ инжектора
+(`Build/test_wc.img`, собран `inject_zuma_to_wc_img.py --out-img`) — **без**
+хостовых циклов. Поймал B-clobber (§30.5), проверил двухфазный loader (CF=1,
+`GpDbgStep=#06`, `FT.WriteMem`×9).
+
+Границы: эмулятор (cburbridge) поддерживает не все опкоды и медленный на
+seek-by-read; HW-баги шины не воспроизводит (`FT.WriteMem` захукан). Доп.
+инструменты: `verify_lfn_walk.py`, `check_pak_chain.py`, `check_host_wc_img.py`,
+`parse_dump_diag.py`.
+
+### 30.10 Pack-формат ZUMALVL.PAK
+
+Секции выровнены по 512 Б (`CMD17` читает блоками). Собирает
+`Source/OTHER/make_level_pack.py`:
+
+```
+Sector 0 (512 B): Header
+  +0  magic "ZLVP", +4 version=1, +5 level_count=22, +6 sector_size=512
+Sector 1 (512 B): TOC[22] × 20 байт на уровень
+  per entry: bg_off/size, pal_off/size, track_off/size, title_off/size,
+             preview_off/size  (по 2+2 байта; 0xFFFF в *_off = absent)
+Sector 2..N: data blob (на уровень: bg → pal → track → title → preview),
+             каждая секция с 512-кратного offset
+```
+
+Python-верификатор распаковывает PAK и сверяет каждую секцию байт-в-байт с
+исходными `.bin`. Запускать после каждой правки pack-builder'а. (Превью уровней
+вынесены в PAK ещё в v038 — страницы `#CC..#FA` закомментированы в
+`spgbld_vdac2.ini`.)
+
+### 30.11 Миф «размер SPG ломает загрузку» — опровергнут
+
+Долгая сессия v039 шла по ложному следу: казалось, что WC SPG-loader виснет,
+если SPG «слишком большой», и помогло срезание (страница `#0F` бандл-драйвера +
+диаг-буферы: 1929216 → 1284096 Б). Но позже **контрпример**: SPG Слободчикова
+`SFv1.1.spg` = 3172352 Б (2.5× нашего, 1.6× «сломанного») грузится тем же
+WC-loader'ом. **Потолка по размеру нет.** Реальная причина наших фейлов —
+флака SD (v037 грузился со 2-й попытки) / битый блок / гонка шины. Тримминг был
+обходом симптома.
+
+> Практический вывод: при зависшем WC-загрузчике или сломанном пейджинге
+> RAM-дамп бесполезен — slot 1 ≠ Core, диагностика не читается. Не гнать размер
+> SPG вверх без нужды, но и не считать его причиной.
+
+### 30.12 Ловушки (anti-patterns)
+
+| Грабли | Симптом | Урок |
+|---|---|---|
+| ZiFi-стриминг фона | Мусор в RAM_G **только на реале** (эмулятор чист) | Гонка SPI/MMU вокруг FT.WriteMem; ушли на свой CMD17-ридер |
+| `CMD18` multi-block | Нестабильно на железе | Только `CMD17` single-block |
+| `FatNext` клобает `B` под `DJNZ` | `SkipB` уезжает до EOC → нулевой TOC | `AdvanceOne = PUSH BC : FatNext : POP BC` |
+| Чередование SD-read и `FT.WriteMem` | Краш шины | Двухфазно: сначала всё в RAM, потом всё в FT |
+| Трек > 1 страницы (16 КБ) | Loader отвергал ≥33 сект → fallback (мусор) | Трек на 2 страницы `#06`+`#0F`, runtime page-aware |
+| `LOADNON B=255` для skip 500+ сект | `B` 8-битный, переполнение | 16-битный счётчик через цикл |
+| `IN A,(#10AF)` для save current page | Возвращает `#FF` (write-only) | Не читать MMU-порт; restore жёстко на TSLibPage |
+| Поиск по 8.3 (`GAMES~1`) | Не совпадает с реальным алиасом | Сопоставлять по LFN |
+| `samefile()` для UNC `\\tsclient` | Ложный False | Сравнивать `os.path.normcase(abspath(...))` строкой |
+| Срезать SPG «потому что большой» | Лечит симптом, не причину | Потолка размера нет; причина — флака SD/шины |
+
+### 30.13 Build pipeline
+
+`build_wc_img.cmd` (CRLF + UTF-8; кириллица в UNC собирается через PowerShell):
+
+1. `sjasmplus Source\ASM\main.asm` → `Build/{Core.bin, main1_play.bin, TSLib.bin, zuma.sym}`
+2. `spgbld -b spgbld_vdac2.ini Build\zuma_vdac2.spg`
+3. `python Source\OTHER\make_level_pack.py` → `Build\ZUMALVL.PAK`
+4. `python Source\OTHER\inject_zuma_to_wc_img.py` — in-place inject в хостовый `wc.img`
+
+Перед запуском **закрыть Unreal.exe на хосте**, иначе `WinError 32` (файл занят).
+
+### 30.14 Связано
+
+- `Source/ASM/ts-dos.asm` — драйвер `RawPak_*` (BPB, LFN, FAT-цепочка, sector-table).
+- `Source/ASM/sd_zc.asm` — низкоуровневый `CMD17` (Z-Controller).
+- `Source/OTHER/make_level_pack.py` — pack builder + verifier (+ `pagesplit_track`).
+- `Source/OTHER/test_rawpak_z80.py` — локальный Z80-харнесс FAT.
+- `WC/ZiFi/zifi.asm` / `_sd/VBI.ASM` (Koshi) — каноничный ZiFi (исторический референс).
+- Memory: `reference_zuma_vdac2_fat32_driver_rawpak`, `reference_zuma_vdac2_baseline_2026-05-26_v039`, `reference_zuma_vdac2_upper_levels_track_too_big`, `reference_zuma_vdac2_spg_size_breaks_wc_loader`, `reference_zuma_vdac2_rawpak_z80_harness`, `reference_zuma_vdac2_zifi_streaming_blockers`.
+
+
+---
+
+## Глава 31. Adventure-режим: уровни из таблицы, перенос счёта, Win/Pause (v035–v041)
+
+После того как заработали загрузка уровней с SD (глава 30) и весь рендер, осталось
+собрать из этого **игру**: меню → выбор уровня → партия → победа → следующий
+уровень, с настройками каждого из 22 бордов и четырьмя уровнями сложности. Эта
+глава — про игровые системы поверх движка.
+
+### 31.1 Поток adventure
+
+```
+Main Menu → Level Select → Game (PLAY) → Win (LEVEL DONE) → AdvanceToNextLevel → Intro → …
+                                       ↘ Game Over → restart
+```
+
+- **Level Select**: превью борда (280×170 ARGB4) + название; кнопка Back
+  заблокирована на L1; PREV/NEXT листают, палитра превью переключается под уровень.
+- **4 сложности** — кнопки Rabbit / Eagle / Jaguar / SunGod (`LevelSelect.asm`),
+  пишут `CurrentDifficulty` 0..3.
+- Вход в партию — `FadeLevelSelectToGameplay` (fade-out комнаты + загрузка ассетов
+  уровня из PAK + `VDC_Init`).
+
+### 31.2 Таблица параметров уровня → геймплей
+
+Источник — `zuma_levels_parameters.xlsx` («Difficulty settings»), генерится в
+`level_runtime_table.inc` как `LevelSettingsTable` (**9 байт/запись**):
+
+| off | поле | смысл |
+|---|---|---|
+| +0 | speed | скорость цепи ×100 |
+| +1 | start | lead-in: порог fast→normal фазы (стартовое заполнение) |
+| +2 | score (word) | gauge target — очки до отсечки хвоста |
+| +4 | colors | число цветов шаров (1..6) |
+| +5 | repeat | повтор групп |
+| +6 | single | одиночные |
+| +7 | slowfactor | замедление |
+| +8 | partime | par-time бонус |
+
+Lookup: `GetCurrentLevelSettingRecord` (board = `CurrentLevel` → TIER по
+`CurrentDifficulty` → индекс → запись ×9). Геттеры в Core: `GetCurrentSpeed(+0)`,
+`GetCurrentStart(+1)`, `GetCurrentTargetScore(+2)`, `GetCurrentColors(+4)`,
+`GetCurrentPartime(+8)`. Загрузка — `VDC_LoadLevelSettings` (зовётся из
+`VDC_Init`), заполняет runtime-переменные:
+
+- **Цвета:** `VDC_LevelColors` → `VDC_RandomColor` катит `0..N-1` (было захардкожено 6).
+- **Скорость цепи:** `VDC_LevelSpeed` (speed×100) + аккумулятор: норм-фаза
+  `accum += speed; при ≥100 → один MoveChain` (= speed/100 продвижений/кадр,
+  значения 0.5–0.9 — аутентичные из `levels.xml` оригинала). Хелпер
+  `VDC_SpeedAdvance` в Core.
+- **Lead-in:** `VDC_LevelStart` — порог fast-фазы (был `EQU 35`, теперь per-level 35..60).
+
+### 31.3 Отсечка хвоста (gauge) — два пойманных бага
+
+`VDC_GaugeScore` копит очки; при достижении per-level target бар полон и спавн
+хвоста останавливается. Два бага:
+
+1. **HL-clobber:** `CALL GetCurrentTargetScore` клобал `HL` (внутри
+   `GetCurrentLevelSettingRecord`), а следующий `SBC HL,DE` сравнивал мусор (адрес
+   записи!) → `GaugeFull=1` на ПЕРВОМ же match'е. Фикс: перечитать
+   `LD HL,(VDC_GaugeScore)` после CALL.
+2. **Не сбрасывался:** `VDC_Init` не обнулял `GaugeScore/Shown/Full` → тащились
+   между уровнями. Фикс: добавлены в XOR-блок `VDC_Init`.
+
+HUD-бар нормирован к реальному target (было фикс. 1000): `d = target/63`,
+`fill = GaugeShown/d`, кламп 63.
+
+### 31.4 Накопительный счёт adventure
+
+В оригинале Zuma счёт **накопительный** (доп. жизнь за каждые 50k — только если
+cumulative; подтверждено wiki/GameFAQs). Было: `VDC_Init` обнулял `VDC_PlayerScore`
+на каждый вход в уровень. Фикс: сброс убран из `VDC_Init` (счёт переносится
+Win→next); обнуляется только в начале нового прогона (`FadeLevelSelectToGameplay`)
+и при full-restart (`RestartLevel` при lives=0). Retry (lives>0) и advance — счёт
+сохраняют.
+
+### 31.5 Win-flow «LEVEL DONE»
+
+Было: по концу win-анимации сразу `AdvanceToNextLevel`. Стало — диалог как у Game
+Over:
+
+```
+win-аним → DialogState=DLG_WIN_DONE(5)   ; диалог «LEVEL DONE» + статистика + OK
+OK       → DialogState=DLG_WIN_FADE(6)    ; пер-кадровый рамп FadeAlpha 0→255
+255      → DialogState=0; AdvanceToNextLevel → VDC_Init(state=INTRO)
+```
+
+Затемнение — переиспользуем `DrawFadeOverlay` (чёрный RECTS + COLOR_A), вызов
+добавлен в конец `ZL_DrawFrame` (безвреден при alpha=0).
+
+🔴 **Грабли (исправлено):** `FadeOutRoom` оставляет `FadeAlpha=255`; геймплей его
+не сбрасывал → `DrawFadeOverlay` чёрнил экран (видны были только часы, т.к.
+`DrawDebugClock` рисуется поверх overlay). Фикс: `XOR A : LD (FadeAlpha),A` после
+`FadeOutRoom` в `FadeLevelSelectToGameplay`. Урок: любой вход в геймплей через
+`FadeOutRoom` обязан сбрасывать `FadeAlpha`.
+
+⚠️ **Cross-slot:** ссылки на Core-символы (`DLG_*`, `AdvanceToNextLevel`) из
+wrapper-кода `main.asm` (`UpdateDialog`/`DrawDialogContent` — не в `MODULE Core`)
+нужны с префиксом `Core.`.
+
+### 31.6 Пауза-fade
+
+`VDC_DialogState=4` = пауза-fade (как Win/Game Over/Intro — не-Play: лягушка не
+стреляет, время не идёт). На «No» в диалоге паузы → state 4 + `PauseFadeTimer≈74`
+(~1 с): окно (рамка+заголовок+кнопки) гаснет с убывающей альфой, лягушка рисуется
+с 1-го кадра fade; по концу → state 0 (PLAY), edge кнопки съеден (нет выстрела).
+Привязка к кадровому INT (не RTC — он заморожен паузой).
+
+### 31.7 Интро уровня: динамичный «LEVEL X-X»
+
+Было запечённое «LEVEL 1-1» (атлас). Стало — динамический build «LEVEL N-M»
+(N=`CurrentLevel`+1, 1..22; M=`CurrentDifficulty`+1, 1..4) шрифтом native через
+`DrawStr_Scale` + scale-матрица (2× от названия), right-align к x=610, ниже —
+название уровня. Потребовало добавить `-` в charset `make_font_native.py`.
+
+### 31.8 Заметки по бюджету страниц
+
+Main1 (`main1_play`, slot 3) почти полон — **16366/16384** байт. Тяжёлую логику
+(`VDC_LoadLevelSettings`, `VDC_SpeedAdvance`, `VDC_ReadSampleAtHL`) выносили в
+Core-хелперы, иначе следующая правка в Main1 переполняет страницу → corruption.
+
+### 31.9 Связано
+
+- `Source/ASM/LevelSelect.asm`, `VDC.asm`, `main.asm`; `level_runtime_table.inc`.
+- Memory: `project_zuma_vdac2_level_table_to_gameplay`, `reference_zuma_vdac2_baseline_2026-05-26_v041`, `reference_zuma_vdac2_baseline_2026-05-24_v035`.
