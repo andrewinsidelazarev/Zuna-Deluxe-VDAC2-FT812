@@ -9,7 +9,7 @@
 
 **Источники, осмысленные на сегодня** (локальные копии — в `Docs/`; ссылки — на оригиналы):
 - `VDAC2 #2 - Первые шаги.docx` — русскоязычный учебник #2 (порты ZX-Evo, SPI-обвязка, Z80 asm-функции FT_RD/FT_WR). Железо VDAC2 — [TS-Labs / ZX-Evolution](https://zx.andrew-lazarev.com/our-products/vdac2-videoreview-ru/).
-- `FT81x.pdf` — Bridgetek **FT81X Embedded Video Engine Datasheet** (memory map, регистры, RGB-таймминги): <https://brtchip.com/wp-content/uploads/Support/Documentation/Datasheets/ICs/EVE/DS_FT81x.pdf>
+- `FT81x.pdf` — Bridgetek **FT81X Embedded Video Engine Datasheet** (memory map, регистры, RGB-тайминги): <https://brtchip.com/wp-content/uploads/Support/Documentation/Datasheets/ICs/EVE/DS_FT81x.pdf>
 - `FT81X_Series_Programmer_Guide.pdf` — Bridgetek **FT81X Series Programmer Guide** (opcode-таблицы DL/coprocessor): <https://brtchip.com/wp-content/uploads/Support/Documentation/Programming_Guides/ICs/EVE/FT81X_Series_Programmer_Guide.pdf>
 - `BRT_AN_033_BT81X-Series-Programming-Guide.pdf` — Bridgetek **BT81X Series Programming Guide** (расширение для совместимой BT81x; ASTC, CMD_FLASH*): <https://brtchip.com/wp-content/uploads/2023/12/BT81X-Series-Programming-Guide.pdf>
 - `AN_303 FT800 Image File Conversion.pdf` — конвертация изображений в FT-форматы (Bridgetek App Notes: <https://brtchip.com/document/application-notes/>).
@@ -315,7 +315,7 @@ FT_Write:
 
 ---
 
-## 4. Видеотаймминги для 640×480
+## 4. Видеотайминги для 640×480
 
 TSLib содержит выверенные таблицы для **трёх** режимов 640×480 (`Include\FT\81x Const.inc:359-391`):
 
@@ -329,7 +329,19 @@ TSLib содержит выверенные таблицы для **трёх** �
 | Visible     | **640**        | **480**      |
 | Total       | 800            | 524          |
 
-`F_MUL` = множитель базового clock'а 8 МГц (REG_FREQUENCY основа). 8 × 3 = 24 МГц pixel clock.
+`F_MUL` — значение, которое TSLib пишет в `REG_PCLK`. На плате VDAC2 (внешний
+клок через `CLKEXT` + `CLKSEL #C0`) результирующий pixel clock получается как
+`8 МГц × F_MUL`: 8×3 = 24 МГц (а при F_MUL=4 → 32 МГц, §4.2). Это подтверждается
+независимо: `HCYCLE × VCYCLE × refresh` = 800×524×57 ≈ 24 МГц.
+
+> ⚠️ **Уточнение семантики (важно при переносе).** «8 × F_MUL» — мнемоника ИМЕННО
+> нашей настройки клока на VDAC2, а не общая семантика регистра. По даташиту
+> FT81x `REG_PCLK` — это **ДЕЛИТЕЛЬ** системного клока: `PCLK = f_sys / REG_PCLK`
+> (не множитель и не «база 8 МГц»). У FT81x системный клок задаётся `CLKSEL`
+> (по умолчанию 60 МГц; варианты 24/36/48; 72 МГц — уже у BT81x), и после смены
+> клока надо обновить `REG_FREQUENCY`. Переносите на другой клок — считайте PCLK
+> по формуле делителя из даташита, не по «×8».
+
 TSLib-константа: `F0_MUL=3, H0_FPORCH=16, H0_SYNC=96, H0_BPORCH=48, H0_VISIBLE=640, V0_FPORCH=11, V0_SYNC=2, V0_BPORCH=31, V0_VISIBLE=480`.
 
 ### 4.2. VM_640_480_74Hz (PCLK 32 MHz, F_MUL=4) — повышенная частота
@@ -356,7 +368,7 @@ TSLib `FT_ModeTab` (`81x Const.inc:460`) укладывает значения �
 | REG_VOFFSET   | V_FPORCH+V_SYNC+V_BPORCH − 1  | 43                  |
 | REG_VSIZE     | V_VISIBLE                     | 480                 |
 | REG_VCYCLE    | V_FPORCH+V_SYNC+V_BPORCH+V_VISIBLE | 524            |
-| REG_PCLK      | F_MUL                         | 3 (PCLK = 8×3 = 24 МГц) |
+| REG_PCLK      | F_MUL (делитель клока, см. §4.1) | 3 → PCLK 24 МГц  |
 | REG_PCLK_POL  | 0                             | 0                   |
 
 ### 4.5. Применение через TSLib-макрос
@@ -398,7 +410,7 @@ FT_BOOT_UP      macro
                 OR A
                 JR NZ, .WaitCPU_Reset
 
-                FT_WR_REG8  FT_REG_PCLK,    0         ; PCLK выкл — таймминги настраиваются "тихо"
+                FT_WR_REG8  FT_REG_PCLK,    0         ; PCLK выкл — тайминги настраиваются "тихо"
                 FT_WR_REG16 FT_REG_HCYCLE,  0x224     ; default тайминги
                 FT_WR_REG16 FT_REG_HOFFSET, 0x02B
                 ; ... HSYNC0/1, VCYCLE/OFFSET/VSYNC0/1, SWIZZLE, PCLK_POL ...
@@ -409,9 +421,15 @@ FT_BOOT_UP      macro
                 FT_WR_REG16 FT_REG_OUTBITS, 0x000
                 FT_WR_REG16 FT_REG_GPIOX_DIR, 0xFFFF  ; все GPIOX выходы
                 FT_WR_REG16 FT_REG_GPIOX,     0xFFFF  ; включить DISP
-                FT_WR_REG8  FT_REG_PCLK,    2         ; PCLK on (default 60/2 = 30 МГц)
+                FT_WR_REG8  FT_REG_PCLK,    2         ; PCLK on (временное значение)
                 endm
 ```
+
+`REG_PCLK=2` в конце `FT_BOOT_UP` — **временное** значение: оно лишь включает
+развёртку с default-таймингами, чтобы видеовыход «ожил». Рабочий PCLK для 640×480
+задаёт следующий шаг — `FT_RESOLUTION` (REG_PCLK = F_MUL = 3 или 4). Прежний
+комментарий «60/2 = 30 МГц» был прикидкой по даташит-формуле делителя при
+условном sys-clock 60 МГц (см. уточнение в §4.1).
 
 После `FT_BOOT_UP` нужный режим выставляется через `FT_RESOLUTION VM_640_480_57Hz`.
 Финальный шаг — переключить выход TS-Conf на FT812 и отключить обычный gfx:
@@ -558,7 +576,7 @@ Wrapping — 4KB. После записи → `REG_CMD_WRITE = новый offset
 
 1. ✅ Базовая 360×288-версия Zuma собирается в папке проекта.
 2. ✅ Python-эмулятор VDC масштабирован под 640×480 (визуальная отладка).
-3. ⏳ Init-последовательность FT812: detect → power → таймминги 640×480 → REG_PCLK.
+3. ⏳ Init-последовательность FT812: detect → power → тайминги 640×480 → REG_PCLK.
 4. ⏳ Первый «hello DL» — синий экран через VDAC2.
 5. ⏳ Загрузка тестового bitmap в RAM_G + рендер одной точкой.
 6. ⏳ Атлас шаров → BITMAP_HANDLE → VERTEX2II loop по slots[].
@@ -754,7 +772,7 @@ ResolutionHeightPtr  EQU #40F5
 1. **Sanity-check VDAC2**: `IN A,(STATUS) : AND %111 : CP %111` — если бит-маска ≠ 111, возврат с Z=0 (нет VDAC2 на плате).
 2. **`FT_BOOT_UP`** — полная init FT812: PWRDOWN→CLKEXT→CLKSEL #C0→ACTIVE, ждать REG_ID=0x7C, default тайминги, GPIOX=0xFFFF, REG_PCLK=2 → видеовыход активирован.
 3. **`FT_CMD_RESET`** — обнулить REG_CMD_READ/WRITE (на случай висящих команд).
-4. **`FT_RESOLUTION VM_640_480_57Hz, ResolutionWidthPtr`** — переключить таймминги: PCLK=24 МГц (F_MUL=3), HCYCLE 800, VCYCLE 524, HSIZE/VSIZE 640×480.
+4. **`FT_RESOLUTION VM_640_480_57Hz, ResolutionWidthPtr`** — переключить тайминги: PCLK=24 МГц (F_MUL=3), HCYCLE 800, VCYCLE 524, HSIZE/VSIZE 640×480.
 5. **Залить пустой DL** (12 байт = `CLEAR_COLOR_RGB(0,0,0); CLEAR(1,1,1); DISPLAY()`) в RAM_DL через `FT.WriteDL`, потом `REG_DLSWAP=2` — чёрный экран до первого MainLoop-кадра.
 6. **`REG_INT_MASK = FT_INT_SWAP, REG_INT_EN = 1`** — разрешить swap-interrupt для синхронизации MainLoop'а.
 7. **`Video_Setting VID_FT812 | VID_NOGFX`** = `OUT (0xAF), %00100100` — переключить TS-Conf выход на FT812 + отключить TS-Config gfx (освобождает 448 DMA-циклов/строку).
@@ -815,7 +833,7 @@ Smoke-test: `_test_init_video.asm` — точка входа `Init_Video → Mai
 
 ## 11. Открытые вопросы / TODO для углубления учебника
 
-- ✅ ~~Точные таймминги VGA 640×480~~ — закрыто (TSLib `81x Const.inc:359-391`, см. §4).
+- ✅ ~~Точные тайминги VGA 640×480~~ — закрыто (TSLib `81x Const.inc:359-391`, см. §4).
 - ✅ ~~Полный список opcodes DL~~ — закрыто (TSLib `DL Macro.inc` + `BufferMacro.inc`, см. §10).
 - ⏳ RAM_CMD wrapping и синхронизация с REG_CMD_READ/WRITE — есть пример в TSLib `Coprocessor\Buffer.asm`, разобрать и перенести в учебник.
 - ⏳ Touch-engine — нам не нужен, но в учебник для полноты: описать REG_TOUCH_*.
@@ -1413,6 +1431,14 @@ Frog_DrawFaceOverlay:
 Practical rule: **любой Vertex2f, идущий после atlas-блока (где Cell≠0 был
 эмитен), должен явно эмитить нужный Cell** (даже Cell(0) для single-cell
 sprite). Не полагайся на наследование = 0 by default.
+
+> **Нюанс `VERTEX2II` vs `VERTEX2F`.** Ловушка наследования CELL касается прежде
+> всего `VERTEX2F`: он берёт cell из persistent-состояния. У `VERTEX2II` номер
+> ячейки (cell, биты 0..6) и handle зашиты **прямо в 32-битную команду**, поэтому
+> такой вершине «унаследованный» CELL не страшен. НО `VERTEX2II` при этом сам
+> **перезаписывает** глобальный CELL для последующих команд — так что если дальше
+> в кадре идёт `VERTEX2F`, он подхватит cell от предыдущего `VERTEX2II`. Правило
+> «эмить CELL явно» остаётся в силе именно из-за этого взаимодействия.
 
 ### Методология поиска
 
@@ -3760,10 +3786,18 @@ PAK выложен непрерывно, поэтому вместо пер-се
 кластеров при любом spc). Убраны seek-by-read и пер-секторный обход FAT —
 быстро и просто.
 
-⚠️ **Граница допущения:** если файл фрагментирован (логический сектор N лежит за
-разрывом цепочки), `PakLba + N` укажет не туда. Поэтому инжектор должен класть
-PAK **непрерывно** (проверено — `check_pak_chain.py`). Чинить «по-взрослому» —
-мультиран-таблица секторов по FAT-цепочке (бэклог).
+> ⚠️⚠️ **КРИТИЧЕСКОЕ ОГРАНИЧЕНИЕ — фрагментация файла.** `LBA = PakLba + N`
+> **верно ТОЛЬКО для непрерывного (нефрагментированного) PAK**. Если файл лежит на
+> карте кусками (FAT-цепочка с разрывами — обычное дело после многократной
+> перезаписи карты), то логический сектор N окажется не там, и на реальной
+> SD-карте игра **загрузит мусор или зависнет** — баг, который не воспроизведётся
+> в эмуляторе с «чистым» образом.
+>
+> Наш инжектор (`inject_zuma_to_wc_img.py`) пишет PAK **одним непрерывным куском**
+> и это проверяется `check_pak_chain.py`. Если выкладываете PAK на карту вручную —
+> кладите на свежеотформатированную/дефрагментированную карту и проверяйте
+> непрерывность. Универсальное решение (без допущения непрерывности) —
+> мультиран-таблица секторов, построенная обходом FAT-цепочки (в бэклоге).
 
 ### 30.7 Двухфазная загрузка: FT812 и SD на одной SPI-шине
 
