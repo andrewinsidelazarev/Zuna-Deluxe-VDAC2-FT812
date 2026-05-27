@@ -3699,3 +3699,1688 @@ SPG packaging:
 
 Итог: финальное меню теперь использует отдельный нативный `cancun10` для строк счёта/статистики,
 а пиксельно подогнанный `cancun8` меню/HUD не изменён.
+
+## [2026-05-22 03:30] VDAC2 → VDC: 4 часа на rainbow noise в Codex-меню без root cause
+
+**Контекст:** Codex до этой сессии добавил MenuMain.asm + LevelSelect.asm (diagnostic) + level_select_assets.inc, переключил `Start: JP MainLoop` → `JP MenuMain`. На реальном железе Unreal главное меню рендерится с rainbow noise на background (640×480 PALETTED4444 @ RAM_G #000000) и sky (640×167 @ #04B000). Buttons / sun / glow рендерятся ЧИСТО. UI кликается, но кликать не видно куда.
+
+Сохранено как опорная v033 (баг открыт): `_baseline_v033_codex_menu_restored/` + `releases/v033-2026-05-22-codex-menu-restored.spg`.
+
+**Что пробовал и почему НЕ помогло:**
+
+1. **Split .zlib на 16K chunks + multi-Block declarations в spgbld_vdac2.ini** — гипотеза "spgbld хранит max 16K на страницу, файлы >16K truncated". ОПРОВЕРГНУТО эмпирически: spgbld auto-spans файлы через последовательные страницы. Test: single Block decl с 31376-байтным файлом → байты на page+1 == orig_file[16384:]. Мой split-фикс был no-op.
+
+2. **`Source/OTHER/test_levelsel_loader_walks.py`** — патчил FT.Coprocessor.WaitFlush/Write/Write32/IsFault/Wait на `OR A; RET` в Z80 RAM, чтобы LoadLevelSelectAssets walked-through. PASS, но это только структурная проверка (Z80 не зависает), к реальному HW garbage отношения не имеет.
+
+3. **`Source/OTHER/test_menu_inflate_ramg.py`** — хук на PC entry FT.Coprocessor.Inflate, читал реальные args (A=dest_hi, DE=dest_lo, BC=size_lo, B'=size_hi, HL=src_off, A'=src_page), делал Python `zlib.decompress` от physical memory → писал в `emu.ft.ram_g[dest:]`. Все 24 inflate вызова прошли с КОРРЕКТНЫМИ dest и sizes (5×61440 FG + 106880 SKY + 8004 SUN + 44100 GLOW + 14996×3 ADV + ... + 16384 cursor). **Loader идеален.**
+
+4. **`Source/OTHER/dump_menu_fg_render.py`** — декомпрессировал `.zlib` ассеты, рендерил с обеими палитрами (UI/SKY) в PNG. `_menu_fg_with_ui_pal.png` = идеальный tiki temple с лягушкой/баннером/пирамидами; `_menu_sky_with_sky_pal.png` = идеальный закат. **Assets и палитры верны.**
+
+5. **Замена `JP MenuMain` → `CALL LoadGameplayAssets / JP MainLoop`** (skip menu, прямой бут в Level 1, как baseline v032). Повисло. Не разобрался — в baseline v032 LoadGameplayAssets было INLINE в Initialize, у Codex выделено в отдельную функцию; что-то в этом разделении нарушает state. Откатил.
+
+6. **Перенос MENU_FG_RAMG на #010000** (где работает gameplay bg) — НЕ выполнено, юзер прервал. Гипотеза: FT81x RAM_G #000000 может содержать boot-state pattern или иметь quirk.
+
+**Отвергнутые причины (НЕ повторять):**
+- spgbld truncation на 16K (см. #1)
+- Битый Z80 INFLATE driver (см. #3)
+- Битые ассеты или палитры (см. #4)
+- Wrong palette pairing в MenuDraw* (FG+UI/SKY+SKY правильно)
+- BITMAP_HANDLE binding order (HANDLE→SOURCE→LAYOUT→SIZE везде)
+- RAM_G 4-byte alignment menu (Gemini указал на level_select alignment, но это dead code)
+
+**Открытые гипотезы (для следующей сессии):**
+1. **FT812 inflate quirk на больших multi-page streams** — gameplay bg идёт через FT.WriteMem из уже split'нутых 16K raw chunks (`bg_paletted_p00.bin..p07.bin`), menu — через CMD_INFLATE single .zlib >16K. Возможно FT812 inflate имеет багу на multi-page stream, не воспроизводящуюся в Python zlib.
+2. **RAM_G #000000 quirk** — Codex положил MENU_FG_RAMG туда. Игровой bg всегда на #010000. FT81x может оставлять что-то в #000..#1000 после boot.
+3. **DL state leak из Init_Video** — FT812 boot оставляет BITMAP_TRANSFORM/COLOR_MASK/etc., который ломает 640×480 PALETTED4444 рендер но не button-size.
+
+**План для следующей сессии:**
+- Минимизировать MenuBuildFrame до `ClearAll + MenuDrawForeground + End` — если still noise, проблема в одном FG. Если нормально — взаимодействие.
+- Перенести MENU_FG_RAMG на #010000 и rebuild (одна правка в MenuMain.asm).
+- Использовать EveApps SampleApp ZumaPlayback emulator (pixel-accurate FT812), не Python.
+
+**Применимо ли в VDC:** не применимо напрямую (TS-Conf VDC не использует FT812). Но урок про **верифицировать данные/loader Python-инструментами перед гипотезами про hw bug** общий: гипотеза «нашего кода» приоритетнее гипотезы «hw bug», но если loader/data доказанно верны — пора на HW debug, не Python ещё больше.
+
+**Ссылки:**
+- Memory: `reference_zuma_vdac2_baseline_2026-05-22_v033`, `feedback_zuma_vdac2_menu_rainbow_session_2026-05-22`, `feedback_zuma_vdac2_spgbld_autospans_pages`
+- Tests: `Source/OTHER/test_menu_inflate_ramg.py`, `Source/OTHER/dump_menu_fg_render.py`, `Source/OTHER/test_levelsel_loader_walks.py`
+- Screenshot бага: `Безымянный.png` (rainbow noise BG/sky, чистые buttons)
+- Codex menu code: `Source/ASM/MenuMain.asm`, `Source/ASM/LevelSelect.asm`, `Source/ASM/level_select_assets.inc`
+
+
+## [2026-05-22 10:58] VDAC2 -> Level Select -> Gameplay: переход починен, превью уровня видно, v034 опорная
+
+Контекст для Клода:
+- Пользователь продолжил работу с экраном выбора уровня после записи выше про неудачную сессию с rainbow noise.
+- Цель этого этапа была не "сделать еще один экран", а собрать рабочий room handoff:
+  `Main Menu -> Level Select -> Gameplay`, с возвратом в главное меню из level-select и из игры.
+- Пользователь подтвердил на железе после финального фикса:
+  - превью уровня отображается;
+  - кнопка `Play` переходит в игру.
+- Текущая опорная версия сохраняется как v034. Это baseline после восстановления level-select/gameplay handoff.
+
+Что сделано по экрану выбора уровня:
+1. Добавлен/доведен отдельный level-select room:
+   - код: `Source/ASM/LevelSelect.asm`;
+   - generated include RAM_G/SPG layout: `Source/ASM/level_select_assets.inc`;
+   - asset generator: `Source/OTHER/make_level_select_paletted.py`;
+   - room использует свои background/sky/buttons/difficulty badges и повторно использует menu cursor.
+
+2. Переходы между room'ами сделаны через черный fade:
+   - `FadeMenuToLevelSelect`
+   - `FadeLevelSelectToMenu`
+   - `FadeLevelSelectToGameplay`
+   - `FadeGameplayToMenu`
+   - `FadeInMenu`, `FadeInLevelSelect`, `FadeOutRoom`, `FadeInRoom`
+   - код в resident helper-блоке `Source/ASM/main.asm`.
+   Причина fade: room'ы выгружают один профиль `RAM_G` и заливают другой. Без скрытия этого окна пользователь видел цифровой мусор во время asset reload.
+
+3. Переход из level-select в игру теперь реально делает:
+   - Fade Out level-select в черный;
+   - `CALL Core.LoadGameplayAssets`;
+   - `JP Core.MainLoop`.
+   Это соответствует модели "выгрузить один DL/asset profile и загрузить другой"; мгновенное переключение не требуется.
+
+4. Возврат в главное меню:
+   - `Main Menu` на level-select работает через fade;
+   - level-select `Main Menu` возвращает в `Core.MenuMain`;
+   - gameplay HUD `MENU` больше не открывает прежний pause-dialog в этом варианте, а делает черный handoff в `Core.MenuMain`.
+
+5. Кнопки сложности сверены с оригинальным HD reference:
+   - см. `Zuma-Deluxe-HD-release-v010-ref/src/menu/MenuMgr.c`;
+   - original `Button_Draw` использует interactive states `normal / hover / pressed`;
+   - для badge difficulty здесь оставлены три interactive sprite states;
+   - выбранная сложность держится как `pressed` и на текущих badge sprites это красный активный уровень;
+   - зеленый badge sprite используется при наведении (`hover`);
+   - это было уточнено пользователем после проверки.
+
+6. Добавлены превью и имя текущего уровня для level-select:
+   - пока текущий экран показывает уровень `Spiral of Doom`;
+   - имя берет уже существующий `TEXT_SPIRALDOOM` atlas;
+   - background preview берет level 1 paletted background pages и отдельную palette в `RAM_G`;
+   - draw helper: `DrawLevelSelectPreview`;
+   - loader helper: `LoadLevelSelectPreviewAssets`.
+
+Критические дефекты, которые были найдены и исправлены:
+
+### A. Превью сначала рисовало шум вместо картинки уровня
+
+Симптом:
+- на скриншоте level-select окно превью было заполнено цветным шумом.
+
+Причина:
+- превью background заливается восемью raw страницами по 16K:
+  `BG_PAGE_COUNT = 8`, всего loader реально пишет `8 * #4000 = #20000` bytes;
+- полезных пикселей 400x300 всего 120000 bytes, и палитра сначала была поставлена сразу за "полезным" концом bitmap;
+- последняя padded background page перетирала preview palette и соседний text atlas.
+
+Фикс:
+- preview background оставлен на `LS_PREVIEW_BG_RAMG = #084000`;
+- palette перенесена за весь реально записываемый 128K span:
+  `LS_PREVIEW_BG_PAL_RAMG = #0A4000`;
+- имя уровня перенесено следом:
+  `LS_PREVIEW_NAME_RAMG = #0A4200`.
+
+Урок:
+- для loader'ов `UnpackAndUploadPage` / raw 16K page upload считать надо не только useful bitmap bytes, а фактический write span. Padding тоже пишет в `RAM_G`.
+
+### B. Дампы после Play показывали scratch page в #C000
+
+Симптом:
+- после `Play` пользователь дал RAM dump `111`;
+- в `#C000..` лежали не байты `main1_play`, а bitmap-like данные.
+
+Что выяснилось:
+- в первом дампе `#C000` совпал с содержимым `dialog_frame_p07.bin`;
+- это не "Play вообще не вызван";
+- наоборот, dump был снят внутри `Core.LoadGameplayAssets` во время compressed upload через `UnpackAndUploadPage`.
+
+Фикс/укрепление:
+- `UnpackAndUploadPage` теперь сразу после каждого compressed upload восстанавливает slot 3:
+  `LD A,#04 : LD BC,PAGE3 : OUT (C),A`;
+- раньше slot 3 мог оставаться на `SCRATCH_PAGE` до конца всей серии upload'ов.
+
+Это не было финальной причиной зависания, но убирает опасное окно, в котором call-side code/dump видят scratch page вместо `main1_play`.
+
+### C. Реальная причина черного экрана и зависания после Play
+
+Финальный симптом:
+- Fade Out прошел;
+- экран черный;
+- в игру не входит.
+
+Свежий dump после фикса slot3 показал другое:
+- `#C000` уже снова совпадает с `main1_play`;
+- `BgRamL/BgRamH` и loader state показывают, что `LoadGameplayAssets` прошел dialog frame upload и подошел к загрузке font atlases;
+- байты `Core.LoadGameplayAssets` около `#5DFF..#5F13` в dump уже не совпадали с assembled code.
+
+Root cause:
+- FT812 coprocessor command buffer был определен как:
+  `CMD_ADDRESS_PTR #5E00`;
+- до menu/level-select роста resident main0 это место считалось "свободным после Core";
+- теперь resident `Core.bin` занимает `#5C00..#5F13` (`Core.Main0_End = #5F14`);
+- каждый `MenuBuildFrame` / `LevelSelectBuildFrame` пишет command buffer с `#5E00` и физически портит хвост resident loader code;
+- `LoadGameplayAssets` исполняет начало нормально, затем доходит до перезаписанного кода возле native/cancun font upload и зависает на черном экране.
+
+Финальный фикс:
+- `CMD_ADDRESS_PTR` перенесен с `#5E00` на `#6000` в `Source/ASM/main.asm`;
+- это отделяет FT command buffer от resident main0 code.
+
+Проверка фикса:
+- assembler symbol после сборки:
+  `Core.Main0_End = #5F14`;
+- отдельный Z80/shadow check строит `Core.LevelSelectBuildFrame` и сравнивает loader tail:
+  `#5DF0..#5F13` до/после frame build одинаковы;
+- при этом bytes command buffer реально появляются по новому адресу `#6000`.
+
+## Методология отладки, которую здесь надо повторять
+
+Ниже главное. Эта проблема была найдена не "подбором спрайтов" и не гипотезой про FT812 black screen, а чтением снимков состояния.
+
+### 1. Сначала классифицировать сбой по пользовательскому наблюдению
+
+Разделять:
+- `клик не срабатывает`;
+- `клик срабатывает, но loader не стартует`;
+- `loader стартует и зависает внутри`;
+- `loader вернулся, но MainLoop не рисует`.
+
+Для этого не гадать по экрану. Черный экран после Fade может означать любую из этих стадий.
+
+### 2. Дамп сравнивать с текущей сборкой, а не с памятью "по ощущениям"
+
+Для каждого свежего `111`:
+- зафиксировать timestamp/size dump;
+- читать текущий `zuma.sym`;
+- сверять байты dump с текущими `Core.bin` и `main1_play.bin`;
+- отдельно проверять code slots:
+  - resident Core in slot 1 (`#5C00...`);
+  - scene-specific main1 in slot 3 (`#C000...`).
+
+В этой сессии полезные быстрые проверки были:
+- совпадение dump `#C000..` с `main1_play.bin`;
+- совпадение dump `#5C00..` с `Core.bin`;
+- чтение `Core.BgPg`, `Core.BgRamL`, `Core.BgRamH` по адресам из `zuma.sym`.
+
+### 3. Если slot показывает "мусор", сначала доказать что это за данные
+
+Не писать сразу "код потерян".
+
+Здесь bitmap-like `#C000` оказался не случайным:
+- первые 4096 байт dump slot3 были сопоставлены с known converted `.bin`;
+- совпадение 4096/4096 с `dialog_frame_p07.bin` доказало, что dump снят в scratch output последней dialog frame распаковки.
+
+Это сразу сузило поиск:
+- `Play` до loader доходит;
+- problem is after/during `LoadGameplayAssets`, not button hit-test.
+
+### 4. Состояние loader читать через его mutable variables
+
+Для series upload loops полезнее всего:
+- source page variable (`BgPg`);
+- destination (`BgRamH:BgRamL`);
+- loop addresses from symbols:
+  `.UploadBalls`, `.UploadFrog`, `.UploadKz`, `.UploadDFrame`, `.UploadFont`, `.UploadFontC`.
+
+Когда dump показывает:
+- `BgRam` на следующем destination после dialog frame;
+- slot3 уже обратно `#04`;
+- но экран все еще черный,
+то искать надо не старый Play branch, а следующий executable code path.
+
+### 5. Проверять не только data corruption, но и self-corruption code/data overlap
+
+Финальный root cause был именно overlap:
+- assembled code grew;
+- hardcoded command buffer address остался старым;
+- кадр меню сам портил resident loader.
+
+Как это доказано:
+1. В dump хвост loader code около `#5DFF` не совпал с листингом/текущим bin.
+2. Эти overwritten bytes имели вид FT command stream (`DLSTART`, display-list words), а не случайной RAM.
+3. По grep найдено:
+   `define CMD_ADDRESS_PTR #5E00`.
+4. По symbol найдено:
+   `Core.Main0_End = #5F14`.
+5. Диапазоны пересеклись напрямую.
+
+### 6. Эмуляторные тесты использовать по назначению
+
+Что они подтвердили:
+- `test_levelsel_loader_walks.py` проверяет, что level-select loader structural path возвращается;
+- `test_menu_inflate_ramg.py` проверяет main menu inflate args/data;
+- прямой call `Core.LoadGameplayAssets` в Z80 emulator вернулся и восстановил:
+  `slot2=#06`, `slot3=#04`.
+
+Что они не доказали до dump:
+- что кадры level-select не перезаписали resident code до реального `Play`.
+
+После root cause добавлен targeted check:
+- build level-select frame;
+- compare resident loader tail before/after;
+- verify write moved to new command buffer address.
+
+### 7. При RAM_G layout считать фактические write ranges
+
+Для каждого profile handoff держать таблицу:
+- RAM_G source;
+- width/height/useful bytes;
+- upload primitive;
+- фактический padded span;
+- palette/text/next atlas addresses.
+
+Иначе будут ошибки вроде preview palette under padded last page.
+
+### 8. Не переносить выводы между дампами без проверки версии
+
+В этой сессии было два разных useful dump состояния:
+- старый dump показывал scratch page in `#C000`;
+- свежий dump после slot3 restore уже показывал `main1_play` in `#C000` и code corruption in resident main0.
+
+Это разные стадии. Сравнение dump timestamp + current binary + symbols обязательно.
+
+## Рабочий цикл отладки для Клода
+
+Это не только заметки по одному багу. Для следующих room transitions, loader hangs, black screens и RAM corruption использовать такой цикл.
+
+### Цикл A: от симптома к точке остановки
+
+1. Получить точный пользовательский сценарий:
+   - какая сборка запущена;
+   - из какого room старт;
+   - что нажато;
+   - что видно до нажатия;
+   - что видно после нажатия;
+   - свежий dump снят до клика, сразу после клика или после ожидания.
+
+2. Сформулировать стадии перехода как state machine.
+   Для текущего случая:
+   - `LevelSelect.loop`;
+   - `LevelSelectPlayClick`;
+   - `FadeLevelSelectToGameplay`;
+   - `FadeOutRoom`;
+   - `Core.LoadGameplayAssets`;
+   - `Core.MainLoop init`;
+   - first gameplay frame.
+
+3. Для каждого dump ответить только на один вопрос:
+   "На какой стадии машина была в момент dump?"
+
+4. Если стадия не доказана, не чинить логику следующей стадии.
+   Пример:
+   - пока dump доказал "loader already running", не чинить Play hitbox;
+   - пока dump доказал "resident code corrupted before loader tail", не обвинять font atlas.
+
+### Цикл B: dump -> symbols -> memory map -> hypothesis
+
+На каждый новый dump запускать один и тот же короткий pipeline:
+
+1. `Get-Item 111`:
+   - проверить timestamp;
+   - убедиться, что это новый dump.
+
+2. `zuma.sym`:
+   - взять адреса entry points и mutable state variables;
+   - не держать адреса в голове после пересборки, symbols могли сдвинуться.
+
+3. Code identity checks:
+   - compare dump resident code with `Core.bin`;
+   - compare dump scene code with `main1_play.bin`;
+   - если bytes не совпали, локализовать первый диапазон расхождения.
+
+4. Page/data identity checks:
+   - если в code slot лежит "похоже на bitmap", сравнить с known `.bin`/page assets;
+   - искать exact/near-exact match по первым 4K/16K, а не смотреть глазами.
+
+5. State variables:
+   - прочитать loop source page;
+   - прочитать destination RAM_G address;
+   - прочитать state flags/click flags только если вопрос про input/control flow.
+
+6. Только после этого писать hypothesis:
+   - input branch not taken;
+   - loader currently busy;
+   - loader page mapping transient;
+   - executable code overwritten;
+   - RAM_G asset overlap;
+   - FT wait/swap stall.
+
+### Цикл C: гипотеза -> минимальный тест -> фиксация результата
+
+Для каждой гипотезы:
+
+1. Выбрать минимальное доказательство.
+   Примеры:
+   - "Play не кликается" -> test press/release and `LevelSelectPlayClick`;
+   - "loader не возвращается" -> direct emulator call to `Core.LoadGameplayAssets`;
+   - "menu frame портит code" -> compare resident byte range before/after one frame build;
+   - "RAM_G palette overwritten" -> compute actual write spans and inspect overlapping addresses.
+
+2. Записать, что именно тест доказывает и чего не доказывает.
+   Нельзя после `direct LoadGameplayAssets returned` автоматически утверждать, что real path из menu не ломает loader code до вызова.
+
+3. Если тест отрицательный, вычеркнуть гипотезу явно.
+   Не возвращаться к ней без нового evidence.
+
+4. Если тест положительный, сделать маленький фикс:
+   - fixed address relocation;
+   - slot restore;
+   - corrected RAM_G span;
+   - one state transition.
+
+5. После фикса повторить:
+   - build;
+   - narrow test;
+   - broader transition test;
+   - user/hardware check if problem observed only on real run.
+
+### Цикл D: room/loader overlap audit
+
+Перед тем как считать room switch готовым, пройти оба пространства:
+
+#### Z80 memory
+- где живет resident code;
+- где живет page-mapped scene code;
+- где стек;
+- где IM2/vector/config area;
+- где TSLib command buffer;
+- какой код пишет в эти буферы каждый кадр;
+- вырос ли resident code после добавления новых helpers.
+
+#### FT812 RAM_G
+- какие room profiles mutually exclusive;
+- какие assets должны оставаться между room'ами;
+- какие bitmap/palette/text addresses reused;
+- useful bytes;
+- actual upload bytes with page padding;
+- compressed stream destination sizes;
+- palette address not inside last padded upload;
+- font/text atlas not inside a future dialog/frame upload.
+
+### Decision algorithm для black screen после transition
+
+Использовать как дерево решений:
+
+1. Есть ли доказательство, что click branch сработал?
+   - нет -> input/hit/click release logic;
+   - да -> дальше.
+
+2. Fade/black frame уже выполнен?
+   - нет -> transition frame/swap;
+   - да -> дальше.
+
+3. Asset loader entry reached?
+   - нет -> call/jump/page mapping before loader;
+   - да -> дальше.
+
+4. Loader state перемещается по page/dest variables?
+   - да -> loader busy или завис внутри конкретного stage; определить stage;
+   - нет -> проверить wait loop/FT fault/overwritten code.
+
+5. Loader returns in direct emulator call?
+   - нет -> ошибка самого loader path/data/ZX7/FT write path;
+   - да -> проверить реальный precondition path:
+     - code was intact before call?
+     - buffer addresses overlap?
+     - pages restored?
+     - previous room left FT state that path assumes clean?
+
+6. MainLoop entry reached with code pages correct?
+   - нет -> loader return/handoff;
+   - да -> first gameplay frame/swap/interrupt/render state.
+
+### Методы, которые сработали в этой сессии
+
+- Exact binary compare of dump ranges to built binaries.
+- Exact asset compare of dump scratch page to converted asset pages.
+- Symbol-driven inspection of variables, not hardcoded stale addresses.
+- Emulator direct-call verification for long loaders.
+- Shadow FT812 verification for generated command buffer side effects.
+- One-frame before/after memory guard around suspected overlapping resident code.
+- Actual write-span calculation for RAM_G instead of relying on visible image dimensions.
+- Real-hardware confirmation after emulator proof.
+
+### Антипаттерны, которые нельзя повторять
+
+- "Черный экран" -> сразу чинить renderer без доказательства стадии.
+- Видеть non-code bytes at `#C000` -> сразу объявлять page mapping broken.
+- Доверять старому free-range comment после роста code size.
+- Считать `useful bitmap bytes` равным фактическому upload span.
+- Держать symbol addresses в памяти после каждой пересборки.
+- Считать эмуляторный direct-call полным доказательством menu->game transition.
+- Менять сразу hitbox, Fade, loader and RAM_G layout одним фикс-пакетом без evidence.
+
+Сборка/проверки перед сохранением v034:
+- `sjasmplus Source\ASM\main.asm --syntax=ab --lst=main.lst --sym=zuma.sym` -> PASS, existing forward-reference warnings only.
+- `spgbld -b spgbld_vdac2.ini zuma_vdac2.spg` -> PASS.
+- `python Source\OTHER\test_levelsel_loader_walks.py` -> PASS.
+- `python Source\OTHER\test_menu_inflate_ramg.py` -> PASS.
+- direct `Core.LoadGameplayAssets` emulator call -> returned, 4,710,758 steps, `slot2=#06`, `slot3=#04`.
+- targeted buffer-overlap check after `Core.LevelSelectBuildFrame` -> loader tail unchanged, command bytes at `#6000`.
+- real-hardware/user confirmation -> preview visible and gameplay starts from `Play`.
+
+Опорная версия:
+- `releases/v034-2026-05-22-level-select-preview-play-baseline.spg`
+- `_baseline_v034_level_select_preview_play/`
+
+Файлы, которые важны для продолжения:
+- `Source/ASM/main.asm`
+- `Source/ASM/MenuMain.asm`
+- `Source/ASM/LevelSelect.asm`
+- `Source/ASM/level_select_assets.inc`
+- `Source/OTHER/make_menu_main_paletted.py`
+- `Source/OTHER/make_level_select_paletted.py`
+- `Source/OTHER/zuma_full_z80_emulator.py`
+- `Source/OTHER/test_levelsel_loader_walks.py`
+- `Source/OTHER/test_menu_inflate_ramg.py`
+- `spgbld_vdac2.ini`
+
+## [2026-05-22] Codex -> VDAC2: структура проекта после уборки корня
+
+Пользователь сделал резервную копию и попросил разложить файлы по назначению.
+Главное правило уборки: игровые graphics assets остаются в `Graphics`, build outputs
+не живут в корне, а картинки с именами `_*.png` / `_*.gif` считаются временными
+preview/slice/debug outputs Claude/Codex, а не ресурсами игры.
+
+Текущая структура:
+
+- корень проекта оставлен для управляющих файлов: `build.cmd`, `spgbld*.ini`,
+  `README.md`, `Чат.txt`, `releases/`, `Source/`, `Graphics/`, `Docs/`;
+- `Build/` теперь содержит VDAC2 build outputs:
+  `TSLib.bin`, `Core.bin`, `main1_play.bin`, `main.lst`, `zuma.sym`,
+  `zuma_vdac2.spg`;
+- `Build/Legacy/` содержит старые TS-Conf/legacy outputs от
+  `Source/ASM/zuma_new_spg.asm`: `main0.bin`, `main1.bin`, `page_a.bin`,
+  `user.l`, старые `.spg/.lst`;
+- `Graphics/Converted/` и `Graphics/Menu/` остаются местом используемых
+  converted graphics и menu/level-select assets, которые реально участвуют в
+  `spgbld_vdac2.ini`;
+- `Graphics/Debug/RootImages/` получил обычные корневые PNG, не начинавшиеся с `_`;
+- `Diagnostics/Dumps/` получил RAM dumps `1`, `111`, `222`, `333`, `444`, `555`;
+- `Diagnostics/Scratch/RootPreviews/` получил корневые `_*.png` / `_*.gif`;
+- `Diagnostics/Scratch/RootChunks/` получил временные `_l2_*` и `_q_*`;
+- `Diagnostics/Logs/` получил локальные emulator/debug logs;
+- `Diagnostics/FT812Bundles/` получил `_ft812_bundle*`;
+- `Docs/Notes/` получил локальные notes/audit файлы, которые раньше лежали в корне.
+
+Измененные пути сборки:
+
+- `Source/ASM/main.asm` пишет `SAVEBIN` в `Build/`;
+- `spgbld_vdac2.ini` читает code blocks из `Build/`;
+- `build.cmd` пишет listing/symbol/SPG в `Build/` и запускает
+  `Build/zuma_vdac2.spg`;
+- Z80 harness/simulator читают `Build/zuma.sym`, `Build/TSLib.bin`,
+  `Build/Core.bin`, `Build/main1_play.bin`;
+- `fire_into_dump111.py` теперь ищет dump в `Diagnostics/Dumps/111`;
+- default output `export_ft812_bundle.py` идет в `Diagnostics/FT812Bundles/`;
+- `dump_menu_fg_render.py` пишет render preview в
+  `Diagnostics/Scratch/MenuRender/`.
+
+Проверка после переноса:
+
+- `sjasmplus Source\ASM\main.asm --syntax=ab --lst=Build\main.lst --sym=Build\zuma.sym`
+  -> PASS, только уже существовавшие forward-reference warnings;
+- `spgbld -b spgbld_vdac2.ini Build\zuma_vdac2.spg` -> PASS;
+- `python Source\OTHER\test_levelsel_loader_walks.py` -> PASS;
+- `python Source\OTHER\test_menu_inflate_ramg.py` -> PASS;
+- `python Source\OTHER\test_tail_fix_verify.py` -> PASS.
+
+## [2026-05-22] Codex -> VDAC2: маркеры превью level-select и persistent selection state
+
+- Экран выбора уровней рассчитан на `22` картинки превью. Уменьшенная лягушка
+  и kill-zone не должны дублироваться в каждой такой картинке: это два общих
+  flattened ARGB4 marker assets level-select поверх активного превью.
+- Генератор маркеров: `Source/OTHER/make_level_select_preview_markers.py`.
+  Он склеивает все слои лягушки в один `54x54` marker и делает `39x39`
+  kill-zone marker; runtime zlib лежат в
+  `Graphics/Menu/Converted/level_select_preview_*`.
+- Runtime marker blocks добавлены в `spgbld_vdac2.ini` на pages `#BA/#BB`.
+  Их geometry/constants вынесены в
+  `Source/ASM/level_select_preview_markers.inc`, а slot0 loader/draw helper
+  живет в `Source/ASM/LevelSelectPreviewSlot0.asm`, чтобы не раздувать
+  `main1_play`.
+- Координаты marker-ов пересчитываются из gameplay level settings
+  `FROG_DEFAULT_X/Y` и `KZ_DEFAULT_X/Y` в thumbnail rect. Лягушка в превью
+  использует один flattened sprite и поворачивается к указателю мыши.
+- `CurrentDifficulty` и `CurrentLevel` объявлены как resident globals в
+  `main.asm`; переходы menu / level-select / gameplay не должны их сбрасывать.
+  Добавлен `ADVENTURE_LEVEL_COUNT = 22` для будущего набора превью.
+- Difficulty badge states поменяны по требованию пользователя: выбранная
+  сложность остается зеленой (`hover` sprite), а наведение курсора показывает
+  красный (`pressed` sprite).
+- Follow-up: если курсор наведен на уже выбранный зеленый difficulty badge,
+  он остается зеленым. Красный hover нужен только для невыбранной сложности.
+- Main-menu hit-test использует `11 px` dead border из menu asset manifest.
+  Это убирает overlap full sprite rects `Options` / `More Games` / `Quit`,
+  из-за которого при одном положении курсора несколько кнопок могли выглядеть
+  нажатыми одновременно.
+- Kill-zone marker на превью level-select строится из black-hole base и
+  закрытого skull `cell 1`, как normal gameplay state.
+
+## [2026-05-22] Codex -> VDAC2: More Games room
+
+- Кнопка `More Games` главного меню теперь открывает отдельную FT812-комнату
+  из предоставленного пользователем `Graphics/Menu/More games.png`. Экран
+  оставлен как supplied promo screen, без стилистической перерисовки.
+- Конвертер комнаты: `Source/OTHER/make_more_games_paletted.py`.
+  Он делает `640x480 PALETTED4444` screen, ARGB4 palette и пять zlib streams
+  `Graphics/Menu/Converted/more_games_screen_4x3_z*.zlib`.
+- Runtime код вынесен в slot0 `Source/ASM/MoreGamesSlot0.asm`, потому что
+  `main1_play` после menu/level-select уже почти упирается в 16K.
+  SPG blocks More Games лежат на pages `#BC/#BF/#C2/#C5/#C8`, palette на `#CB`.
+- Из главного меню переход идет по click `More Games` через fade.
+  Возврат в главное меню идет по edge глобального system Fire state:
+  `SystemFireNow`, `SystemFirePrev`, `SystemFirePressed`.
+- В system Fire объединены `ЛКМ`, `Space` и `Kempston Fire`. При входе в
+  More Games текущее состояние fire latch-ится, поэтому release клика по
+  кнопке главного меню не дает мгновенный возврат назад.
+- Добавлен smoke test `Source/OTHER/test_more_games_loader_walks.py`.
+- QR follow-up: исходный QR из supplied screen плохо считывался. Для runtime
+  экрана `make_more_games_paletted.py` накладывает чистый QR asset
+  `Graphics/Menu/qr_prods_tslabs_info.png` для точного URL
+  `https://prods.tslabs.info/` уже после resize в `640x480`, nearest-neighbor,
+  с quiet zone. Preview результата:
+  `Graphics/Menu/Converted/more_games_screen_4x3_preview.png`.
+
+## [2026-05-23] Codex -> VDAC2: старт аудита таблицы уровней
+
+- Рабочая папка: `C:\Users\Администратор\Desktop\Zuma Deluxe VDAC2`, UTF-8.
+- Входные источники найдены:
+  `C:\Users\Администратор\Desktop\Zuma-Deluxe-HD-ref\content\levels\zuma_levels_parameters.xlsx`
+  и `C:\Users\Администратор\Desktop\Zuma-Deluxe-HD-ref\content\levels\levels.xml`.
+- В VDAC2 уже есть resident state `CurrentDifficulty` и `CurrentLevel` в
+  `Source/ASM/main.asm`; следующий шаг — разобрать XLSX, сверить с `levels.xml`
+  и внешними wiki-like данными, затем переносить таблицу в игру.
+
+## [2026-05-23] Codex -> VDAC2: аудит XLSX уровней завершён
+
+- `zuma_levels_parameters.xlsx` разобран через `openpyxl`: листы
+  `Boards x Tiers`, `Difficulty settings`, `StageProgression`, `Wiki notes`,
+  `Boards Graphics`.
+- Машинная сверка с `levels.xml`:
+  `Difficulty settings` = 76/76 `lvl*` settings без расхождений;
+  `StageProgression` = 13/13 stages без расхождений;
+  `Boards Graphics` совпадает с 22 `Graphics`, кроме специального `space`,
+  где XLSX пишет `?`, а XML не имеет `dispname`/`image` — это cosmetic.
+- Лист `Boards x Tiers` не является прямым `zip(stageN,diffiN)`: рядом найден
+  исходный генератор
+  `C:\Users\Администратор\Desktop\Zuma-Deluxe-HD-ref\content\levels\build_levels_table.py`,
+  где при нехватке diffi для board внутри stage берётся первый `lvl_id` этого
+  stage. Поэтому расхождения с прямым zip являются ожидаемой нормализацией.
+- Внешняя wiki-like проверка: Zuma Wiki/Fandom подтверждает порядок/появления
+  первых boards, например `Spiral of Doom` = pattern #1 и уровни
+  `1-1/4-1/7-1/10-1`, `Osprey Talon` = pattern #2 и уровни
+  `1-2/4-2/7-2/10-2`, а также наборы First/Second/Third Set.
+- Вывод аудита: таблицу можно переносить в VDAC2 как authoritative source,
+  исходя из `levels.xml`; блокеров по данным не найдено.
+
+## [2026-05-23] Codex -> VDAC2: подготовка ассетов level 2
+
+- Пользователь уточнил, что runtime картинки уровней 640×480 лежат в
+  `C:\Users\Администратор\Desktop\Zuma Deluxe\graphics\levels`
+  (`level_src_01.png` … `level_src_22.png`).
+- Сгенерирован отдельный фон level 2 из `level_src_02.png`:
+  `Graphics/Converted/bg_l02_paletted.bin`,
+  `Graphics/Converted/bg_l02_paletted_p00.bin` … `_p07.bin`,
+  `Graphics/Converted/bg_l02_palette_argb4.bin`,
+  `Graphics/Converted/bg_l02_paletted.zlib`.
+- После этого текущие `bg_paletted.*` восстановлены обратно на level 1 через
+  `python Source\OTHER\make_bg_paletted.py 1`, чтобы существующая сборка до
+  runtime-switch оставалась прежней.
+- Подготовлен отдельный track level 2:
+  `Graphics/Converted/track_l02_640.bin` = board `claw` / Osprey Talon,
+  2759 samples, 13797 bytes. Текущий `Graphics/Converted/track_640.bin`
+  восстановлен обратно на level 1 `spiral`.
+- Важная находка: старые `LEVEL_ORDER` в `make_track_640.py` /
+  `make_bg_level01.py` не совпадают с Adventure order из `levels.xml`; у этих
+  скриптов индекс `2` сейчас даёт `riverbed`, а реальный Adventure level 2 —
+  `claw`. Для массовой генерации нужно заменить mapping на `StageProgression`
+  order / `level_src_XX.png`.
+
+## [2026-05-23] Codex -> VDAC2: по памяти 22 уровня не влезают в текущую SPG-схему
+
+- Proof-of-path level 2 был добавлен как отдельные SPG pages `#CC..#D5`
+  (8 background pages + palette + track), но это не масштабируется.
+- Полный набор 22 уровней в raw-page модели потребовал бы примерно
+  `22 * (8 bg + 1 palette + 1 track) = 220` страниц только под level assets,
+  без меню/шаров/лягушки/HUD/dialog/font. Текущая сборка уже доходит до `#D5`,
+  поэтому 22 уровня в одном монолитном SPG по 8-bit page map не помещаются.
+- Архитектурный вывод: глобальную таблицу уровней/сложностей переносим в код
+  как compact metadata, но heavy assets уровней должны идти через bank/pack
+  стратегию: external level packs, per-level SPG build, либо runtime loader
+  с диска/файла. Не держать все 22 backgrounds/tracks в одном SPG.
+
+## [2026-05-23] Codex -> VDAC2: системная таблица 22 boards x 4 tiers
+
+- Добавлен генератор `Source/OTHER/make_level_runtime_table.py`.
+  Источник: audited
+  `C:\Users\Администратор\Desktop\Zuma-Deluxe-HD-ref\content\levels\zuma_levels_parameters.xlsx`.
+- Сгенерирован `Source/ASM/level_runtime_table.inc`:
+  `LEVEL_RUNTIME_COUNT = 22`, `LEVEL_SETTING_COUNT = 76`;
+  каждая board-запись хранит 4 индекса difficulty/tier (`T1..T4`) и
+  frog coordinates из XML/XLSX. `#FF` означает, что у board нет настройки на
+  этом tier.
+- Все board-записи пока указывают на один canonical compiled asset slot:
+  `track page #06`, `bg pages #07..#0E`, `palette #0F`.
+  Это намеренный fallback: metadata 22x4 уже resident, но heavy level assets
+  не размножаются по SPG pages.
+- `LevelSelect` Back/Next теперь меняют `CurrentLevel` по кругу `0..21`.
+  Логика вынесена в resident/table include, чтобы не раздувать `main1_play`.
+- `LoadGameplayAssets` берёт bg/track page через `GetCurrentLevelRecord`;
+  address math исправлена под record size 11 bytes (`index * 11`).
+- Монолитные SPG blocks level 2 `#CC..#D5` удалены из `spgbld_vdac2.ini`,
+  потому что эта схема не масштабируется на 22 уровня.
+- Проверки:
+  `sjasmplus Source\ASM\main.asm --syntax=ab --lst=Build\main.lst --sym=Build\zuma.sym`
+  -> PASS, `main1_play = 16353 bytes` (31 byte spare);
+  `spgbld -b spgbld_vdac2.ini Build\zuma_vdac2.spg` -> PASS;
+  `python Source\OTHER\test_menu_inflate_ramg.py` -> PASS;
+  `python Source\OTHER\test_levelsel_loader_walks.py` -> PASS;
+  `python Source\OTHER\test_more_games_loader_walks.py` -> PASS.
+- Следующий архитектурный шаг: выбрать heavy asset strategy для 22 уровней:
+  external level pack/runtime loader или per-level build overlay. До этого
+  нельзя добавлять все 22 фона/трека в SPG.
+
+## [2026-05-23] VDAC2: delivery model для external level packs
+
+- Пользователь уточнил критичное ограничение: если level assets будут вынесены
+  в отдельные файлы, больше нельзя просто запускать один `SPG` через эмулятор.
+- Нужны два delivery артефакта:
+  1. минимальный disk image для эмулятора (`.img`/образ), внутри:
+     Wild Commander + игра + level pack files;
+  2. отдельная папка/набор файлов игры для копирования на SD-card реального
+     ZX Evolution.
+- Следствие для архитектуры: `Build/zuma_vdac2.spg` остаётся удобным быстрым
+  smoke-test артефактом для compiled slots, но полноценная 22-level версия
+  должна собираться как SD/disk package. Loader API смотреть по
+  `C:\Users\Администратор\Desktop\WC\ZiFi`: `FENTRY`, `SETDIR`, `LOAD512`,
+  `SETROOT` вокруг `CORE=#2002`.
+
+## [2026-05-23] VDAC2: external content package — не workaround, а целевая схема
+
+- Пользователь подтвердил: разделение файлов правильно, потому что кроме
+  22 level assets в перспективе появятся звуки через General Sound 2MB /
+  Multisound.
+- Архитектурная линия:
+  SPG = код, loader, UI, базовый fallback/smoke-test assets;
+  external content package = levels, tracks, future audio banks/samples.
+- Следствие: не проектировать storage как “всё запихнуть в SPG”. Нужен
+  package manifest/versioning, disk/SD layout и runtime loader, который умеет
+  подгружать level graphics/track/audio chunks по выбранному уровню.
+
+## [2026-05-23] Codex -> VDAC2: level 2 подключён как compiled asset slot
+
+- `Source/OTHER/make_level_runtime_table.py` теперь поддерживает
+  `COMPILED_ASSET_SLOTS`: `spiral` использует pages `#06/#07..#0F`,
+  `claw` / Osprey Talon использует pages `#D5/#CC..#D4`.
+- `Source/ASM/level_runtime_table.inc` пересгенерирован:
+  запись 02 `claw / Osprey Talon` указывает на `BG_L02_FIRST_PAGE #CC`,
+  `BG_L02_PALETTE_PAGE #D4`, `TRACK_L02_PAGE #D5`, difficulty indices
+  `lvl12/lvl42/lvl72/lvl102`, frog `(333,235)`.
+- В `spgbld_vdac2.ini` добавлены blocks level 2:
+  `Graphics/Converted/bg_l02_paletted_p00.bin` … `_p07.bin`,
+  `Graphics/Converted/bg_l02_palette_argb4.bin`,
+  `Graphics/Converted/track_l02_640.bin`.
+- `Frog_Init` теперь читает frog X/Y через `GetCurrentFrogX/Y` из runtime table.
+- Targeted emulator check:
+  `CurrentLevel=1`, direct `Core.LoadGameplayAssets` -> returned,
+  final page map `00,05,D5,04`, frog `(333,235)`, track samples `2759`.
+- Build/checks:
+  `sjasmplus ...` -> PASS, `main1_play = 16353 bytes`;
+  `spgbld -b spgbld_vdac2.ini Build\zuma_vdac2.spg` -> PASS;
+  `python Source\OTHER\test_levelsel_loader_walks.py` -> PASS.
+- Ограничение текущего compiled-slot варианта: killzone visual center ещё
+  compile-time `KZ_DEFAULT_X/Y` от level 1. Для полноценного external loader
+  нужно добавить runtime KZ coordinates/markers в level metadata.
+
+2026-05-23 — Уровень 2: исправлена видимость в level select после запуска.
+- Причина жалобы "уровня 2 ещё нет": `CurrentLevel` уже переключался, но preview title оставался
+  `SPIRAL OF DOOM`; визуально это маскировало второй уровень. Также важно запускать свежий
+  `Build\zuma_vdac2.spg`, а не старые `.spg` из `releases`/baseline.
+- Добавлен текстовый atlas `OSPREY TALON` в том же формате, что `SPIRAL OF DOOM`:
+  `Graphics/Converted/text_ospreytalon.bin` = 192x36 ARGB4, ZX7:
+  `Graphics/Converted/text_ospreytalon_zx7.bin`.
+- В `spgbld_vdac2.ini` добавлен block page `#23` для `text_ospreytalon_zx7.bin`.
+- В `LoadLevelSelectPreviewAssets` добавлен выбор title page:
+  level 1 -> `TEXT_SPIRALDOOM_PAGE #22`, level 2 (`CurrentLevel=1`) -> `TEXT_OSPREYTALON_PAGE #23`.
+- Проверки:
+  `sjasmplus Source\ASM\main.asm --syntax=ab --lst=Build\main.lst --sym=Build\zuma.sym` -> PASS,
+  `Main0 size = 870 bytes`, `main1_play = 16353 bytes`;
+  `spgbld -b spgbld_vdac2.ini Build\zuma_vdac2.spg` -> PASS, page `#23` включена;
+  `python Source\OTHER\test_levelsel_loader_walks.py` -> PASS;
+  `python Source\OTHER\test_menu_inflate_ramg.py` -> PASS;
+  `python Source\OTHER\test_more_games_loader_walks.py` -> PASS.
+- Targeted Next-click harness: до клика `CurrentLevel=0`, после клика `CurrentLevel=1`,
+  slot2=`#D5`, slot3=`#04`; preview bg в RAM_G совпал с `bg_l02_paletted_p00.bin`,
+  preview title в RAM_G совпал с `text_ospreytalon.bin`.
+
+2026-05-23 — Уровень 2: исправлена позиция gameplay kill-zone.
+- По скрину `Безымянный.png` видно, что level 2 фон/трек уже включены, но активный
+  gameplay kill-zone sprite оставался на координатах level 1 `KZ_DEFAULT_X/Y = 211,217`.
+- `DrawKillzoneDual` больше не использует compile-time `KZ_DEFAULT_X/Y` для gameplay.
+  Перед отрисовкой вызывается `UpdateKillzoneDrawXY`, который читает `NumSamples`
+  из текущего `TrackData`, берёт последнюю sample и вычисляет top-left:
+  `(last_x - KZ_SPR_HALF, last_y - KZ_SPR_HALF) * 16`.
+- Это системное решение под 22 уровня/external loader: достаточно, чтобы slot2
+  указывал на track выбранного уровня.
+- Targeted emulator check для level 2:
+  `CurrentLevel=1`, slot2=`#D5`;
+  `track_l02_640.bin` last sample center = `(126,243)`;
+  `KzDrawX16/KzDrawY16` -> top-left `(82,199)`;
+  expected `(126-44, 243-44) = (82,199)` -> PASS.
+- Проверки:
+  `sjasmplus ...` -> PASS, `Log end = #3CB0`, `Main0 size = 870 bytes`,
+  `main1_play = 16353 bytes`;
+  `spgbld -b spgbld_vdac2.ini Build\zuma_vdac2.spg` -> PASS;
+  `python Source\OTHER\test_levelsel_loader_walks.py` -> PASS;
+  `python Source\OTHER\test_more_games_loader_walks.py` -> PASS.
+
+2026-05-23 — Preview markers переведены на глобальную таблицу уровней.
+- Пользователь уточнил: на превью level-select положение лягушки и kill-zone
+  тоже должно храниться в глобальной таблице, чтобы не править вручную остальные
+  20 уровней.
+- `Source/OTHER/make_level_runtime_table.py` расширен:
+  теперь каждая board-запись хранит `frog_x/frog_y` из XLSX/XML и
+  `kz_x/kz_y`, вычисленные автоматически из последней sample соответствующего
+  HD `.dat` трека в `C:\Users\Администратор\Desktop\Zuma Deluxe\graphics\levels-HD`.
+  Для boards с `*-1.dat`/`*-2.dat` без plain `<gid>.dat` берётся первый `.dat`
+  как canonical preview marker source.
+- `Source/ASM/level_runtime_table.inc` пересгенерирован:
+  `LEVEL_RT_RECORD_SIZE = 15`, добавлены offsets `LEVEL_RT_KZ_X = 11`,
+  `LEVEL_RT_KZ_Y = 13`. Пример level 2:
+  `claw / Osprey Talon -> frog (333,235), kz (126,243)`.
+- `GetCurrentLevelRecord` обновлён под record size 15 (`index * 16 - index`).
+  Добавлены getters `GetCurrentKzX/Y`.
+- Gameplay kill-zone теперь тоже берёт координаты из runtime table, а не из
+  `TrackData` на лету. Это фиксирует единый источник истины для gameplay и preview.
+- `Source/ASM/LevelSelectPreviewSlot0.asm` больше не использует compile-time
+  `LS_PREVIEW_FROG_X/Y` и `LS_PREVIEW_KZ_X/Y`. Перед draw вызывается
+  `LevelSelectUpdatePreviewMarkerXY`, который берёт текущие frog/kz координаты
+  из global table и пересчитывает их в thumbnail rect:
+  X = `LS_PREVIEW_BG_X + coord * 280 / 640`;
+  Y = `LS_PREVIEW_BG_Y + coord * 170 / 480`.
+- Targeted emulator check для preview level 2:
+  `CurrentLevel=1`;
+  frog center `(335,336)`, frog top-left `(308,309)`;
+  kill-zone top-left `(226,320)`;
+  значения совпали с расчётом из table coords `(333,235)` и `(126,243)`.
+- Проверки:
+  `sjasmplus ...` -> PASS, `Log end = #3D80`, `Main0 size = 895 bytes`,
+  `main1_play = 16353 bytes`;
+  `spgbld -b spgbld_vdac2.ini Build\zuma_vdac2.spg` -> PASS;
+  `python Source\OTHER\test_levelsel_loader_walks.py` -> PASS;
+  `python Source\OTHER\test_more_games_loader_walks.py` -> PASS;
+ `python Source\OTHER\test_menu_inflate_ramg.py` -> PASS.
+
+2026-05-24 — Исправлен испорченный шрифт после level-select preview.
+- Причина была в RAM_G layout после перевода preview thumbnail в ARGB4:
+  `LS_PREVIEW_BG_RAMG=#084000` занимал 6 страниц до `#09C000` и затирал
+  resident `native font` (`#098000..#0A0000`), а `LS_PREVIEW_NAME_RAMG=#0A4200`
+  попадал внутрь `Cancun8` (`#0A4000..#0AC000`).
+- Перенесены transient preview assets:
+  `LS_PREVIEW_BG_RAMG=#0B4000`, `LS_PREVIEW_NAME_RAMG=#0CC000`.
+  Теперь thumbnail/title находятся выше preview markers и ниже gameplay
+  cursor/killzone range (`#0D0000+`).
+- Корневой dump `.\111` от 2026-05-24 14:45 подтвердил старое зависшее
+  состояние первой попытки: `BgPg=#DC`, `BgRam=#0D8000`, то есть 6 preview
+  pages уже были залиты из старого `#0C0000`, и код дошёл до upload title
+  в опасный `#0D8000`. Этот адрес больше не используется.
+- Проверки:
+  `sjasmplus Source\ASM\main.asm --syntax=ab --lst=Build\main.lst --sym=Build\zuma.sym`
+  -> PASS, 0 errors, 11 existing forward-reference warnings;
+  `spgbld -b spgbld_vdac2.ini Build\zuma_vdac2.spg` -> PASS;
+  `python Source\OTHER\test_levelsel_loader_walks.py` -> PASS;
+  `python Source\OTHER\test_win_transition_z80.py` -> PASS;
+  `python Source\OTHER\test_more_games_loader_walks.py` -> PASS;
+  `python Source\OTHER\test_menu_inflate_ramg.py` -> PASS.
+
+2026-05-23 Win-State / переход на следующий уровень:
+- Добавлен `VDC_STATE_WIN = 6`: когда `VDC_GaugeFull != 0` и цепочка очищена
+  (`VDC_SlotsLen == 0`), игра переходит в win-state.
+- Win-анимация использует уже существующий `DrawPreviewSparkles`; для state WIN
+  `MainLoop` вызывает его так же, как для preview. Таймер `VDC_WIN_TICKS` равен
+  `VDC_PREVIEW_TICKS` (193), после истечения вызывается переход уровня.
+- Добавлены table-driven getters:
+  `GetCurrentLevelSettingIndex`, `GetCurrentLevelSettingRecord`,
+  `GetCurrentTargetScore`, `GetCurrentPartime`.
+  Проверка заполнения Zuma gauge в match-3 и gap-bonus больше не сравнивает с
+  hardcoded `HUD_GAUGE_TARGET = 1000`, а берёт score target из текущей строки
+  `LevelSettingsTable` с учётом `CurrentDifficulty`.
+- `AdvanceToNextLevel` инкрементирует `CurrentLevel`, заворачивает по
+  `LEVEL_RUNTIME_COUNT = 22` и вызывает `LoadGameplayAssets`, то есть следующий
+  игровой уровень берётся из глобальной таблицы уровней. Level 2 загружается как
+  `CurrentLevel = 1`.
+- Добавлен fast-completion bonus из `partime`: при победе, если
+  `VDC_GameSeconds < partime`, к `VDC_PlayerScore` добавляется
+  `(partime - elapsed_seconds) * 100`. В HD-ref найден сам факт `partime` для
+  fast-completion bonus; точная финальная формула в доступном C-коде не найдена,
+  поэтому реализована компактная версия, изолированная в `WinAwardTimeBonus`.
+- Проверки:
+  `sjasmplus Source\ASM\main.asm --syntax=ab --lst=Build\main.lst --sym=Build\zuma.sym`
+  -> PASS, `Main0 size = 1060 bytes`, `main1_play = 16373 bytes` (11 bytes spare);
+  `spgbld -b spgbld_vdac2.ini Build\zuma_vdac2.spg` -> PASS;
+  targeted Z80 check -> PASS:
+  `VDC_CheckWinMaybe` выставляет `state=6`, `WinTick=193`, `PreviewTick=193`;
+  `VDC_UpdateWin` при `WinTick=1` переводит `CurrentLevel` 0 -> 1;
+  `AdvanceToNextLevel` заворачивает `CurrentLevel` 21 -> 0;
+  `python Source\OTHER\test_levelsel_loader_walks.py` -> PASS;
+  `python Source\OTHER\test_more_games_loader_walks.py` -> PASS;
+  `python Source\OTHER\test_menu_inflate_ramg.py` -> PASS.
+
+2026-05-24 — Win-State закреплён постоянным targeted-тестом.
+- Добавлен `Source/OTHER/test_win_transition_z80.py`.
+- Тест проверяет:
+  `VDC_CheckWinMaybe` переводит игру в `VDC_STATE_WIN`,
+  выставляет `VDC_WinTick/VDC_PreviewTick = 193`,
+  начисляет fast-completion bonus,
+  `VDC_UpdateWin` на границе tick переводит `CurrentLevel` 0 -> 1,
+  wrap 21 -> 0 работает,
+  `VDC_Init` после загрузки следующего уровня сбрасывает state в INTRO и
+  очищает `VDC_GaugeFull`.
+- Проверки 2026-05-24:
+  `sjasmplus Source\ASM\main.asm --syntax=ab --lst=Build\main.lst --sym=Build\zuma.sym`
+  -> PASS, 0 errors, 11 existing forward-reference warnings,
+  `Main0 size = 1154 bytes`, `main1_play = 16298 bytes`;
+  `spgbld -b spgbld_vdac2.ini Build\zuma_vdac2.spg` -> PASS;
+  `python Source\OTHER\test_win_transition_z80.py` -> PASS;
+  `python Source\OTHER\test_levelsel_loader_walks.py` -> PASS;
+  `python Source\OTHER\test_more_games_loader_walks.py` -> PASS;
+  `python Source\OTHER\test_menu_inflate_ramg.py` -> PASS.
+
+2026-05-24 — Опорная версия v035 сохранена.
+- Пользователь попросил сохранить текущую версию как опорную после фикса:
+  в level-select на level 1 кнопка `Back` неактивна (`click=0`, `state=0`);
+  на level 2+ `Back` активна и возвращает на предыдущий уровень.
+- Сохранены:
+  `releases/v035-2026-05-24-levelselect-back-disabled-winstate.spg`;
+  `releases/baseline_2026-05-24_levelselect-back-disabled_winstate/`.
+- Baseline содержит `zuma_vdac2.spg`, build outputs, `spgbld_vdac2.ini`,
+  `Чат.txt`, ключевые ASM/source/test файлы и `BASELINE_NOTES.md`.
+- Проверки перед сохранением:
+  `sjasmplus ...` -> PASS, `main1_play = 16347 bytes` (37 bytes spare);
+  `spgbld -b spgbld_vdac2.ini Build\zuma_vdac2.spg` -> PASS;
+  `python Source\OTHER\test_levelsel_loader_walks.py` -> PASS;
+  `python Source\OTHER\test_win_transition_z80.py` -> PASS;
+  `python Source\OTHER\test_more_games_loader_walks.py` -> PASS;
+  `python Source\OTHER\test_menu_inflate_ramg.py` -> PASS.
+
+2026-05-24 — Level-select preview noise: убран PALETTED из thumbnail.
+- Симптом после фикса Back: кнопка `Back` видима и активна, но окно preview уровня
+  рисуется цветным шумом. Простая замена `FT_BILINEAR` на `FT_NEAREST` не помогла.
+- Вывод по старому контексту и скрину: загрузчик preview уже раньше проверялся
+  byte-for-byte, а проблема была в render path: маленький indexed `PALETTED4444`
+  thumbnail в level-select продолжал давать palette/index artifacts.
+- Добавлен генератор `Source/OTHER/make_level_select_previews.py`.
+  Он берёт готовые indexed backgrounds + ARGB4 palettes, восстанавливает RGBA,
+  заранее строит `280x170` thumbnails и пакует их в `ARGB4`, без palette source:
+  `Graphics/Converted/level_select_preview_l01*.bin`,
+  `Graphics/Converted/level_select_preview_l02*.bin`,
+  плюс диагностические `_level_select_preview_l01.png` / `_l02.png`.
+- В `spgbld_vdac2.ini` добавлены raw preview pages:
+  level 1 `#D6..#DB`, level 2 `#DC..#E1`.
+- `LoadLevelSelectPreviewAssets` теперь копирует 6 preview pages через
+  `GetCurrentPreviewFirstPage`, а не 8 full-bg pages. Draw preview теперь 1:1:
+  `LS_PREVIEW_BG_W/H = 280/170`, `FT_ARGB4`, без `CMD_SCALE` и без `FT_PaletteSource`.
+- Проверки:
+  `sjasmplus Source\ASM\main.asm --syntax=ab --lst=Build\main.lst --sym=Build\zuma.sym`
+  -> PASS, 0 errors, 11 existing forward-reference warnings,
+  `main1_play = 16347 bytes`;
+  `spgbld -b spgbld_vdac2.ini Build\zuma_vdac2.spg` -> PASS;
+  `python Source\OTHER\test_levelsel_loader_walks.py` -> PASS;
+  `python Source\OTHER\test_win_transition_z80.py` -> PASS;
+  `python Source\OTHER\test_more_games_loader_walks.py` -> PASS;
+  `python Source\OTHER\test_menu_inflate_ramg.py` -> PASS.
+
+2026-05-24 15:10 VDAC2 baseline: level-select preview/title/Back OK.
+- User confirmed: "Всё работает".
+- Saved support baseline: releases/baseline_2026-05-24_levelselect_preview_title_back_ok.
+- Fixed CPU HALTED root cause: FT command buffer was at #6000 and overwrote code tail of LoadLevelSelectPreviewAssets/title upload. CMD_ADDRESS_PTR moved to #5010.
+- Level-select preview: raw ARGB4 pages at #084000; level title bitmap at #0CC000; SPIRAL OF DOOM / OSPREY TALON selected by CurrentLevel.
+- Back on level 1: hit-test skipped and button visually disabled through LevelSelectDrawBackButton alpha=96. Levels >1 draw normal Back with hover/pressed.
+- Build: Build/zuma_vdac2.spg, 1622528 bytes. Verification: sjasmplus 0 errors / 11 known fwdref warnings, spgbld DONE, test_levelsel_loader_walks.py PASS.
+2026-05-24 VDAC2: WC image packaging for game files.
+- User clarified: existing `wc.img` already contains Wild Commander; do not build WC from scratch.
+- Added reproducible image injector: `Source/OTHER/inject_zuma_to_wc_img.py`.
+- Added build wrapper: `build_wc_img.cmd` = sjasmplus -> spgbld -> copy base `C:\Users\Администратор\Desktop\unreal_x64\wc.img` to `Build\wc_zuma_vdac2.img` -> inject files.
+- Target folder inside FAT32 image: `/Games/Zuma Deluxe VDAC2/`.
+- Injected files currently: `ZUMA_VD2.SPG`, `SPGBLD.INI`, `ZUMA.SYM`, `README.TXT`.
+- Host SD mirror folder: `Build\SD\Games\Zuma Deluxe VDAC2\`.
+- Verification: parsed `Build\wc_zuma_vdac2.img` FAT32, found `/Games/Zuma Deluxe VDAC2/`; `ZUMA_VD2.SPG` inside image SHA-256 matches `Build\zuma_vdac2.spg` byte-for-byte.
+- Original `Desktop\unreal_x64\wc.img` is not modified; only copied into `Build\wc_zuma_vdac2.img`.
+
+## [2026-05-24] Claude → VDAC2: in-place inject в хостовый wc.img + Hyper-V launch fix
+**Контекст:** Codex'овский pipeline создавал промежуточный `Build\wc_zuma_vdac2.img` и инжектил туда. Теперь delivery идёт напрямую в хостовый `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` через RDP redirected drive. Локальной копии больше нет, на хосте всегда свежий IMG.
+
+**Изменения:**
+- `Source/OTHER/inject_zuma_to_wc_img.py`: добавлена in-place поддержка. Если `base-img == out-img` (через `os.path.normcase(os.path.abspath(...))` сравнение строк — `samefile()` не работает на UNC tsclient), `shutil.copy2` пропускается.
+- `build_wc_img.cmd`: вместо локального target теперь `set HOST_WC_IMG=\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` и `python ... --base-img "%HOST_WC_IMG%" --out-img "%HOST_WC_IMG%"`.
+
+**Critical:** перед `build_wc_img.cmd` обязательно закрыть Unreal.exe на хосте — иначе `WinError 32` (файл занят).
+
+**Hyper-V/Win Server 2022 launch fix для VM-side эмулятора (опциональный для smoke-test):**
+- Создан `Desktop\unreal_x64\Unreal_vdac2.ini` — клон Unreal.ini с правками:
+  - `HighPriority=1 → 0` (Hyper-V SeIncreaseBasePriorityPrivilege)
+  - `ShareCPU=0 → 1`
+  - `driver=gdi → ddrawh` (gdi даёт чёрный экран в этой VM, ddrawh работает)
+  - `SoundDrv=ds`, `GSType=BASS`, `MoonSound=1` — после включения Windows Audio service
+  - `Image0` и `[ZC] SDCARD` → 8.3 short path `C:\Users\836D~1\Desktop\ZUMADE~2\Build\WC_ZUM~1.IMG` (Unreal.ini читается как ANSI/CP1251, кириллица из UTF-8 ломается)
+- `Desktop\Zuma Deluxe VDAC2.lnk`: Target=`Unreal.exe`, Args=`/i Unreal_vdac2.ini`, WorkDir=`Desktop\unreal_x64`. Backup старого ярлыка — `Zuma Deluxe VDAC2 (SPG direct).lnk`.
+
+**Тестирование:** пользователь подтвердил «всё работает» — игра запустилась через хост с обновлённым IMG. Дальше юзер играет/тестирует на хосте (нет проблем со звуком/мышью). VM-side эмулятор остаётся как fallback.
+
+**Ссылки:** `Source/OTHER/inject_zuma_to_wc_img.py`, `build_wc_img.cmd`, `Desktop\unreal_x64\Unreal_vdac2.ini`. Memory: `reference_zuma_vdac2_hyperv_host_delivery`, `feedback_zuma_vdac2_unreal_ini_ansi_cyrillic`.
+
+
+
+## [2026-05-24] Claude → VDAC2: Graphics/levels/ переорганизация (Original + Converted + 4:3 tracks)
+**Контекст:** до этого все level-related артефакты были смешаны с shared assets в `Graphics/Converted/`. Дальше будет внешний level pack, и эта папка должна быть чистой границей.
+
+**Сделано:**
+- `Graphics/levels/Original/<NN-board>/` — 22 папки в Adventure order (`BOARDS_ORDER` из `build_levels_table.py`). В каждой: `<board>.dat` (HD-ref CURV track), `level_src_NN.png` (4:3 preview из оригинальной игры), плюс `<NN-board>-4-3.dat` — пересчитанный native 640×480 track (output формат `track_640.bin`: word N + N×(X word, Y word, tangent byte)). Multi-curve boards (`05-blackswirley`, `12-snakepit`, `19-serpents`) → 2 файла `-1-4-3.dat`/`-2-4-3.dat`. `22-space` — попался обычным CURV parser.
+- `Graphics/levels/Converted/` — 143 файла перенесены из `Graphics/Converted/`: все `track_*`, `bg_paletted*`, `bg_palette*`, `bg_level01*`, `bg_l4_*`, `bg_dxt*`, `bg_l02*`, `level_select_preview_*`, `text_spiraldoom*`, `text_ospreytalon*`, `549556_l2.bin`.
+- `spgbld_vdac2.ini` — 34 path обновлены: `Graphics/Converted/<level>` → `Graphics/levels/Converted/<level>`.
+- 7 Python генераторов — `make_track_640.py`, `make_bg_paletted.py`, `make_bg_level01.py`, `make_bg_level01_astc.py`, `make_level_select_previews.py`, `vdc_visual_emulator.py`, `zuma_vdac2.py` — output/input path перенаправлены на `Graphics/levels/Converted/`.
+- НЕ тронуты: `make_level_select_preview_markers.py` (читает SHARED frog/killzone из старого `Converted/`), `export_ft812_bundle.py` (utility, читает много shared assets).
+
+**Новые скрипты:**
+- `Source/OTHER/make_track_4_3_all.py` — пакетный генератор -4-3.dat для всех 22 board folders. Использует ту же логику что `make_track_640.py` (parse CURV → resample 1.0 px arc-length → tangent window=8 + smooth=5 → 5 bytes/sample).
+- `Source/OTHER/_check_track_logic.py` — regression test: byte-for-byte verify spiral/claw vs committed `track_640.bin`/`track_l02_640.bin`. Обе матча — логика 100% та же что у Codex'овской.
+
+**Verified:**
+- sjasmplus + spgbld → PASS, SPG = 1 622 528 bytes (тот же что в v035).
+- `test_levelsel_loader_walks.py`, `test_menu_inflate_ramg.py`, `test_win_transition_z80.py` → PASS.
+
+**Структура после:**
+```
+Graphics/
+├── Converted/                     ← shared (balls, frog, killzone, dialog, font, ...)
+└── levels/
+    ├── _difficulty_mapping.txt
+    ├── levels.xml
+    ├── zuma_levels_parameters.xlsx
+    ├── build_levels_table.py
+    ├── Original/                  ← 22 board folders с .dat + .png + -4-3.dat
+    └── Converted/                 ← 143 файла per-level (tracks, bg, previews, titles)
+```
+
+**Зачем:** граница между shared и level-specific assets теперь чёткая — следующий шаг (внешний level pack) сможет работать только с `Graphics/levels/` без риска зацепить общие ресурсы.
+
+
+2026-05-24 — Reorg Graphics/levels/ user-verified на хосте.
+- Все работает после reorg: 143 файла перенесено в `Graphics/levels/Converted/`, 22 board folder'а в `Graphics/levels/Original/` с .dat + .png + -4-3.dat, spgbld_vdac2.ini + 7 Python скриптов обновлены. Build + 3 теста PASS, host-IMG inject прошёл, игра играется на хосте.
+- build_wc_img.cmd зафиксирован: CRLF + cp866 (кириллица в `Работа.Андрей`). Запуск через `.\build_wc_img.cmd` (с `.\` префиксом необходим для bash→cmd subprocess).
+
+
+## [2026-05-24] Claude → Codex: handover — внешний level pack через ZiFi (BLOCKED, нужна твоя глубина)
+**Цель:** SPG = код + UI, level data в отдельном файле `/Games/Zuma Deluxe VDAC2/ZUMALVL.PAK` на SD карте. Грузить через WC ZiFi API. Архитектурно решено («внешний content package — не workaround, а целевая схема» 2026-05-23).
+
+**Что сделано (рабочее):**
+- `Source/OTHER/make_level_pack.py` — packs L1+L2 assets в `Build/ZUMALVL.PAK` (500 KB, 977 sectors). Format: sec 0 header (magic "ZLVP"), sec 1 TOC[22]×20 B (bg/pal/track/title/preview off+size, 0xFFFF=absent), sec 2.. data per-level. Verified byte-for-byte (`_verify` в скрипте).
+- `Source/OTHER/test_zifi_pipeline_python.py` — pure Python simulator всего flow: SetRoot→FEntry(Games,dir)→SetDir→FEntry(Zuma,dir)→SetDir→FEntry(PAK)→LoadNon(header)→Load512(TOC)→parse entry→SEEK0→LoadNon(bg_off)→Load512(bg_size). **All scenarios PASS** — design корректен.
+- `build_wc_img.cmd` теперь генерит pack и инжектит в хост-IMG (`\\tsclient\D\Работа.Андрей\unreal_x64\wc.img`) вместе с SPG.
+- `Source/ASM/ZiFi.asm` — wrappers для ZiFi API. ZIFI_PAGE=#0F, entries CORE=#2002, FENTRY=#2050, LOAD512=#2017, LOADNON=#2056, SEEK0=#2063, SETDIR=#205D, SETROOT=#2060.
+- `Graphics/ZiFi/wdfcvbi2_at_2000.bin` — `WC/ZiFi/_sd/WDFCVBI2.COD` (5070 B) с 2 байтами padding (`FF FF`) чтобы spgbld мог положить начиная с 512-aligned offset #2000, а JP table попала на CORE=#2002.
+- `spgbld_vdac2.ini`: `Block #2000, #0F` = driver, `Block #0000, #11` = bg_palette_argb4 (переехал с #0F чтобы driver там жил). `BG_PALETTE_PAGE EQU #11` в main.asm.
+- F2-dump диагностикой подтверждено: page #0F при SPG runtime содержит **наш bundled driver byte-for-byte** (JP table c3 00 3c c3 03 3c c3 06 3c c3 93 2d ... матчит WDFCVBI2.COD).
+
+**Где блок:**
+`CALL ZIFI_FENTRY` с `HL=ZiFi_DirGames` (`DB #10,"Games",0`) после `SetPage0_A #0F` всегда возвращает **Z=not_found**. Цепочка не доходит даже до первой директории.
+
+**Возможные причины (что попробовал):**
+1. ~~OUT (#10AF) port-based slot 0 swap~~ — не работает в нашем MAPPING_REGISTERS mode (FT_EN+MEM_WO setup от Init_Core). Перешёл на TSLib `SetPage0_A` macro (MMIO #0410). Driver теперь действительно загружается в slot 0 (verified).
+2. ~~DEV_INI + HDD + DOS_SWP в init~~ — не помогло. Хуже того, **JP entries `CORE+0/+3/+6` указывают на адреса `#3C00..#3C06` которые вне загруженных 5 KB driver** (driver занимает #2002..#33D0 в page #0F). Вызов `CALL DEV_INI` = `JP #3C03` = jump в uninitialized RAM = potentially destructive. Эти entries убрал.
+3. ~~Только `set_page0 #0F` без DEV_INI (как WC's init_sd_card)~~ — FENTRY всё равно not_found.
+4. WC `_sd/WDFCVBI2.COD` (5070 B) и `_spg/zifi.bin` (13056 B) — **разные**. .COD = только JP table + ~5 KB кода. zifi.bin начинается с `31 ff bf cd 76 9e cd 83 98 ...` (LD SP,#BFFF; CALL ...) — это полный WC executable. Похоже что **реальные routines живут в основном WC коде** (loaded в другие slots), а `.COD` — только overlay-stub. При SPG launch WC выгружает main code → real routines пропадают → JP entries в `.COD` указывают на пустоту.
+
+**Гипотезы для следующей сессии:**
+- Bundle **`zifi.bin`** или большую часть WC infrastructure (не только `.COD`) в наш SPG. Понять как `.COD` JP table связан с `zifi.bin` routines (где-то они должны сходиться).
+- Прочитать `WC/ZiFi/zifi.asm` (4856 строк) и понять как **init sequence** в самом WC настраивает state, чтобы воспроизвести то же в SPG context.
+- Может ZC (Z-Controller) sd-card image не "mounted" корректно для SPG — driver не видит ZC. Проверить port `#77` / `#57` Z-Controller state в dump.
+- Альтернатива: написать **свой direct SD/SPI driver через ZC ports** + minimal FAT32 reader. Большая задача (~5K строк ASM) но не зависит от WC.
+- Альтернатива: связаться с **Koshi** (автор WC, упомянут в `zifi.asm` комментариях) — узнать SPG-runtime API contract.
+
+**Текущее состояние сборки (для подхвата):**
+- Игра **играется как v035** — compiled slots для L1, L2 (`LoadGameplayAssets` не использует ZiFi). Юзер тестирует на хосте через `build_wc_img.cmd` → `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img`.
+- ZiFi infrastructure **bundled passively**: `WDFCVBI2.COD` в page #0F, `ZUMALVL.PAK` в /Games/Zuma Deluxe VDAC2/. Не вызывается из game flow.
+- `ZiFi.asm` с helpers (`ZiFi_Init`/`ZiFi_Done`, FENTRY/LOAD512/LOADNON/SEEK0/SETDIR/SETROOT wrappers, ZiFi_PakOpen, ZiFi_PakReadToc, ZiFi_StreamSection, LoadLevelFromPack_Setup) — есть, не активны.
+- `Source/OTHER/test_zifi_pipeline_python.py` — рабочий regression test для design.
+
+**Артефакты:** `Source/ASM/ZiFi.asm`, `Source/OTHER/make_level_pack.py`, `Source/OTHER/test_zifi_pipeline_python.py`, `Graphics/ZiFi/WDFCVBI2.COD` + `wdfcvbi2_at_2000.bin`. Hostовый wc.img уже содержит инжектнутый `ZUMALVL.PAK`.
+
+**Connected memories:**
+`reference_zuma_vdac2_hyperv_host_delivery`, `reference_zuma_vdac2_baseline_2026-05-24_v035`, `reference_zuma_vdac2_graphics_levels_layout`.
+
+2026-05-24 — Codex: ZiFi init исправлен по оригинальному WC/VBI order.
+- Перечитан `C:\Users\Администратор\Desktop\WC\ZiFi\zifi.asm` и `_sd\VBI.ASM`.
+  Важное уточнение: `DEV_INI = JP #3C03` действительно выглядит как прыжок в
+  область за пределами исходных 5072 байт `WDFCVBI2.COD`, но оригинальный код
+  перед этим всегда вызывает `DOS_SWP`; именно он подготавливает/распаковывает
+  trampoline/driver area. Поэтому гипотеза "DEV_INI нельзя вызывать" была
+  неверной без учёта порядка вызовов.
+- `Source/ASM/ZiFi.asm`: `ZiFi_Init` теперь делает как WC/VBI:
+  `SetPage0_A #0F -> DOS_SWP -> DEV_INI -> HDD -> SETROOT`, возвращает `CF=1`
+  при успехе и `CF=0` при ошибке. `LoadLevelFromPack_Setup` и `LoadLevelFromPack`
+  теперь сами открывают/закрывают ZiFi-сессию через `ZiFi_Init/ZiFi_Done`, чтобы
+  прямой вызов не работал с неправильной page0.
+- Это пока не включает external loader в основной игровой flow; compiled L1/L2
+  остаются рабочим fallback. Следующая аппаратная проверка должна показать,
+  уйдёт ли `FENTRY("Games") -> not_found` после полноценного init.
+- Проверки после правки: `sjasmplus` PASS (0 errors, 11 known fwdref warnings,
+  `main1_play = 16346 bytes`), `spgbld` PASS, `test_zifi_pipeline_python.py`
+  PASS, `test_levelsel_loader_walks.py` PASS, `test_win_transition_z80.py` PASS,
+  `test_menu_inflate_ramg.py` PASS, `test_more_games_loader_walks.py` PASS.
+
+2026-05-24 — Codex: host wc.img обновлён после ZiFi init fix.
+- Пользователь закрыл host Unreal.exe. Первый запуск `build_wc_img.cmd` собрал
+  SPG и `ZUMALVL.PAK`, но упал на финальном injector из-за broken кириллицы в
+  UNC path `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` при передаче через
+  `.cmd`.
+- Одноразовый прямой Unicode-запуск injector из PowerShell успешно обновил
+  host `wc.img`: `/Games/Zuma Deluxe VDAC2/` содержит `ZUMA_VD2.SPG`,
+  `ZUMALVL.PAK`, `SPGBLD.INI`, `ZUMA.SYM`, `README.TXT`.
+- Затем `build_wc_img.cmd` переведён в UTF-8 и исправлен: больше не хранит
+  кириллический UNC literal напрямую, а собирает `Работа.Андрей` в PowerShell
+  из Unicode codepoints и вызывает injector с Unicode path.
+- Повторный полный `.\build_wc_img.cmd` прошёл end-to-end: `sjasmplus` PASS,
+  `spgbld` PASS, `make_level_pack` PASS, in-place inject в host `wc.img` PASS.
+
+2026-05-24 — Codex: fixed broken level 1 background after ZiFi page move.
+- Симптом на host: level 1 загрузился, но фон был битый/с неправильными цветами.
+- Причина: после переноса ZiFi driver на SPG page `#0F` и переноса level 1
+  background palette на page `#11`, auto-generated `Source/ASM/level_runtime_table.inc`
+  всё ещё содержал `BG_L01_PALETTE_PAGE EQU #0F`. `LoadGameplayAssets` брал
+  bg bitmap pages `#07..#0E` правильно, но palette page загружал из `#0F`, то
+  есть из `WDFCVBI2.COD`, поэтому PALETTED4444 фон декодировался мусором.
+- Исправлено:
+  `Source/ASM/level_runtime_table.inc`: `BG_L01_PALETTE_PAGE EQU #11`;
+  `Source/OTHER/make_level_runtime_table.py`: generator теперь тоже пишет `#11`;
+  `spgbld_vdac2.ini`: комментарий к level 1 bg palette обновлён с `#0F` на `#11`.
+- Проверки: `sjasmplus` PASS, `spgbld` PASS, `test_win_transition_z80.py` PASS,
+  `test_levelsel_loader_walks.py` PASS, `test_menu_inflate_ramg.py` PASS,
+  `test_zifi_pipeline_python.py` PASS. Полный `.\build_wc_img.cmd` PASS и
+  host `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` обновлён in-place.
+
+2026-05-24 — Codex: level-select previews moved into main SPG; titles are live text.
+- Backed up previous data earlier in `releases/backup_2026-05-24_before_full_zumalvl_pack`.
+- `Source/OTHER/make_all_level_pack_assets.py` now writes ARGB4 preview zlib streams and auto-generates `Source/ASM/level_select_preview_spg.inc`. Compression level 9 fits all 22 thumbnails into SPG pages `#CC..#FA`.
+- `spgbld_vdac2.ini` no longer spends `#CC..#E1` on compiled level 2/raw two previews. Those pages are now SPG-resident zlib thumbnails for all adventure levels.
+- Level-select runtime inflates the selected preview from SPG, reloads the native font, and draws the level name with `DrawString`/nativealien font instead of bitmap title pages. Preview RAM_G moved to `#0D4000` to avoid overlapping `FONT_NATIVE_RAMG #098000`.
+- Gameplay startup now tries `LoadGameplayLevelSpecificFromPack`: streams selected bg, palette, and canonical track from `ZUMALVL.PAK`; shared sprites/fonts still load from SPG.
+- `Source/OTHER/make_level_runtime_table.py` and `level_runtime_table.inc` now keep level 1 as the compiled fallback only; real selected board data comes from the pack.
+- Verification: `make_level_pack.py` PASS (`ZUMALVL.PAK` 5,587,456 bytes, 110/110 sections), `sjasmplus` PASS, `spgbld` PASS, full `.uild_wc_img.cmd` PASS. Host `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` updated in-place with `ZUMA_VD2.SPG` 1,926,144 bytes and `ZUMALVL.PAK` 5,587,456 bytes.
+  Note: `build_wc_img.cmd` order fixed so preview/pack generators run before `sjasmplus`/`spgbld`; full rebuild re-run PASS and host wc.img updated again.
+2026-05-24 — Codex: fixed CPU Halted on level-select preview paging.
+- Fresh dump `111` had slot `#C000` mapped to `Graphics/levels/Converted/pack/level_select_preview_l18.zlib`; byte `#76` at `#C010` explained the halt. Root cause: SPG zlib preview loading could leave PAGE3 on the preview source page instead of `main1_play` page `#04`.
+- Added defensive `SetPage3 #04` before/after level-select preview inflate and before/after menu table inflate. Changed `LevelSelectPreviewSlot0.asm` second marker load from tail `JP FT.Coprocessor.Inflate` to `CALL ... / SetPage3 #04 / RET`.
+- While reinjecting, host `wc.img` ran out of free clusters because `inject_zuma_to_wc_img.py` marked overwritten files deleted but did not free their FAT cluster chains. Added `free_chain()` before overwrite.
+- Full `.uild_wc_img.cmd` PASS after both fixes; host `\tsclient\\D\Работа.Андрей\unreal_x64\wc.img` updated in-place.
+2026-05-24 — Codex: hardened preview/menu inflate against IRQ while PAGE3 is source page.
+- Second fresh `111` still showed `#C000` = `level_select_preview_l18.zlib`; this can happen during TSLib `FT.Coprocessor.Inflate` because it maps the source stream into PAGE3 while copying bytes. If a frame IRQ fires in that window, code expecting `main1_play` in slot 3 can see zlib bytes and hit `#76`.
+- Added `DI`/`EI` around level-select preview inflate, preview marker inflate, and shared menu inflate table; also force `SetPage3 #04` before and after each protected inflate.
+- Full `.uild_wc_img.cmd` PASS; host `\tsclient\D\Работа.Андрей\unreal_x64\wc.img` updated in-place.
+2026-05-24 — Codex: added harness gate before host injection.
+- User correctly called out that harness should run before sending to host.
+- Added `Source/OTHER/test_page3_inflate_guards.py`: static + dynamic regression for PAGE3 around `FT.Coprocessor.Inflate`, including L18 source page `#F1` seen in dump `111`.
+- Updated `build_wc_img.cmd`: after `spgbld`, before `wc image package`, it now runs `test_page3_inflate_guards.py`, `test_levelsel_loader_walks.py`, `test_menu_inflate_ramg.py`, `test_more_games_loader_walks.py`, and `test_zifi_pipeline_python.py`.
+- Full gated `.uild_wc_img.cmd` PASS; host `\tsclient\D\Работа.Андрей\unreal_x64\wc.img` updated only after harness PASS.
+
+2026-05-24 — Debug note: repeated `CPU Halted`, fresh dump `111` after harness-gated build.
+- Fresh dump file: `111`, 65,536 bytes, timestamp 2026-05-24 20:52:36.
+- Symptom in dump is still the same byte pattern at slot 3:
+  `#C000 = 78 da ed 7d db 99 ...`, `#C010 = 76` (`HALT`).
+- Exact match: first 64 bytes at `#C000` equal `Graphics/levels/Converted/pack/level_select_preview_l18.zlib`.
+  This means PAGE3/slot3 was mapped to preview source page `#F1` when the CPU halted, not to `main1_play` page `#04`.
+- Important new observation: address range around current `Core.LoadLevelSelectPreviewAssets` (`#5FC8`) in dump does **not** match current `Build/Core.bin`.
+  Current build starts that routine with guarded bytes:
+  `F3 21 13 04 36 04 ...` (`DI; SetPage3 #04; ...`).
+  Dump at `#5FC8` starts with unrelated bytes:
+  `00 36 00 34 c2 66 ...`.
+- Interpretation: the dump is not showing the current core page `#05` in slot1 at `#4000..#7FFF`; either the running SPG is not the freshly injected one, or slot1/slot3 were already remapped/corrupted before the halt. Do not conclude from this dump that the new guarded loader code executed and failed; the dumped slot1 bytes do not contain that code.
+- Before the last host send, added harness gate to `build_wc_img.cmd`. It now runs before injection:
+  1. `test_page3_inflate_guards.py`
+  2. `test_levelsel_loader_walks.py`
+  3. `test_menu_inflate_ramg.py`
+  4. `test_more_games_loader_walks.py`
+  5. `test_zifi_pipeline_python.py`
+- `test_page3_inflate_guards.py` specifically exercises L18 preview source page `#F1` and verifies static/dynamic PAGE3 guards:
+  `DI; SetPage3 #04; CALL FT.Coprocessor.Inflate; SetPage3 #04; EI`.
+  Result on current build: PASS, dynamic calls include `('#f1', '#04')`, `('#ba', '#04')`, `('#bb', '#04')`.
+- Full gated `.uild_wc_img.cmd` previously passed and injected host `wc.img` only after harness PASS.
+
+Next debugging direction for the next turn:
+- Verify the host is actually launching the newly injected `ZUMA_VD2.SPG` from `/Games/Zuma Deluxe VDAC2/`, not an older cached/copy path.
+- Add a runtime build canary in resident RAM or visible/debug bytes, so dump `111` can prove which SPG build is running.
+- Add early F12-dump markers for current page registers (`PAGE0..PAGE3` mirror values) and a small signature near `#5FC8`/Core page, so stale launch vs runtime remap is distinguishable immediately.
+- Consider a temporary fail-fast diagnostic: after every level-select preview load, write a known canary only if PAGE3 mirror is `#04`; if not, force a controlled signature instead of accidental zlib `HALT`.
+
+2026-05-24 — Codex: added runtime build canary after repeated `CPU Halted` dump `111`.
+- Rechecked dump `111`: file timestamp still appeared as 2026-05-24 20:52:36, and contents were unchanged (`#C000` still matches L18 preview zlib page `#F1`; current Core bytes still absent around `#5FC8`).
+- Added a runtime canary written by `Core.Init_Core` into resident RAM at `#5020`: ASCII `ZVDAC2 2026-05-24 PAGE3GUARD`, zero terminator, then bytes `00 05 06 04`.
+- Address choice: `#5020` is below `EntryPoint #5C00`, outside circular log `#4800..#5008`, outside RTC/frog flags `#5009..#500B`, and outside `CMD_ADDRESS_PTR #5010`.
+- Full `.\build_wc_img.cmd` PASS with harness gate before injection:
+  `test_page3_inflate_guards.py`, `test_levelsel_loader_walks.py`, `test_menu_inflate_ramg.py`, `test_more_games_loader_walks.py`, `test_zifi_pipeline_python.py`.
+- Host `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` updated in-place after PASS with fresh `ZUMA_VD2.SPG` and `ZUMALVL.PAK`.
+- Next dump check: if slot1 contains current Core page at halt, bytes at `#5020` must show the canary. If the canary is absent, the host is either not running this freshly injected build, or the dump's slot1 is not Core page `#05` at halt time.
+
+
+## [2026-05-25] Claude → VDAC2: глубокая сессия по запуску игры через ZUMALVL.PAK — частичный успех + открытые проблемы
+
+**Контекст сессии:** после Codex'овского handover игра не стартовала на хосте — `CPU Halted` или freeze. Длительная binary-search + dump-driven диагностика.
+
+### Что заработало
+- **22 preview thumbnails в Level Select**. Все видны при навигации Next/Back.
+- **L01 playable** на хосте (через compiled-slot fallback bg/palette/track из SPG pages #06..#0F).
+- **ZiFi init на хосте подтверждённо работает**: `DOS_SWP → DEV_INI → HDD → SETROOT` (правильный WC/VBI order, восстановленный Codex'ом).
+- **WDFCVBI2.COD** успешно bundled в SPG на page #0F с padding (2 байта prefix) чтобы JP-таблица попала на CORE=#2002.
+- **FENTRY chain** `/Games/Zuma Deluxe VDAC2/ZUMALVL.PAK` находит файл, PakOpen + PakReadToc корректно читают TOC.
+
+### Сюрприз 1: page #F1 НЕ зарезервирована — виновата L18 zlib content
+- Изначально казалось что halt из-за page #F1 (где L18 preview лежит). Binary search L01..L18: halt появляется именно на L18.
+- Эксперименты: dummy 22 KB на page #F1 → не halt. L18 (real) на page #40 → не halt. Original L18 zlib (level 9 default header `78 DA`) на любой page → halt.
+- **Вывод:** конкретные байты L18 zlib имеют structure которая ловит PC в slot 3 area во время `FT.Coprocessor.Inflate` → CPU читает байт `0x76 = HALT` из middle of zlib stream.
+- **Workaround:** переместил L18-L22 на низкие свободные pages (`#40, #42, #44, #46, #49`). L01-L17 остались на default pages #CC..#EE.
+
+### Сюрприз 2: `CurrentLevel` лежал в TSLib code region #1938
+- Codex объявил `CurrentLevel: DEFB 0` глобально в main.asm (вне `module Core`, до `ORG EntryPoint`). Sjasmplus поместил его на адрес **#1938 — внутри загружаемого TSLib code area** (#1000..#3D45).
+- TSLib runtime активность (DMA/stack/что-то) писала в #1937-#1938 — на dump'е `CurrentLevel = 246` (`0xF6`), `CurrentDifficulty = 33` (`0x21`). Pattern `0xF6 0x21` подозрительно похож на 2-байтовый PUSH из какого-то pointer.
+- Этот garbage `CurrentLevel` передавался в `ZiFi_PakReadToc` как level index → LDIR читал из неправильного offset в TOC sector → `bg_off = 29589` garbage → `SkipSectors16(29589)` → driver hang.
+- **Fix:** переместил `CurrentLevel`, `CurrentDifficulty`, `FadeAlpha` в `ZiFi.asm` (module Core) как `DEFB 0` — теперь bundled в Core.bin, защищены от TSLib runtime. EQU-алиасы оставлены в main.asm для bare references.
+
+### Сюрприз 3: FAT32 host wc.img массивно corrupted
+- F2-dump путей: 74K orphan clusters на чистом original wc.img + один inject.
+- `Source/OTHER/inject_zuma_to_wc_img.py` имеет `free_chain()` в `write_file`, но он не освобождает cluster chains корректно при overwrite. Каждый inject добавляет ~14K orphan clusters (5.5MB PAK + 1.9MB SPG = ~15K cluster allocations без proper free).
+- **Workaround:** периодически восстанавливать чистый original wc.img из `Desktop\unreal_x64\wc.img` (где Codex упомянул что оригинал не тронут).
+- **TODO:** починить `free_chain()` в `inject_zuma_to_wc_img.py` чтобы освобождал старые cluster chains перед write.
+
+### Открытая проблема: ZiFi streaming бесконечный loop в StreamSection
+- `LoadGameplayLevelSpecificFromPack` доходит до step 3 (PakReadToc OK), `bg_off=2`, `bg_size=256` корректны.
+- Затем `ZiFi_StreamSection` запускает loop по 8 чанков (32 sectors / 16 KB каждый). Но dump показывает **36 iterations** done (BgRamH advanced too far).
+- DE register (remaining sectors) почему-то не достигает 0. Подозрение: stack push/pop disbalance между `CALL ZiFi_Load512` и `CALL FT.WriteMem`. После Load512 slot 0 = #0F (driver), для CALL FT.WriteMem (находится в TSLib code) необходимо вернуть slot 0 = #00 (TSLib). Codex's stub `ZiFi_Enter/Leave` к `RET` оставил slot 0 на driver page → CALL FT.WriteMem прыгает в driver bytes по адресу #126A → infinite garbage execution.
+- Добавил `SetPage0_A` swaps вокруг FT.WriteMem в StreamSection — loop всё равно hang'ит.
+- Заменил PUSH DE/POP DE на `LD (memory), DE` — но resident vars сначала легли в EQU #5B04 (memory не allocated, перезаписывает random page) → fixed allocating DEFW inside Core module → all variables now в Core.bin → loop всё равно hang'ит.
+- **Текущий обход:** stub `LoadGameplayLevelSpecificFromPack: OR A; RET` — возвращает CF=0 → `LoadGameplayAssets` идёт fallback path с compiled-slot bg. L01 играет.
+
+### Список накопившихся артефактов
+- `Source/ASM/ZiFi.asm` — ZiFi wrappers (PakOpen/PakReadToc/StreamSection/Init/Done). Helpers рабочие, StreamSection заголовок stubbed.
+- `Graphics/ZiFi/wdfcvbi2_at_2000.bin` — padded WC driver overlay для SPG-resident bundle.
+- `Source/OTHER/make_level_pack.py`, `make_all_level_pack_assets.py` — генератор ZUMALVL.PAK + preview/title/bg/palette/track.
+- `Source/OTHER/test_zifi_pipeline_python.py` — Python regression test ZiFi flow (PASS на текущем design).
+- `Source/OTHER/make_page_signatures.py` — diagnostic скрипт для page-mapping signatures (отключён сейчас).
+- `Source/OTHER/trace_to_halt.py` — Z80 emulator trace до HALT (Init_Core PASS, не воспроизводит host halt).
+- `Source/ASM/level_select_preview_spg.inc` — auto-gen + ручная правка L18-L22 на низкие pages.
+
+### Текущее состояние сборки
+- SPG = 1,926,144 байт. Все 22 preview работают, L01 playable, L02+ играют с L01 bg (нет compiled-slot fallback для них).
+- ZiFi.asm имеет stub `LoadGameplayLevelSpecificFromPack: OR A; RET` — fallback к compiled bg.
+- Host `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` обновлён, FAT с orphans но gameplay работает.
+
+### Что нужно сделать в следующей сессии
+1. **Починить ZiFi StreamSection hang** (root cause: вероятно FT.WriteMem не preserve SP или какой-то MMU race с PAGE3 source page). Возможные подходы:
+   - Save/restore SP вокруг FT.WriteMem call
+   - Split на 2 фазы: загрузить все sectors в N buffer pages, потом FT.WriteMem из каждой
+   - Detailed trace через Python Z80 emu (нужно эмулировать DOS_SWP + driver behavior)
+2. **Починить inject_zuma_to_wc_img.py** free_chain logic чтобы не accumulate orphans.
+3. **Бундлить L02 как compiled-slot fallback** (как было в v035) пока ZiFi не починен.
+
+### Связано в памяти
+`reference_zuma_vdac2_baseline_2026-05-24_v035`, `reference_zuma_vdac2_hyperv_host_delivery`, `reference_zuma_vdac2_graphics_levels_layout`, новая глава 33 учебника `Docs/uchebnik_tsconf_vdac2.md`.
+
+
+## 2026-05-25 checkpoint: VDAC2 memory map / external level loading
+
+User reported: fresh dump `111`, level loading hangs/then works without HALT, but level 2 shows the wrong/corrupt background. Current root is `C:\Users\Администратор\Desktop\Zuma Deluxe VDAC2`, UTF-8.
+
+Files changed this session:
+- Added `Docs/memory_map_vdac2.md` with current SPG/RAM_G/page ownership notes.
+- Added `Source/OTHER/check_memory_map.py`, and `build_wc_img.cmd` now runs it before the other validation/injection steps.
+- Updated `Source/OTHER/make_all_level_pack_assets.py` so regenerated level-select preview pages preserve the low-page workaround for L18-L22 (`#40/#42/#44/#46/#49`) instead of returning to the conflicting high sequence.
+- Updated `Source/OTHER/test_page3_inflate_guards.py` so it fails if L18 preview source page regresses to `#F1`.
+- Heavily changed `Source/ASM/ZiFi.asm` external level loader:
+  - Removed old `LoadGameplayLevelSpecificFromPack` diagnostic stub.
+  - Loader now stages selected level bg/palette/track into TS pages `#07..#0E`, `#11`, `#06`; it does not call `FT.WriteMem` while ZiFi keeps page 0 mapped to the driver.
+  - `ZiFi_SkipSectors16` now skips by reading/discarding via `LOAD512` into `ZIFI_BUFFER_PAGE #03`, not `LOADNON`; dump showed hang around L02 `bg_off=#01F0`.
+  - Fixed `Seek0` clobbering the offset register: after `ZiFi_Seek0`, the code reloads offset from `ZiFi_LevelTOC` before skip.
+  - Added debug steps `#31/#32/#33` and `ZiFi_BgDstPage`.
+  - Latest loader writes bg chunks to explicit pages `#07,#08,...#0E` instead of trusting returned `C` from the WC driver.
+
+Latest full build after the explicit `ZiFi_BgDstPage` patch passed and updated host `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img`.
+Verification passed:
+- `check_memory_map.py` PASS; warnings remain about `main1_play` only 23 bytes free and cross-profile RAM_G reuse.
+- `sjasmplus` 0 errors, 11 known fwdref warnings.
+- `spgbld` PASS.
+- `test_page3_inflate_guards.py` PASS; dynamic L18 page is `0x40`.
+- `test_levelsel_loader_walks.py` PASS.
+- `test_menu_inflate_ramg.py` PASS.
+- `test_more_games_loader_walks.py` PASS.
+- `test_zifi_pipeline_python.py` PASS, but its final printed diagnosis text is stale/misleading.
+
+Fresh dump facts seen before session stop:
+- `111` timestamp was `25.05.2026 05:44:57`, which is older than the last build with explicit `ZiFi_BgDstPage`; this dump cannot prove the last fix.
+- With current symbols: `Core.ZiFi_GpDbgStep=06`, `Core.CurrentLevel=1`, `Core.CurrentDifficulty=0`, `Core.FadeAlpha=255`.
+- `Core.ZiFi_LevelTOC = f0 01 00 01 f0 02 01 00 f1 02 1b 00 0c 03 11 00 1d 03 c0 00`, so selected runtime level is L02 and the pack bg starts at sector `#01F0`, size `#0100`.
+- `Core.ZiFi_BgDstPage=#0F` in that dump means the bg page-read loop had advanced through `#07..#0E`.
+- `Core.BgRamL=#C000`, `Core.BgRamH=#0A` later in the upload sequence; visible RAM slots in dump are already reused by later shared asset uploads, so they do not directly show the staged bg pages.
+
+Visual/debug assets:
+- User screenshot `Безымянный.png` timestamp `25.05.2026 05:44:43` shows gameplay HUD alive, but the background is not the expected L02 pink `claw` image; it looks like wrong/corrupt bg/palette data.
+- Generated comparison files:
+  - `Diagnostics/Scratch/levels_contact_sheet.png`
+  - `Diagnostics/Scratch/bg_l02_pack_preview.png`
+- Current built/pack L02 is `02-claw / Osprey Talon` and preview `_level_select_preview_l02.png` is the pink claw board. `level_runtime_table.inc` comments: L01 `spiral / Spiral of Doom`, L02 `claw / Osprey Talon`, L09 `underover / Mud Slide`.
+- Possible separate issue: if user expects "level 2" to be Mud Slide, the level ordering/table is different from expectation. If screenshot is meant to match current table, it is still a loader/upload corruption problem.
+
+Next recommended continuation:
+1. Ask for a truly fresh dump after running the latest host image, or check `Get-Item 111` timestamp first.
+2. Add bg-page proof bytes/checksums to Core debug memory after each `ZiFi_Load512` for pages `#07..#0E`; this will prove whether staging contains L02 chunks before fallback upload.
+3. If staging is good but display is wrong, inspect fallback upload from pages `#07..#0E` to `BG_RAMG_ADDR` and palette page `#11` to `BG_PALETTE_RAMG`.
+4. If staging is bad, inspect ZiFi read destination convention for `LOAD512`: current assumption is `C=SPG page`, `HL=#0000`, and explicit `ZiFi_BgDstPage` should force pages `#07..#0E`.
+## [2026-05-25] VDAC2 → VDAC2: Level-select preview zlib pages isolated high
+**Контекст:** По предложению юзера убрали смешивание late preview thumbnails с низкими страницами `#40/#42/#44/#46/#49`. Все 22 SPG-resident zlib preview для Level Select теперь лежат вместе в высоком последовательном диапазоне `#CC..#FA`: L01 `#CC`, L17 `#EE`, L18 `#F1`, L22 `#FA`.
+**Применимо ли в TO:** Это локальное VDAC2 решение. Важный инвариант: высокий zlib source безопасен только при `DI; SetPage3 #04; CALL FT.Coprocessor.Inflate; SetPage3 #04; EI`; harness теперь специально проверяет проблемный L18 source `#F1`.
+**Ссылки:** `Source/OTHER/make_all_level_pack_assets.py`, `Source/ASM/level_select_preview_spg.inc`, `spgbld_vdac2.ini`, `Source/OTHER/check_memory_map.py`, `Source/OTHER/test_page3_inflate_guards.py`, `Docs/memory_map_vdac2.md`. Full `build_wc_img.cmd` PASS, dynamic inflate calls include `('#f1', '#04')`.
+
+## [2026-05-25] Fresh dump 111 still shows old PAGE3-inflate signature
+`111` timestamp checked: `25.05.2026 14:55:11`, newer than build `25.05.2026 14:46:08`.
+Host `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` was read as FAT32: `/Games/Zuma Deluxe VDAC2/` contains only `README.TXT`, `SPGBLD.INI`, `ZUMA.SYM`, `ZUMA_VD2.SPG`, `ZUMALVL.PAK`; `SPGBLD.INI`, `ZUMA.SYM`, `ZUMA_VD2.SPG`, and `ZUMALVL.PAK` match local build by size and SHA-256.
+Fresh dump signature: slot0 `#0000` and slot3 `#C000` both match `Graphics/levels/Converted/pack/level_select_preview_l18.zlib` 4096/4096 bytes. Current built `ZUMA_VD2.SPG` has zero `CALL/JP FT.Coprocessor.Inflate` byte patterns and four `CALL SafeInflatePage2` patterns. Current full-stack trace for L18 maps source through PAGE2 (`#8000`) and keeps PAGE3 as `#04 main1_play`.
+Conclusion: host image contents are current and FAT chains are OK; the fresh CPU Halted dump still has the old unsafe PAGE3 source-mapping signature, so the running emulator/host is likely executing a cached/previous SPG instance or a different launch path than the verified host `ZUMA_VD2.SPG`.
+
+## [2026-05-25] Clean host image delivery
+User requested replacing host image from clean base instead of in-place reinjecting suspected host FAT.
+Base image used: `C:\Users\Администратор\Desktop\unreal_x64\wc.img` (`104857600` bytes, timestamp `31.08.2025 00:27:51`).
+Rebuilt current assets/SPG/PAK, all gates passed: memory map, PAGE3 inflate guard, level-select loader, menu inflate, more-games loader, ZiFi pack pipeline.
+Delivery command used clean base -> host: `python Source\OTHER\inject_zuma_to_wc_img.py --base-img "C:\Users\Администратор\Desktop\unreal_x64\wc.img" --out-img "\\tsclient\D\Работа.Андрей\unreal_x64\wc.img"`.
+Verified host FAT32 after write:
+- `/Games/Zuma Deluxe VDAC2/ZUMA_VD2.SPG` size `1926144`, SHA-256 `a52287b1ae1ade1b5cf75491511e2f8f697ba75e6aacd9161fc0e68dd2ff0d9c`, matches local.
+- `/Games/Zuma Deluxe VDAC2/ZUMALVL.PAK` size `5587456`, SHA-256 `8330881e9796a532f4523855b51c0d5ec1fadc9a85d1761cf905ef8f83d25141`, matches local.
+- `SPGBLD.INI` and `ZUMA.SYM` also match local by size/hash.
+- Current SPG contains zero `CALL/JP FT.Coprocessor.Inflate` byte patterns and four `CALL SafeInflatePage2` patterns.
+
+## [2026-05-25] CPU Halted during SPG loader phase: preview zlib offset workaround
+Fresh `111` after clean host image was checked: timestamp `25.05.2026 15:07:32`, newer than build `15:03:21`. Host `wc.img` still matched local build byte-for-byte. Dump still had L18 zlib at both `#0000` and `#C000`, but build canary was absent and `#5C00` was not `Core.bin`, so the halt is before `Init_Core`, during SPG loader phase, not runtime `SafeInflatePage2`.
+Inference: SPG loader maps the block target page into `#C000` while loading high preview zlib blocks. L18 zlib has byte `#76` near the beginning; if loader/INT/bad vector reaches that mapped page, CPU sees `HALT`.
+Workaround applied: all level-select preview zlib SPG blocks moved from block offset `#0000` to `#0200` (512-aligned for spgbld). `LEVEL_SELECT_PREVIEW_ZLIB_OFFSET EQU #0200`; runtime `LoadLevelSelectPreviewAssets` now reads previews from `HL=#0200`. Page assignment remains `#CC..#FA`.
+Files touched: `Source/OTHER/make_all_level_pack_assets.py`, `Source/ASM/level_select_preview_spg.inc`, `Source/ASM/main.asm`, `spgbld_vdac2.ini`, `Source/OTHER/check_memory_map.py`, `build_wc_img.cmd`.
+Verification: `sjasmplus` PASS, `spgbld` PASS, memory map PASS, PAGE3 inflate guard PASS, level-select loader PASS, menu inflate PASS, more-games loader PASS, ZiFi pack pipeline PASS. Full-stack L18 trace now writes from `src=#8200` then `#8000` on the next page, with PAGE3 staying `#04`.
+Host was overwritten again from clean base `C:\Users\Администратор\Desktop\unreal_x64\wc.img`; verified host `ZUMA_VD2.SPG` SHA-256 `639c8cf33fbfa9297c7cf7ad1ed5924a3ee5f4a8569c9840c415352bed96c6e9`, size `1926144`, matching local. `build_wc_img.cmd` now uses clean local base -> host delivery by default.
+
+## [2026-05-25] After loader fix: game reaches Level 1, background is corrupt
+User provided new screenshot `Безымянный.png` timestamp `25.05.2026 15:19:14`. The game now boots into Level 1: HUD, frame, frog, killzone marker, and playfield logic are visible. The broken part is the gameplay background: it has recognizable spiral geometry but noisy/incorrect colors.
+
+This changes the active diagnosis:
+- The previous CPU Halted/loader-phase problem is solved enough to reach gameplay.
+- Host image still matches local build byte-for-byte after clean-base delivery.
+- The screenshot points to the gameplay background asset pair, not a global RAM_G or FT812 failure.
+- Most likely fault zone: `BG_RAMG_ADDR=#010000` 400x300 PALETTED4444 index data and/or `BG_PALETTE_RAMG=#02D500` 512-byte ARGB4 palette.
+- Local asset check: fallback L1 and pack L1 are byte-identical:
+  - `Graphics/levels/Converted/bg_paletted_p00.bin` == `Graphics/levels/Converted/pack/bg_l01_paletted_p00.bin` for page 0.
+  - all fallback bg pages equal pack L1 bg pages.
+  - fallback `bg_palette_argb4.bin` equals pack `bg_l01_palette_argb4.bin`.
+- Therefore the likely remaining issue is runtime transfer/upload of bg/palette to FT812, or FT812 palette interpretation/state at draw time, not pack generation.
+
+Documentation update:
+- `Docs/memory_map_vdac2.md` now records the preview zlib layout change: pages `#CC..#FA`, block/runtime offset `#0200`.
+
+Next useful debug step:
+- Capture or instrument the bytes actually uploaded to FT812 at `BG_RAMG_ADDR` and `BG_PALETTE_RAMG` during `LoadGameplayAssets`.
+- If the uploaded bytes match local `bg_paletted_p00..p07` and `bg_palette_argb4.bin`, inspect draw-time `FT_PaletteSource BG_PALETTE_RAMG` / `FT_BitmapLayout FT_PALETTED4444`.
+- If the uploaded bytes do not match, inspect `ZiFi_Load512` staging into pages `#07..#0E/#11` and fallback upload from those pages.
+
+## [2026-05-25] Full Stack Simulator usage notes for Claude
+The current simulator entry point is `Source/OTHER/full_stack_trace.py`. It is not a pixel renderer. It is a trace-first full-stack harness that runs the current SPG layout through the Z80 emulator, with these parts connected:
+- current `spgbld_vdac2.ini` Block layout and `Build/*.bin` artifacts;
+- Z80 paging/MMU page tracking for slots 0..3;
+- TSLib/FT812 call hooks for `FT.WriteMem`, `FT.Coprocessor.Write`, `Write32`, `WaitFlush`, `IsFault`, `Wait`;
+- optional real execution of TSLib `FT.Coprocessor.Inflate`;
+- fake deterministic ZiFi device backed by local `Build/ZUMALVL.PAK`;
+- optional `shadow_ft812` register/FIFO model for FT812-side sanity;
+- crash report that identifies visible pages, slot bytes, recent MMU changes, recent PCs, inflate calls, ZiFi calls, and resident debug vars.
+
+Run it only after a current build, because it reads `Build/TSLib.bin`, `Build/Core.bin`, `Build/main1_play.bin`, `Build/zuma.sym`, `Build/ZUMALVL.PAK`, and `spgbld_vdac2.ini`.
+
+Useful commands from project root:
+
+```bat
+python Source\OTHER\full_stack_trace.py --scenario preview-l18 --real-inflate --shadow-ft812 --irq-mode inflate-slot3 --max-steps 2000000
+```
+
+This is the PAGE3/inflate regression. It sets `CurrentLevel=17` (L18), calls `Core.Init_Core`, then `Core.LoadLevelSelectPreviewAssets`. With the current fix it should show source reads from `PAGE2`, for example `COPRO_WRITE src=#8200 ... pages=(0,5,#F1,#04)`, then `PAGE2` advances to `#F2`, while `PAGE3` remains `#04`. If it reports `IRQ_PROBE` or `PAGE3=#F1`, the unsafe old loader behavior came back.
+
+```bat
+python Source\OTHER\full_stack_trace.py --scenario levelselect-load --real-inflate --shadow-ft812 --irq-mode inflate-slot3 --max-steps 10000000
+```
+
+This walks the larger level-select asset load. Use it when menu -> level select hangs or when a button/preview transition corrupts pages.
+
+```bat
+python Source\OTHER\full_stack_trace.py --scenario gameplay-load --shadow-ft812 --max-steps 10000000
+```
+
+This calls `Core.Init_Core`, sets `CurrentLevel=1`, then calls `Core.LoadGameplayAssets`. Use it for the current "Level 1 background corrupt" class of issues. It should list ZiFi wrapper calls, TOC values, and `WRITEMEM` calls for background/palette uploads. For background debugging, look for:
+- `Core.ZiFi_GpDbgStep`;
+- `Core.ZiFi_BgDstPage`;
+- `ZiFi_LevelTOC` words;
+- direct pack streaming into FT812 RAM_G, with background going to `BG_RAMG_ADDR #010000`;
+- palette streaming to `BG_PALETTE_RAMG #02D500`;
+- `test_gameplay_level_load_ramg.py --level-index 0/1` should report exact RAM_G bg/palette matches and `Carry=set`.
+
+```bat
+python Source\OTHER\full_stack_trace.py --scenario entry --shadow-ft812 --max-steps 10000000
+```
+
+This starts from the emulator entry PC and runs until timeout/HALT. It is useful only when you want a broad boot trace. It is noisier and less controlled than calling the specific functions above.
+
+How to read the report:
+- `steps/pc/sp/pages` is the final CPU state. `pages=#00,#05,#06,#04` is normal after `Init_Core`.
+- `slot0..slot3` shows the visible page in each 16K slot and tries to match the bytes against `spgbld_vdac2.ini` Block owners.
+- `Recent events` is the main signal: calls, returns, MMU changes, ZiFi fake device calls, FT writes, FIFO writes.
+- `Recent PC transitions` helps when execution jumps into a data page or loops.
+- `Inflate calls` is populated when using the shortcut inflate hook. With `--real-inflate`, lower `COPRO_WRITE` events are usually more important.
+- `ZiFi calls` is the fake pack-device transcript.
+- `Core.*` resident vars at the bottom are read from the simulated memory and should line up with `Build/zuma.sym`.
+
+Important caveats:
+- This simulator models CPU/paging/loader calls. It does not render final pixels. If bytes uploaded to `emu.ft.ram_g` are correct but the screenshot is wrong, move to draw-list/FT812 palette-state analysis.
+- The fake ZiFi model reads local `Build/ZUMALVL.PAK`, not host `wc.img`. Use `Source/OTHER/check_host_wc_img.py` separately to prove host image contents.
+- The harness hooks wrapper-level ZiFi calls (`Core.ZiFi_*`), not the real WC driver binary internals.
+- The emulator's `FT.WriteMem` hook copies bytes into `emu.ft.ram_g`, so it can prove upload source/destination/size. It cannot prove host SPI timing unless `shadow_ft812` is extended for that specific path.
+- If the host dump shows a state before `Init_Core` (no build canary, `#5C00` not `Core.bin`), `full_stack_trace.py --scenario preview-l18` will not reproduce it directly; that is SPG loader phase, not our runtime code.
+
+Companion tests:
+- `python Source\OTHER\test_page3_inflate_guards.py` is the regression gate for unsafe `FT.Coprocessor.Inflate`.
+- `python Source\OTHER\test_menu_inflate_ramg.py` checks main menu safe inflate into RAM_G.
+- `python Source\OTHER\test_levelsel_loader_walks.py` and `test_more_games_loader_walks.py` check loader return/paging.
+- `python Source\OTHER\test_zifi_pipeline_python.py` validates local pack format and fake ZiFi stream math.
+- `python Source\OTHER\test_gameplay_level_load_ramg.py --level-index 0` and `--level-index 1` prove selected gameplay bg/palette bytes landed in FT812 RAM_G.
+
+## [2026-05-25] Fixed corrupt Level 1 gameplay load
+The screenshot after the preview-offset fix showed the game entering Level 1, but gameplay was corrupt, not just the background. Root cause was the external-level path in `Source/ASM/ZiFi.asm`: `LoadGameplayLevelSpecificFromPack` staged bg/palette through fallback TS pages and then returned through the fallback upload path. That made the pack path ambiguous and could leave fallback pages or gameplay assets inconsistent.
+
+Fix applied:
+- `LoadGameplayLevelSpecificFromPack` now streams selected bg directly from `ZUMALVL.PAK` to FT812 `BG_RAMG_ADDR #010000`.
+- It streams selected bg palette directly to `BG_PALETTE_RAMG #02D500`.
+- Track still stages to `TRACK_L01_PAGE #06`.
+- On success it returns with Carry set, so `LoadGameplayAssets` skips the compiled fallback bg/palette upload.
+- Fallback pages `#07..#0E/#11` are no longer overwritten by the pack loader.
+
+Validation after the fix:
+- `python Source\OTHER\test_gameplay_level_load_ramg.py --level-index 0`: L01 bg 120000 bytes matches RAM_G, palette 512 bytes matches RAM_G, `Carry=set`.
+- `python Source\OTHER\test_gameplay_level_load_ramg.py --level-index 1`: L02 bg 120000 bytes matches RAM_G, palette 512 bytes matches RAM_G, `Carry=set`.
+- `check_memory_map.py`, `test_page3_inflate_guards.py`, `test_levelsel_loader_walks.py`, `test_menu_inflate_ramg.py`, `test_more_games_loader_walks.py`, and `test_zifi_pipeline_python.py` passed.
+- `sjasmplus` passed with 0 errors / 11 known fwdref warnings; `spgbld` passed. `Build\zuma_vdac2.spg` timestamp `25.05.2026 15:34:57`, size `1,926,144`; `Build\ZUMALVL.PAK` timestamp `25.05.2026 15:33:13`, size `5,587,456`.
+
+Host delivery:
+- Rebuilt host image from clean base `C:\Users\Администратор\Desktop\unreal_x64\wc.img` into `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img`.
+- FAT check for `/Games/Zuma Deluxe VDAC2/` reports OK chains.
+- Host/local SHA-256 match for `SPGBLD.INI`, `ZUMA_VD2.SPG`, `ZUMA.SYM`, and `ZUMALVL.PAK`.
+- Current host `ZUMA_VD2.SPG` SHA-256: `878b58e63f93aae3c0e8813c79279f9bc95ed2816d2015447c9c3036df362a5a`.
+- Current host `ZUMALVL.PAK` SHA-256: `8330881e9796a532f4523855b51c0d5ec1fadc9a85d1761cf905ef8f83d25141`.
+
+Recommended workflow for Claude:
+1. Run the narrow scenario first, not `entry`, unless the bug is truly in boot.
+2. Compare the report's page transitions and `WRITEMEM`/`COPRO_WRITE` lines with the expected memory map.
+3. If a host dump disagrees with the simulator, first check dump timestamp and host image hashes with `check_host_wc_img.py`.
+4. If the screenshot is visually corrupt but the simulator shows correct upload bytes, stop editing loaders and inspect FT812 draw state/palette commands.
+
+## [2026-05-25 16:40] VDAC2 ↔ VDAC2: dump 111 hang локализован в WC SPG-loader (НЕ в нашем коде) + фикс симулятора
+**Контекст:** Свежий дамп `111` (15:38, новее билда 15:34), игра «висит на старте». Полный разбор:
+- Дамп = пост-старт, но **до конца `Init_Core`**: канарейка `ZVDAC2 2026-05-24 PAGE3GUARD` на #5020 ОТСУТСТВУЕТ; Core-страница #05 (slot1, вкл. #5C00 EntryPoint) НЕ содержит `Core.bin` — забита повтором `09 0e 6a 00 00 80 57 19` / `a3 00 00 c6 03 11` (не из наших .bin). slot0 = код WC SPG-loader'а (нет ни в одном Build/*.bin/SPG). slot3 = page **#A3** = `level_select_button_back_normal.zlib` (байт-в-байт SPG offset 0xFDC00). WC-loader читает таблицу на #1100 и мапит страницы в slot3 через `OUT (#13AF),A` (хелпер #683A).
+- SPG-директория (offset 0x100) **корректна**: 3-й байт каждой 3-байтовой записи = точная ini-последовательность всех **215 физических страниц** (включая авто-spanned continuation pages). SPG не повреждён.
+- **Codex'овский `full_stack_trace.py` (gameplay-load)** воспроизвёл краш и я проследил корень: `#5C92 CALL UnpackAndUploadPage (→#3AE5)` при `pages=#0F,#05,#03,#04` — slot0=#0F (ZiFi driver) вместо #00 (TSLib). UnpackAndUploadPage живёт в TSLib slot0 → на #3AE5 нули → NOP-слайд: PC ползёт через канарейку, где байт `0x33` ('3' в "PAGE3") = `INC SP` → SP стал нечётным → доползает до #5C00 (Start) → реинициализация → `Init_Int` `EI;HALT`. Это и есть «зависание» + затирание Core-страницы.
+
+**КОРЕНЬ КРАША В СИМУЛЯТОРЕ — артефакт хука, НЕ баг железа:** `_hook_zifi_ok` возвращал чистый `RET` и НЕ делал `SetPage0_A #00`, который выполняет настоящий `ZiFi_Done` (ZiFi.asm:69-73: `LD A,TSLibPage; SetPage0_A; EI; RET`). На реальном HW `ZiFi_Done` всегда восстанавливает PAGE0=#00 (вызывается и на success, и на .Err, и на .InitErr путях `LoadGameplayLevelSpecificFromPack`).
+
+**Фикс симулятора (ПРИМЕНЁН):** `Source/OTHER/full_stack_trace.py:_hook_zifi_ok` теперь page-aware — `ZiFi_Init`→slot0=#0F, `ZiFi_Done`→slot0=#00. После фикса `gameplay-load` проходит **чисто до конца**: steps=3,680,783, `pc=#FFFE (RETURN_MARKER)`, `sp=#40F2 (StackTop)`, `pages=#00,#05,#06,#04`. Инструментированный прогон: все 53 вызова `UnpackAndUploadPage` с `PAGE0=#00`, 0 нарушений, 0 входов в TSLib-зону #1000-#3E44 при PAGE0≠#00. preview-l18 и test_gameplay_level_load_ramg L02 — без регресса.
+
+**ВЫВОД:**
+1. **Наш рантайм (Core/gameplay/ZiFi) корректен** — стек сбалансирован, PAGE0 всегда восстанавливается. Симулятор теперь доверенный зелёный оракул для gameplay-пути.
+2. **Реальный hang дампа 111 — в фазе загрузки SPG самим Wild Commander, ДО старта Core.** Симулятор её не моделирует (минует WC-loader). Следующий шаг: добавить boot-канарейку в самое начало `Start`, чтобы дамп различал «WC ещё грузит SPG» vs «Core стартовал и упал». Кандидат-гипотеза: 215 страниц / 1.9 МБ — много для WC-loader; превью L01-L22 (#CC..#FA, 22+ стр.) — кандидаты на вынос/сокращение.
+
+**Ссылки:** `Source/OTHER/full_stack_trace.py` (фикс `_hook_zifi_ok`), `Source/ASM/ZiFi.asm:69` (`ZiFi_Done`), `Source/ASM/main.asm:2493` (`LoadGameplayAssets`) + `:3207` (`Init_Int` EI;HALT), `Docs/memory_map_vdac2.md`, дамп `111`. Память: `reference_zuma_vdac2_dump111_wc_loader_hang_2026-05-25`.
+
+## [2026-05-25 16:45] VDAC2 ↔ VDAC2: ОПОРНАЯ v037 — битый фон Level 1 ЗАКРЫТ (root = ZiFi-streaming; workaround = fallback)
+**Контекст:** После доставки boot-канарейки игра ЗАГРУЗИЛАСЬ (hang ушёл — был, видимо, битый FAT хоста от накопленных orphan-кластеров; чистый base-reinject вылечил). Но геймплей Level 1 — битый фон (скрин `Безымянный.png` 16:26: шум со слабо проступающей спиралью, а frog/HUD/рамка/killzone/курсор — корректны). Юзер уточнил: **дамп 111 снят с этого битого зависшего L1, НЕ с boot'а** → Core отработал, нарисовал битый фон, потом крах затёр Core-страницу (поэтому в дампе нет канарейки).
+
+**Полный разбор (root cause):**
+1. **Данные bg корректны.** Сам отрисовал L1 bg в Python из source-бинов (`bg_paletted_p00..p07.bin` индексы 400×300 + `bg_palette_argb4.bin` ARGB4 палитра) → вышла **чистая Spiral of Doom** (камень, спираль, череп-солнце, 4 глифа). Юзер подтвердил: «рисунок тестовый корректный». 255 индексов, пара индексы↔палитра верна.
+2. **Draw-код фона не менялся** — `MainLoop.asm:249` `FT_PaletteSource BG_PALETTE_RAMG` + `FT_BitmapSource BG_RAMG_ADDR` + `FT_PALETTED4444 ZL_BG_W=400,ZL_BG_H=300` + scale ×1.6 → 640×480. Идентичен рабочим baseline'ам.
+3. **Симулятор byte-match (`test_gameplay_level_load_ramg`) проходил** — но он использует FAKE ZiFi (кладёт данные в page #03 по предполагаемой convention), потому HW-баг не ловил.
+4. **Корреляция решающая:** битый ровно и ТОЛЬКО то, что грузится через **ZiFi-streaming** (bg + палитра + track). Всё, что через `UnpackAndUploadPage` (не-ZiFi: balls/frog/HUD/рамка/killzone/курсор/текст/шрифты) — корректно.
+
+→ **Root cause: ZiFi pack-streaming на реальном железе кладёт МУСОР в FT812 RAM_G.** Вероятный механизм: несовпадение convention `Core.ZiFi_Load512` (C=dest page, HL=off, B=blocks) ↔ реальный WC-драйвер `LOAD512` — данные ложатся не в page #03, где их ждёт `ZiFi_StreamSection`, → `FT.WriteMem` из #8000 заливает мусор. (Не дофиксано — требует сверки WC-драйвера `Desktop/WC/ZiFi/zifi.asm` / `_sd/VBI.ASM`.)
+
+**Решающий тест (юзер-верифицирован):** застабил `LoadGameplayLevelSpecificFromPack` → `OR A; RET` (CF=0) → bg грузится через fallback-страницы #07..#0E (как v035). На хосте: **«Фон и игровой процесс не повреждены»** — окончательно подтвердило, что баг = ZiFi-streaming, а не данные/draw.
+
+**ОПОРНАЯ v037:** `releases/v037-2026-05-25-bg-fallback-zifi-streaming-disabled.spg` (SHA `e505849d…`, 1926144 B), локально `_baseline_v037_bg_fallback_zifi_disabled/`. Содержит: bg-fallback стаб, boot-канарейку "BOOT"@#5044, sim-фикс `_hook_zifi_ok` page-aware. L1 чистый; L2+ покажут L1 bg (нет fallback-страниц) до фикса ZiFi.
+
+**Открыто:** починить ZiFi pack-streaming (LOAD512 convention) для L2-L22; убрать стаб когда стриминг заработает.
+
+**Ссылки:** `Source/ASM/ZiFi.asm` (стаб `LoadGameplayLevelSpecificFromPack`), `Source/ASM/MainLoop.asm:249` (bg draw), `Source/OTHER/full_stack_trace.py`, `Diagnostics/_render_bg_l1_check.png`. Память: `reference_zuma_vdac2_baseline_2026-05-25_v037_bg_fallback` (ТЕКУЩАЯ ОПОРНАЯ).
+
+## [2026-05-25 22:00] VDAC2: состояние, проблема −128, варианты решения (после долгой сессии + помощи ChkDsk-соседа)
+
+### ТЕКУЩЕЕ СОСТОЯНИЕ
+- **Хост:** рабочая **v037** (`releases/v037-2026-05-25-bg-fallback-zifi-streaming-disabled.spg`, SHA e505849d) — L1 играется через компилированный fallback (#07..#0E). Pack-streaming отключён.
+- **Source:** `ZiFi.asm` ПЕРЕИМЕНОВАН в **`ts-dos.asm`** (это TS-DOS FAT32 I/O, не радио-ZiFi; include в main.asm обновлён). `LoadGameplayLevelSpecificFromPack` = стаб `OR A; RET` (CF=0 → fallback). `ZiFi_Init` содержит A-fix state-zero (мёртв при стабе). Диаг-буфер `Dbg_DriverState` (1024 B, #6269). Core 1907→2950. `Source/ASM/sd_zc.asm` лежит (адаптированный CMD18 от соседа), НЕ включён.
+- **ВНИМАНИЕ:** графика на диске — Codex-перегенерённая (его сессия наследила, source откатан, но make_*.py/spgbld.ini его). Поэтому пересборка ≠ v037 SHA. Для чистой v037 доставлять РЕЛИЗНЫЙ SPG.
+
+### ПРОБЛЕМА (главная, открытая)
+Pack-streaming уровней (bg/pal/track из `ZUMALVL.PAK`) через **bundled WC-драйвер `WDFCVBI2.COD`** (LOAD512 #2017) из SPG-контекста **дрейфит ровно −128 секторов** на ПЕРВОЙ FAT-секторной границе (spc=1 → 1 FAT-сектор = 128 кластеров/секторов). Первые 128 секторов файла читаются идеально, дальше −128. → L2+ показывают данные L1, фон = шум.
+
+**Корень (диагноз ChkDsk-соседа, подтверждён):** это **stateful CORE32**, не пер-вызовная арифметика. WC обнуляет chain-walk позицию (`LTHL/LTDE/NSDC/EOC/CUHL`) при boot-монтировании; наш SPG-ремонт (`DOS_SWP→DEV_INI→HDD→SETROOT`) оставляет **высокое слово линейной позиции stale** → на байт-оффсете 0x10000 (сектор 128) теряется перенос → −128.
+
+**Проверено и КОРРЕКТНО (байт-в-байт = github CORE32):** BPB (SFAT=32/BFTSZ=1601/SDFAT=3234/BSECPC=1/BROOTC=2/ADDTOP=0), DEL128 (`>>7`, #2F46), CURIT (`FAT_sec=(cl>>7)+SFAT`, #23F1), CMD18 byte-address (`LBA×512`, #3F13), LOAD512 (#22DB). Всё верно статически → баг чисто runtime-state.
+
+**Адреса runtime-переменных драйвера (RE из дампов/дизасма, page #0F @ #3Cxx):** NSDC=#3C18, EOC=#3C19, LTHL=#3C34, LTDE=#3C36, BFTSZ=#3C60, BSECPC=#3C64, SFAT=#3C72, SDFAT=#3C74, CUHL=#3C78, BROOTC=#3C84. JP-таблица device-драйвера @ #3C00 (XPOZI→#3CAC, PROZ→#3CB3, RDDSE→#3CBB), DOS_SWP распаковывает драйвер #3052→#3C00.
+
+### ЧТО ПРОБОВАЛ (не сработало)
+1. ZiFi_StreamSection (C=#03 буфер→FT.WriteMem) → −128 + краш.
+2. #6000-#6003 page-shadow фикс (думал DMA-путь как DSDZC.ASM) — оказалось bundled-драйвер ДРУГОЙ (Unreal-VBI), сжат, без #6000-DMA. Дал reset.
+3. Стрим в компилированные страницы #07..#0E + CF=0 fallback — sim byte-match PASS, но HW −128 (page #07 верна, #0E = сектор 98 вместо 226).
+4. Один вызов LOAD512(B=255) вместо 8× — тот же −128 (не много-вызов).
+5. **Fix A: обнуление NSDC/EOC/LTHL/LTDE в ZiFi_Init** → −128 НА МЕСТЕ + геймплей сломался. Недостаточно (ещё mount-state).
+6. **Прямой CMD18 (sd_zc) в SPG** → нули / `sd_wtdo` зависает интермиттентно. Причина (сосед): карта не в idle после выгрузки WC-ядра; нужен reset (CS-high+dummy+CMD12) перед первым CMD18. #6015 (SDBSF) — WC-глобал, после выгрузки мусор → захардкодить byte-addressing (sd_blkt=0).
+
+### ВАРИАНТЫ РЕШЕНИЯ
+1. **Путь B (рекомендация соседа, основной): self-contained raw CMD18 + СВОЙ FAT-walk.** Бросить bundled-драйвер для чтения. Переиспользовать `sd_zc.a80` (read) + `fat_next_cached` соседа (FAT-кеш + cluster→sector). Ноль скрытого state → нет −128. Обрабатывает фрагментацию (свой chain-walk). Грабли: idle-reset перед 1-м CMD18; хардкод sd_blkt=0; поиск файла (PAK лучше в корень с 8.3-именем, чтобы не возиться с LFN). Прямой CMD18 на Unreal РАБОТАЕТ (сосед host-verified).
+2. **Догнать mount-state драйвера** (Fix A++): найти ВСЕ переменные, что WC сидит при mount (не только NSDC/EOC/LTHL/LTDE — ещё device-pos/XPOZI и т.п.), повторить. Хрупко, сосед не советует.
+3. **Компилировать N приоритетных уровней в SPG** (как L1, #07..#0E). Без чтения с диска. Место есть на ~5-10. Прагматично, но не все 22.
+
+### МЕЖОКОННАЯ КООРДИНАЦИЯ
+Вопросы к ChkDsk-соседу — в `C:\Users\Администратор\Desktop\WC\Chkdsk\Чат.txt` (idle-reset seq, fat_next_cached, find-by-name, SPG-грабли). Жду ответ для пути B.
+
+### ОТКРЫТЫЕ ХВОСТЫ
+- При тесте Fix A (StreamSection+CF=1) геймплей сломался + L2 показал bg+трек L1 — НЕ доразобрано (юзер прав: смахнул зацепки откатом).
+- Codex-графика на диске vs v037-source — пересборка не воспроизводит v037.
+
+## [2026-05-25 21:02] VDAC2 ↔ VDAC2: подготовка sd_zc к path B — idle-reset перед CMD18
+
+**Контекст:** Прочитал свежие записи `Чат.txt` и `Desktop/WC/Chkdsk/Чат.txt`. Актуальная линия остаётся прежней: v037/fallback рабочая, pack-streaming через bundled WC `LOAD512` даёт runtime `−128`, основной путь — self-contained raw CMD18 + свой FAT-walk.
+
+**Находка/изменение:** В `Source/ASM/sd_zc.asm` добавлен подготовительный `sd_idle_reset`, вызываемый из `sd_init`: CS high + dummy clocks, затем CS low без ожидания `#FF`, CMD12, dummy, CS high. Причина: в SPG-контексте карта может остаться в открытом multi-block read после WC/бандл-драйвера; если перед CMD12 ждать `#FF`, можно зависнуть ещё до stop-команды. `sd_blkt` остаётся жёстко `0` (byte-addressing для Unreal), `#6015` не читается.
+
+**Применимо дальше:** Это только подготовка прямого SD-ридера; геймплейный loader всё ещё застаблен `OR A; RET` в `LoadGameplayLevelSpecificFromPack`, а `sd_zc.asm` пока не включён в рабочий путь. Следующий проверяемый срез: положить `ZUMALVL.PAK` 8.3-именем в root образа и сделать минимальный raw FAT32 reader: BPB/root dir → найти `ZUMALVL.PAK` → FAT-cache `(cluster>>7)+fatstart` → чтение TOC/bg/pal/track без WC `LOAD512`.
+
+**Ссылки:** `Source/ASM/sd_zc.asm`, `Source/ASM/ts-dos.asm`, `Source/OTHER/inject_zuma_to_wc_img.py`, соседний чат `Desktop/WC/Chkdsk/Чат.txt`.
+
+## [2026-05-25 21:13] VDAC2 ↔ VDAC2: path B включён — raw CMD18 + FAT-chain reader для root/ZUMALVL.PAK
+
+**Контекст:** Принял задачу на себя. Требование юзера: читать как непрерывный, так и сегментированный файл. Поэтому shortcut "first LBA + sequential sectors" не используется как финал.
+
+**Что сделано:** `Source/ASM/ts-dos.asm` теперь сохраняет внешний контракт `ZiFi_*`, но реальный код `ZiFi_Init/PakOpen/Seek0/Load512/LoadNon` переведён на self-contained raw path:
+- `sd_zc.asm` делает прямой CMD18, byte-addressing (`sd_blkt=0`), `sd_idle_reset` перед первым чтением.
+- `RawPak_OpenRoot` читает BPB sector 0, валидирует FAT32 512B/spc=1, считает `fatstart`, `datastart`, `rootclus`.
+- `RawPak_FindRootEntry` ищет short entry `ZUMALVL.PAK` в root.
+- `RawPak_ReadSectors` читает через текущий cluster и после каждого sector вызывает `RawPak_FatNext`.
+- `RawPak_FatNext` читает FAT sector `(cluster >> 7) + fatstart` и берёт следующий cluster, поэтому поддерживает и contiguous, и fragmented chain.
+- `LoadGameplayLevelSpecificFromPack` снова включён: bg/palette стримятся в FT812 RAM_G, track — в page #06. Fallback остаётся на ошибку CF=0.
+
+**Доставка:** `Source/OTHER/inject_zuma_to_wc_img.py` теперь кладёт единственный `ZUMALVL.PAK` в FAT root (`/ZUMALVL.PAK`) и убирает старый nested `/Games/Zuma Deluxe VDAC2/ZUMALVL.PAK`, чтобы хватило места. В `/Games/Zuma Deluxe VDAC2/` остаются `ZUMA_VD2.SPG`, `ZUMA.SYM`, `SPGBLD.INI`, `README.TXT`. `check_host_wc_img.py` обновлён под новую схему.
+
+**Проверено:** `sjasmplus` PASS (0 errors, 11 known fwdref warnings), `spgbld` PASS. `check_memory_map.py`, `test_page3_inflate_guards.py`, `test_gameplay_level_load_ramg.py --level-index 0/1`, `test_levelsel_loader_walks.py`, `test_menu_inflate_ramg.py`, `test_more_games_loader_walks.py`, `test_zifi_pipeline_python.py` PASS. Host image copied to `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img`; `check_host_wc_img.py` PASS, hashes match. Current host `ZUMA_VD2.SPG` SHA-256 `2469c5bf92d6aa2a6524552fd040a5ec50ce73d5222a0025fb7a094589676043`; root `ZUMALVL.PAK` SHA-256 `8330881e9796a532f4523855b51c0d5ec1fadc9a85d1761cf905ef8f83d25141`.
+
+**Открыто:** нужен hardware/Unreal тест: запустить `ZUMA_VD2.SPG` из `/Games/Zuma Deluxe VDAC2/`, проверить L1/L2. Если зависнет в `sd_wtdo`/нет фона — следующий шаг full SPI init (CMD0/CMD8/ACMD41/CMD58) или диагностический canary по `ZiFi_GpDbgStep`. Текущий root PAK в собранном образе физически contiguous (1 fragment), но ASM-reader уже ходит по FAT-chain и не полагается на это.
+
+**Ссылки:** `Source/ASM/ts-dos.asm`, `Source/ASM/sd_zc.asm`, `Source/OTHER/inject_zuma_to_wc_img.py`, `Source/OTHER/check_host_wc_img.py`, `Build/wc_zuma_vdac2.img`.
+
+## [2026-05-25 21:21] VDAC2 ↔ VDAC2: correction — PAK вернули в папку, raw-reader ищет путь и FAT-chain
+
+**Контекст:** После предыдущего raw-reader билда пользователь сообщил "игра не загружается, дамп 111". Разбор dump `111` от 21:14:59: нет `"BOOT"` @ #5044 и нет `"ZVDAC2"` @ #5020; `#5C00` не совпадает с текущим `Core.bin`. Значит `Start` не выполнялся, сбой был до Core, в фазе WC/SPG loader или доставки, а не в `sd_wtdo`/raw gameplay path.
+
+**Ошибка предыдущего шага:** Я временно переложил `ZUMALVL.PAK` в root и менял порядок записи файлов. Это неправильно: loader не должен зависеть от физического порядка FAT entries/clusters, а pack должен оставаться там, где был, рядом с SPG.
+
+**Исправлено:** 
+- `Source/OTHER/inject_zuma_to_wc_img.py` снова кладёт `ZUMALVL.PAK` в `/Games/Zuma Deluxe VDAC2/` и удаляет случайную root-копию `/ZUMALVL.PAK`, если она была.
+- `Source/OTHER/check_host_wc_img.py` снова проверяет nested `Games/Zuma Deluxe VDAC2/ZUMALVL.PAK`.
+- `Source/ASM/ts-dos.asm` raw-reader больше не ищет root pack. `RawPak_OpenRoot` идёт по short entries `/GAMES/ZUMADE~1/ZUMALVL.PAK`, затем читает файл через FAT-chain. Физический порядок и фрагментация файла не должны влиять: чтение каждого сектора продвигает текущий cluster через FAT.
+
+**Проверено/доставлено:** `sjasmplus` PASS (0 errors, 11 known fwdref warnings), `spgbld` PASS. `check_memory_map.py`, `test_gameplay_level_load_ramg.py --level-index 0/1` PASS. Собран и доставлен host `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` timestamp 21:20:07. `check_host_wc_img.py` PASS: в `/Games/Zuma Deluxe VDAC2/` лежат `SPGBLD.INI`, `ZUMA.SYM`, `ZUMA_VD2.SPG`, `ZUMALVL.PAK`; root `ZUMALVL.PAK` отсутствует. Current host `ZUMA_VD2.SPG` SHA-256 `cc414ad108f756dc9161a97b52f2790928d5a8f2415685df79e8751dbe3a75b8`; `ZUMALVL.PAK` SHA-256 `8330881e9796a532f4523855b51c0d5ec1fadc9a85d1761cf905ef8f83d25141`.
+
+**Открыто:** нужен новый запуск/dump после 21:20:07. Если снова нет `"BOOT"`/`"ZVDAC2"` — это всё ещё WC/SPG-loader до Core. Если `"BOOT"` есть и `ZiFi_GpDbgStep` продвинулся — разбирать raw-reader стадию.
+
+## [2026-05-25 23:30] VDAC2 ↔ VDAC2: свой FAT32+LFN драйвер, фикс B-clobber, двухфазный загрузчик (SD→FT)
+
+**Итог сессии:** перешли на полностью собственный FAT32-драйвер с длинными именами (LFN) + таблицу секторов + двухфазную загрузку. Решение по Gemini: CMD17 (одиночный сектор) вместо нестабильного CMD18 — подтверждено, CMD17 на железе работает идеально (снимок BPB корректен).
+
+**Найденные и исправленные баги (по порядку):**
+1. `RawPak_OpenRoot` искал каталог по короткому имени `GAMES      `, а инжектор из-за бага `fits_83()` создаёт `GAMES~1`. → Переписан `RawPak_FindInCurrentDir`: **сопоставление по длинному имени (LFN)**, иначе 8.3; case-insensitive. Цели — длинные имена `Games`/`Zuma Deluxe VDAC2`/`ZUMALVL.PAK`. Хелперы `Upcase/Build83/NameMatch/StoreLfn`. Проверено на реальном хост-образе (`verify_lfn_walk.py`): Games(175855)→Zuma(175856)→PAK найдены по LFN несмотря на короткое `GAMES~1`.
+2. `RawPak_FatNext` клобал регистр **B** (цикл сдвига `LD B,7` + LDIR с BC), а `RawPak_SkipB` держал в B счётчик DJNZ. → `LoadNon(1)` уходил в обход всей цепочки (10915 секторов) до EOC, читался сектор за концом = нули → нулевой TOC → мусор bg + L1-трек. **Фикс:** `RawPak_AdvanceOne` = `PUSH BC : CALL RawPak_FatNext : POP BC : RET`. Воспроизведено и подтверждено локально (`test_rawpak_z80.py`): SkipB(N) сдвигает ровно на N.
+3. После фикса №2 TOC стал верным → стриминг впервые реально пошёл → **краш** (wild PC, флуд `Illegal port OUT (xxAF)`, "DMA active"). Корень: **FT812 и SD-карта на ОБЩЕЙ SPI-шине Z-Controller (порты #57/#77)**; старый `StreamSection` чередовал SD-чтение и `FT.WriteMem` на шине + seek чтением ~2000 секторов (медленно/таймаут). 
+
+**Новая архитектура загрузчика (текущая):**
+- **Таблица секторов:** PAK непрерывен (инжектор), кэшируем `RawPak_PakLba` = LBA логического сектора 0. Любой логический N → `LBA = PakLba + N` (верно для contiguous при любом spc). `RawPak_SetPakLba`, `RawPak_ReadOneLogicalIX`. Убраны seek-by-read и пер-секторный FAT-walk.
+- **Двухфазность:** сначала ВСЯ SD-фаза (bg 256 сек → страницы #07..#0E, pal 1 сек → #03, track → #06), потом ВСЯ FT-фаза (`FT.WriteMem` из #07..#0E → RAM_G, как проверенный fallback). **Один переход SD→FT** вместо чередования → должно убрать краш шины.
+- `PakReadToc` читает логический сектор 1 напрямую по таблице.
+
+**Проверено локально (`test_rawpak_z80.py`, реальный Z80 RawPak + хук sd_read_sector на FAT-образ инжектора):** OpenRoot CF=1, полный загрузчик CF=1, `ZiFi_GpDbgStep=#06`, `FT.WriteMem ×9` (8 bg в RAM_G #010000..#02C000 + палитра). Логика чистая и быстрая. sjasmplus PASS (Core 4932 б). HW-крах шины харнесс не воспроизводит (FT.WriteMem захукан), но разделение фаз копирует рабочий fallback.
+
+**Открыто:** доставить на хост и проверить L1/L2. Если краш ушёл — добавить мульти-run таблицу (фрагментация) и поддержку spc>1 (сейчас жёстко spc=1, ок для wc.img). Отдельный давний баг: перемежающееся зависание ДО главного меню (флака WC SPG-loader, не наш FAT-код). Gemini-аудит ts-dos.asm: пункты №1 (16K overflow в старом ReadSectors) и №2 (необработанные ошибки SkipSectors16) сняты переходом на таблицу; spc=1 (№4) — на будущее.
+
+**Инструменты сессии:** `Source/OTHER/test_rawpak_z80.py` (Z80 RawPak vs FAT-образ), `verify_lfn_walk.py` (LFN-обход), `parse_dump_diag.py` (разбор дампа), `check_pak_chain.py` (проверка цепочки PAK на образе). Диагностика в билде: `ZiFi_DbgGamesA` granular open-step, `ZiFi_GpDbgStep`, `Dbg_DriverState` снимки BPB/каталога.
+## [2026-05-26] VDAC2: confirmed WC/SPG-loader size issue, reduced SPG boots
+
+**Контекст:** после свежего dump `111` игра висела на загрузке до `Core.Start`: не было `BOOT` @ #5044 и не было видимого `Core.bin`, значит сбой был в фазе Wild Commander/SPG loader, до нашего кода.
+
+**Диагностический фикс:** отключены 5 preview-блоков выбора уровня L18-L22 для уменьшения SPG. Изменения: `spgbld_vdac2.ini` закомментированы preview pages #F1/#F3/#F5/#F7/#FA; `Source/OTHER/make_all_level_pack_assets.py` генерирует `LEVEL_SELECT_PREVIEW_ZLIB_COUNT = 17`; `Source/ASM/main.asm` использует этот лимит; `Source/OTHER/check_memory_map.py` больше не ожидает жестко 22 preview.
+
+**Результат:** `ZUMA_VD2.SPG` уменьшен до 1,796,096 bytes. Host image `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` проверен `check_host_wc_img.py`: размеры и SHA-256 совпадают, `ZUMA_VD2.SPG` SHA-256 `87fdedae730926266fdff2a51028e1495e63c56faa87a10a33d42e8fc78bc5bf`, `ZUMALVL.PAK` SHA-256 `8330881e9796a532f4523855b51c0d5ec1fadc9a85d1761cf905ef8f83d25141`.
+
+**Hardware result:** пользователь подтвердил: игра запускается, уровень 3 играбельный. Значит основной блокер был не в RawPak/Core, а в размере/раскладке большого SPG для WC loader. Следующий риск: вернуть недостающие L18-L22 preview нельзя без нового способа уменьшить SPG или вынести preview/ресурсы из SPG.
+
+## [2026-05-26] VDAC2: level-select previews moved from SPG to ZUMALVL.PAK
+
+**Изменение:** preview выбора уровня больше не живут в SPG как zlib-блоки. `LoadLevelSelectPreviewAssets` теперь открывает `ZUMALVL.PAK`, читает `preview_off/preview_size` из TOC выбранного уровня, грузит raw ARGB4 thumbnail (192 sectors = 6 x 16K) в staging pages #07..#0C, затем FT-фазой заливает #07..#0C в `LS_PREVIEW_BG_RAMG`. SD и FT фазы разделены, как в gameplay loader.
+
+**SPG:** все 22 `level_select_preview_lNN.zlib` закомментированы в `spgbld_vdac2.ini`; `level_select_preview_spg.inc` генерируется с `LEVEL_SELECT_PREVIEW_ZLIB_COUNT = 0`. Размер текущего `ZUMA_VD2.SPG` стал 1,290,240 bytes. Host `ZUMA_VD2.SPG` SHA-256 `3bbc71bb03e81883ba7aa8c08754d2e798c48314265855e339deca5bcce72e0c`; `ZUMALVL.PAK` SHA-256 `8330881e9796a532f4523855b51c0d5ec1fadc9a85d1761cf905ef8f83d25141`.
+
+**Проверено:** `build_wc_img.cmd` PASS: `sjasmplus`, `spgbld`, `check_memory_map.py`, `test_page3_inflate_guards.py`, `test_levelsel_loader_walks.py`, `test_menu_inflate_ramg.py`, `test_more_games_loader_walks.py`, `test_zifi_pipeline_python.py`, `test_gameplay_level_load_ramg.py --level-index 0/1`. `check_host_wc_img.py` PASS, хостовый `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` совпадает по хэшам. Открыто: нужен hardware test level-select с переходами L1..L22; главный риск - скорость/стабильность 192-sector SD-read на каждый preview switch.
+
+**Hardware confirmed / baseline saved:** пользователь подтвердил "Всё работает". Сохранено как опорная папка `releases/baseline_2026-05-26_pak_previews_hw_ok/` с `Source/`, `Graphics/ZiFi/`, `Graphics/levels/`, `Build/Core.bin`, `Build/main1_play.bin`, `Build/TSLib.bin`, `Build/main.lst`, `zuma_vdac2.spg`, `ZUMALVL.PAK`, `wc_zuma_vdac2.img`, `zuma.sym`, `spgbld_vdac2.ini`, build scripts, `README.md`, `Чат.txt`, `BASELINE_NOTES.md`. Также создан standalone `releases/v038-2026-05-26-pak-previews-hw-ok.spg`.
+
+## [2026-05-26] VDAC2: gameplay MENU opens pause/exit confirmation
+
+**Изменение:** HUD `MENU` в gameplay больше не уводит сразу в главное меню. При release-click по кнопке ставится `VDC_DialogState=3`, открывается pause/exit dialog поверх игрового фона с текстом `REALLY WANT TO EXIT?` и кнопками `YES`/`NO`; по умолчанию активна `NO`. Лягушка/летящий шар под dialog не рисуются уже существующей логикой skip при `VDC_DialogState != 0`.
+
+**Поведение:** `NO` снимает паузу и возвращает в тот же момент игры. `YES` делает `FadeGameplayToMenu`. Пока `VDC_DialogState=3`, `VDC_Update` только обновляет `VDC_RtcLastSecond` и возвращается, поэтому игровое время `VDC_GameSeconds` не растет во время паузы. Клик вне YES/NO ничего не делает; SPACE/Kempston fire выбирает текущую активную кнопку (default NO), mouse hover переключает active.
+
+**Проверено/доставлено:** `build_wc_img.cmd` PASS (`sjasmplus`, `spgbld`, memory-map, page3 guards, level-select/menu/more-games loaders, ZiFi pipeline, gameplay L1/L2). `check_host_wc_img.py` PASS. Current host `ZUMA_VD2.SPG` size 1,290,752 bytes, SHA-256 `bb4d779550baac166e5327221614e9adc6c45063731e73f8a96bc21dd499b58c`; `ZUMALVL.PAK` unchanged SHA-256 `8330881e9796a532f4523855b51c0d5ec1fadc9a85d1761cf905ef8f83d25141`.
+
+**Follow-up fix:** hardware showed HUD MENU sprite changes state, but dialog did not open. Root cause: old code opened only on release transition from state=2 to state=1. Changed to open on pressed state directly and widened hitbox to `HUD_MENU_HIT_X=500`, `Y=0`, `W=140`, `H=44`. `UpdateHudMenu` in main1 is now a small `JP Core.UpdateHudMenuCore`, freeing main1 pressure; implementation lives in Core page. Rebuilt/delivered. Current host `ZUMA_VD2.SPG` size 1,290,240 bytes, SHA-256 `aa4dc157c9974d24f73c0921c65a4f8f8c71fc93e5bcf3054c0c311d4c1e068d`; `check_host_wc_img.py` PASS.
+
+**Follow-up fix 2:** user reported hover-trigger/no real LMB event, imprecise MENU coords, and `YES` rendered as `ES`. Removed aborted `UpdateGlobalMouseButtons` attempt and extra `VDC_MouseL*` vars. HUD MENU now follows existing local input pattern: `Input.Mouse.KeyState` (`NZ=pressed`, `Z=released`) -> C=now, B=prev via `VDC_PrevMouseL`; hover only sets `VDC_HudMenuState=1`, pressed visual sets `2`, dialog opens only on `prev=0 && now=1`. Hitbox narrowed to `HUD_MENU_HIT_X=532`, `Y=0`, `W=96`, `H=34`. YES/NO labels switched from Cancun10Stats to native font because Cancun stats atlas lacks/does not render `Y`. Rebuilt/delivered. Current host `ZUMA_VD2.SPG` size 1,290,240 bytes, SHA-256 `0e10204675b68ab0034286af3a0e7cd3808dab43f772db30c576869e901f4be0`; `check_host_wc_img.py` PASS.
+
+**Follow-up fix 3:** user still saw hover-trigger. For HUD MENU only, mouse polarity changed to hardware active-low (`Z` from `Input.Mouse.KeyState` means pressed for this path), while hover remains visual-only. MENU is now active only when `VDC_GameState == VDC_STATE_PLAY` and no dialog is open; disabled during intro/preview/closing/win/game-over. Pause dialog layout refined: title x=176 y=154, buttons 84x38 at y=312, YES x=235 y=319, NO x=367 y=319. Z-order unchanged: dialog is drawn before cursor, cursor remains above it. Rebuilt/delivered. Current host `ZUMA_VD2.SPG` size 1,290,240 bytes, SHA-256 `109f6cc50bf8497999b00683f880fde53c959fd26a97f5410743b3649600cadb`; `check_host_wc_img.py` PASS.
+
+**Follow-up fix 4:** pause/exit dialog visual alignment reworked after screenshot feedback. Title now uses `StrWidth` and is centered around screen/dialog center X=320 instead of hard-coded X=176. Removed trailing `?` because native font has no proper glyph/advance for it, so the rendered text is now `REALLY WANT TO EXIT`. Buttons are symmetric: YES at X=220, NO at X=336, Y=302, size 84x38; labels are centered with native font (`YES` X=246, `NO` X=364, Y=306). Rebuilt/delivered. Current host `ZUMA_VD2.SPG` size 1,290,240 bytes, SHA-256 `44a5ca6b20fdd805834a5d69a2b4a71d557e11439e15748e66627ee1a6218f57`; `ZUMALVL.PAK` unchanged SHA-256 `8330881e9796a532f4523855b51c0d5ec1fadc9a85d1761cf905ef8f83d25141`; `check_host_wc_img.py` PASS.
+
+## [2026-05-26 02:20] VDAC2 ↔ VDAC2: ОПОРНАЯ v039 — пауза-fade + SPG-trim (загрузка чинится РАЗМЕРОМ SPG) + LFN-FAT-драйвер
+
+**ОПОРНАЯ:** releases/v039-2026-05-26-pause-fadeout-lfn-fat-spg-trim.spg (1284096 байт, SHA-256 3c4028bb3aef55848a96e7129be7145d9bfdda0f7a034b7e525c66f933b664d7). Юзер-верифицирована на хосте: грузится, пауза-fade работает. Предыдущие: v037 (zifi-streaming-disabled), v038 (pak-previews-hw-ok, превью вынесены в PAK).
+
+### ГЛАВНЫЙ УРОК СЕССИИ: загрузка ломалась РАЗМЕРОМ SPG, не кодом
+Долго гонял билды (LFN-фикс, B-фикс, two-phase loader) — все «не грузились/висли на старте». Дамп 111 показывал: Core НЕ стартовал (нет канарейки нигде), в слотах — код WC SPG-loader'а (SPGRZ: `LD A,(IX):INC IX; AND #1F; ADD A,A; ADD A,#C0`) + сжатые данные SPG. То есть **висел сам WC-загрузчик, читая/распаковывая раздутый SPG с SD**. v037 (1926144) грузился (со 2-го раза — отдельная флака), мои 1929216 — нет за 10 попыток. Юзер указал: «дело в размере SPG». 
+**Фикс:** срезал из SPG: (1) страницу #0F бандл-WC-драйвера `wdfcvbi2` (RawPak его не зовёт — у нас свой CMD17), (2) буфер `Dbg_DriverState` 1024 б + 2 диаг-снимка из Core. Плюс превью уже были вынесены в PAK (решение юзера+Codex, страницы #CC-#FA закомментированы в spgbld_vdac2.ini). Итог: SPG 1929216 → **1284096** (−645 КБ) → грузится стабильно.
+**Вывод на будущее:** у WC SPG-loader есть практический потолок по размеру SPG. RAM-дамп при зависшем загрузчике/сломанном пейджинге БЕСПОЛЕЗЕН (slot1 ≠ Core, диагностика не читается). Не гонять размер вверх без нужды.
+
+### FAT32-драйвер с LFN (RawPak) — что сделано и доказано
+- CMD17 (одиночный сектор, #57/#77 Z-Controller) вместо нестабильного CMD18 (совет Gemini, подтверждено: CMD17 на железе работает идеально, снимок BPB корректен).
+- LFN-сопоставление каталогов/файла (`RawPak_FindInCurrentDir` + `Upcase/Build83/NameMatch/StoreLfn`): ищем `Games`/`Zuma Deluxe VDAC2`/`ZUMALVL.PAK` по ДЛИННЫМ именам — robustно к коротким алиасам инжектора (`GAMES~1`). Проверено на реальном хост-образе (`verify_lfn_walk.py`).
+- Баг B-clobber (исправлен): `RawPak_FatNext` клобал регистр B, `RawPak_SkipB` держал в B счётчик DJNZ → `LoadNon(1)` уходил по всей цепочке до EOC → нулевой TOC. Фикс: `RawPak_AdvanceOne` = `PUSH BC : CALL FatNext : POP BC`. Воспроизведено/подтверждено локально.
+- FT812 и SD на ОДНОЙ SPI-шине (#57/#77). Чередование SD-чтения и `FT.WriteMem` крашило шину → перешёл на **двухфазную загрузку**: сначала ВСЁ читаем с SD в RAM (bg→#07-#0E, pal→#03, track→#06), потом ВСЁ грузим `FT.WriteMem` (как fallback). Один переход SD→FT.
+- **Таблица секторов:** PAK непрерывен → кэшируем `RawPak_PakLba`, `LBA = PakLba + N` (верно для contiguous при любом spc). Убраны seek-by-read и пер-секторный FAT-walk.
+- `sd_wait` сделан БОУНДЕД (таймаут вместо вечного спина — чтоб не вешать шину).
+
+### НОВЫЙ ИНСТРУМЕНТ: локальный Z80-харнесс FAT (НЕ гонять хост зря!)
+`Source/OTHER/test_rawpak_z80.py` — гоняет РЕАЛЬНЫЙ Z80 `RawPak` в эмуляторе (zuma_full_z80_emulator) с хуком `sd_read_sector` на FAT-образ инжектора (`Build/test_wc.img`, собран `inject_zuma_to_wc_img.py --out-img`). Нашёл B-clobber, проверил two-phase loader (CF=1, GpDbgStep=#06, FT.WriteMem×9) — БЕЗ хостовых циклов. Внимание: эмулятор (cburbridge) не поддерживает часть опкодов и медленный на seek-by-read; HW-баги шины не воспроизводит (FT.WriteMem захукан). Доп. инструменты: `verify_lfn_walk.py`, `parse_dump_diag.py`, `check_pak_chain.py`, `check_host_wc_img.py`.
+
+### Пауза-fade (новая фича, работает на хосте)
+`VDC_DialogState=4` = пауза-fade (не-Play, как Game Over/Win/Intro: лягушка не стреляет — `Bullet_Spawn` гейт по `≠0`; время не идёт — `VDC_Update` для `≥3` рефрешит RTC-базу). На **No** → state 4 + `PauseFadeTimer=74` (≈1с @74Гц) вместо мгновенного возврата. Каждый кадр: окно (рамка+заголовок+кнопки+Yes/No) рисуется с убывающей альфой (`PauseColorA`/`VDC_PauseAlpha`, домножение базовой альфы через `Frog_Mul8x8u`); лягушка рисуется с 1-го кадра fade (гейт `MainLoop`: state 0 ИЛИ 4). По концу → `VDC_DialogState=0` (PLAY), edge кнопки съеден (нет выстрела). Привязка к кадровому INT (не RTC: RTC заморожен паузой).
+
+### ⚠️ Main1 почти полон: 16369/16384 (15 байт свободно). Следующая правка в Main1 (MainLoop.asm/main1_play) переполнит страницу → corruption.
+
+### ОТКРЫТЫЕ ЗАДАЧИ (бэклог):
+1. **PAK на верхних уровнях** — что-то не так. Вероятно из-за допущения непрерывности PAK (`LBA=PakLba+N`): если данные верхних уровней за границей фрагментации файла — читаются не те сектора. Лечить: мультиран-таблица секторов (идти по FAT-цепочке при построении) ИЛИ гарантировать непрерывность PAK в инжекторе.
+2. **Глобальная таблица уровней → геймплей** — переносить ВСЕ настройки 22 бордов в игровой процесс (трек/killzone/цвета/par-time/gauge/lead-in per level), не часть.
+3. **4 уровня сложности** — система difficulty (есть `CurrentDifficulty`), влияющая на скорость шаров/спавн/и т.п.
+
+## [2026-05-26 15:40] VDAC2 → VDC: сессия — верхние уровни, параметры из таблицы, перенос счёта, LEVEL DONE, 2× интро (опорная v041)
+
+ОПОРНАЯ v041 (host-verified). Релиз теперь ПАПКА (политика изменена юзером): releases/v041-2026-05-26-level-params-leveldone-2x-intro/ {ZUMA_VD2.SPG, ZUMALVL.PAK, README.txt}. GitHub main 195e6e4 (+ Graphics/levels + Source + учебник Глава 21).
+
+СДЕЛАНО:
+1. ВЕРХНИЕ УРОВНИ ГРУЗЯТСЯ. Корень был НЕ фрагментация PAK (PAK непрерывен, проверено), а лимит «трек ≤ 1 страница 16К»: LoadGameplayLevelSpecificFromPack отвергал трек ≥33 сект (CP 33). Падали L04/07/16/17/18/20-22 (трек >3276 сэмплов). Фикс — трек на 2 страницы: pack (make_level_pack.pagesplit_track: chunkA #06 + chunkB #0F page-aligned), loader (CP 65, читать 32+остаток в #0F), рантайм VDC_SlotPos page-aware (вынос в Core VDC_ReadSampleAtHL). Проверено harness + round-trip.
+2. ПАРАМЕТРЫ УРОВНЕЙ ИЗ ТАБЛИЦЫ → ГЕЙМПЛЕЙ (инфра LevelSettingsTable + tier-lookup уже была, подключил чтение): число цветов шаров (VDC_LevelColors, VDC_RandomColor катит 0..N-1), скорость цепи (VDC_LevelSpeed, accum speed/100 MoveChain/кадр — значения 0.5-0.9 = аутентичные из levels.xml игры), lead-in/стартовые шары (VDC_LevelStart). Геттеры GetCurrentSpeed/Start/Colors в Core.
+3. GAUGE-ОТСЕЧКА ХВОСТА — починены 2 бага: (а) CALL GetCurrentTargetScore клобал HL → SBC сравнивал мусор → GaugeFull на 1-м match всегда; (б) GaugeFull не сбрасывался в VDC_Init → тащился между уровнями. + HUD-бар нормирован к реальному per-level target (было фикс. 1000), через d=target/63, fill=GaugeShown/d.
+4. СЧЁТ ADVENTURE ПЕРЕНОСИТСЯ между уровнями (накопительный — web-verified: доп.жизнь/50k только если cumulative). VDC_Init больше НЕ сбрасывает PlayerScore; сброс только новый прогон (FadeLevelSelectToGameplay) + full-restart (lives=0).
+5. WIN-FLOW «LEVEL DONE»: по концу win-анимации → диалог «LEVEL DONE» со статистикой (TIME/COMBOS/SCORE/...) + OK (как Game Over) → fade-out всего экрана в чёрное (FadeAlpha рамп + DrawFadeOverlay) → загрузка след. уровня → штатное Intro. DialogState 5=WIN_DONE, 6=WIN_FADE.
+6. ИНТРО: динамичный «LEVEL X-X» (N=уровень, M=сложность) шрифтом 2× от названия (DrawStr_Scale + scale-матрица), right-align к x=610 + название уровня ниже. Было запечённое «LEVEL 1-1».
+7. ИНСТРУМЕНТ: EVE-эмулятор (EveApps) пропатчен дампить реальный RAM_DL → достоверный аудит DL. Исправлен analyze_dl_pixelclock (модель Lina: проход по командам DL доминирует на каждой строке).
+8. НАХОДКИ: миф «размер SPG ломает загрузку» ОПРОВЕРГНУТ (SF Слободчикова 3.17МБ грузится; наши фейлы — флака SD/битый блок, не размер). FT812 line-budget: tearing на тяжёлых кадрах = budget-overrun (proход по командам), но оптимизация ОТЛОЖЕНА (юзер: НЕ резать матрицы разворота шаров — важны для картинки).
+
+ОТКРЫТО / НАДО:
+- Абсолютная калибровка скорости цепи: per-level пропорции верны (0.5-0.9), но абсолютный темп юзер не смог оценить — возможно нужен глобальный множитель скорости.
+- Tearing-оптимизация DL (проход по командам ~440-600 cmd на тяжёлом кадре, >832 бюджета) — ОТЛОЖЕНА «до лучших времён», без удаления матриц шаров и без scissor (рамка translucent).
+- Тонкая подгонка позиции/размера интро-номера (LEVEL @y≈348) — на глаз.
+- Проверить difficulty-систему целиком (4 тира заведены, но не все параметры провалидированы на железе).
+
+
+## [2026-05-26 18:00] VDAC2 → VDC: учебник приведён в актуальное состояние (renumber 1→31, ZiFi→RawPak, line-budget, источники)
+
+Учебник Docs/uchebnik_tsconf_vdac2.md + .html/.pdf перегенерированы (make_pdf.py, авто-TOC).
+СДЕЛАНО:
+1. СКВОЗНАЯ НУМЕРАЦИЯ 1→31 (по решению юзера). Было: §N/§M/§R вперемешку + дыра 12–17 + журнал с 18. Стало: §N/§M/§R → главы 12/13/14, бывшие 18..33 → 15..30, физически переставлены в монотонный порядок (скрипт). N.8.2 возвращена в главу 12. Битая ссылка «Глава 13»→§4.2. Маппинг для memory: 23→20,24→21,26→23,31→28,32→29,33→30 — обновил во всех memory-заметках.
+2. ГЛАВА 30 FAT32 ПЕРЕПИСАНА: было «загрузка через WC ZiFi» (отброшено в v037 — порча RAM_G). Стало ведущий — собственный RawPak (CMD17 + LFN + двухфазная загрузка + PakLba+N + трек на 2 страницы #06/#0F), ZiFi оставлен как «почему отказались». + миф «размер SPG ломает загрузку» опровергнут.
+3. ГЛАВА 24 (бюджет строки) УТОЧНЕНА: модель «800 такт, 1/пиксель» — первое приближение; реально доминирует ПРОХОД ПО КОМАНДАМ DL (HCYCLE≈832, 16 пикс/такт), ground-truth = readback RAM_DL через EveApps. tearing = переполнение бюджета. Матрицы шаров НЕ резать (юзер).
+4. ГЛАВА 21 (группировка матриц шаров): задокументирован реальный АДАПТИВНЫЙ алгоритм из кода — квантизация грубеет с длиной цепи (BallCount≥70 → AND #E0 8 корзин, иначе AND #F0 16) + предрасчётный LUT (§27.6). H4-номера 24.4.x→21.4.x починены.
+5. ГЛАВА 25 (EveApps): добавлен readback реального RAM_DL (0x300000, BT817, headless) — главный инструмент аудита DL.
+6. НОВАЯ ГЛАВА 31: adventure (level select, параметры из таблицы→геймплей, перенос счёта, Win «LEVEL DONE», пауза-fade, интро LEVEL X-X).
+7. Внешние источники в шапке — со ссылками (Bridgetek datasheet/PG/BT81X, Gameduino2, EveApps, TSLib/FT812 SDK). Title page → v041.
+ПРАВИЛО: писать TS-Labs, НЕ «Lina» (заменено в учебнике).
+
+
+## [2026-05-27] VDAC2 → VDC: сегментированный PAK + вынос FAT-загрузчика из Core в slot-3 overlay (локально проверено, ждёт HW)
+
+Две связанные правки (юзер: «загрузка PAK из сегментированного файла» + «ts-dos вынести из Core — резидентная задача: загрузил уровень и спит»):
+
+1. СЕГМЕНТИРОВАННЫЙ (фрагментированный) PAK. Раньше геймплейный путь читал `LBA=PakLba+N` (только непрерывный файл). Теперь — **мультиран-таблица**: при открытии PAK один раз идём по FAT-цепочке, пишем экстенты {LBA,len_sec} в `RawPak_RunTable` (непрерывный=1 run, фрагментированный=N runs, лимит 128 → иначе CF=0/fallback). `RawPak_ReadOneLogicalIX` транслирует лог.сектор→физ.LBA по таблице. Построение = ПРЯМОЙ скан FAT (не через FatNext): указатель `FatPtr` в FatBuf, читаем подряд 4-байт записи, дорогой `cluster>>7` (LBA FAT-сектора) пересчитываем только на границе 128-записей/прыжке. + кэш FAT-сектора `FatBufLba` в FatNext (контигуус: 10913 кластеров → 99 SD-чтений вместо 10913; OpenRoot ~907K шагов ≈ 0.2-0.5с HW).
+
+2. ВЫНОС ЗАГРУЗЧИКА ИЗ CORE → overlay **page #40, slot 3 (#C000)**. `loader_resident.asm` (Core): VDC_ReadSampleAtHL (per-frame, обязан быть резидентным) + cross-load vars + 2 ТРАМПЛИНА (DI→SetPage3 #40→CALL OVL_*→DI→SetPage3 #04→EI; имена прежние, callers не тронуты). `ts-dos.asm` = overlay: sd_zc+RawPak+ZiFi+OVL_LoadGameplay…+OVL_LoadLevelSelectPreview (перенесён из main.asm, SetPage3 убраны). **Core 6269→2127 байт** (загрузчик dormant вне загрузок). Безопасно: грузим Core→Core, стек #40F2 в slot1, INT отключён (DI).
+
+3. ⚠️ ВАЖНАЯ ЛОВУШКА (DEVICE ZXSPECTRUM4096): main1_play(#04) и overlay(#40) на одном логич. #C000, разных физ.страницах. SAVEBIN читает по текущему маппингу слота → ДВА `SAVEBIN` из #C000 без `SLOT n:PAGE m` перед каждым → main1_play.bin получил байты overlay (порча всей Main1-страницы!). Фикс: мапить страницу перед каждым SAVEBIN. Поймал харнесс test_page3_inflate_guards (статический скан Main1). → Если будешь добавлять оверлеи на общий логич.адрес — мапь страницу перед SAVEBIN.
+
+ТЕСТЫ (локально, без хоста): test_rawpak_z80 (непрерывный, CF=1) + НОВЫЙ test_rawpak_fragmented (8 разнесённых сегментов: RunCount=8, сэмплы байт-в-байт, loader CF=1) + весь gate build_wc_img зелёный. Харнессы при прямом вызове overlay-внутренностей мапят emu.mem.pages[3]=0x40.
+
+ОТКРЫТО: HW-тест (юзер). Не покрыто эмулятором: SPG-загрузка page #40 WC-лоадером, реальный тайминг трамплина, FT.WriteMem из slot3=#40. memory_map_vdac2.md обновлён.
+
+
+## [2026-05-27] VDAC2 → VDC: ✅ НА РЕАЛЕ ГРУЗИТ — корень был MBR-раздел + блочная адресация (сверка с ChkDsk)
+
+ИТОГ: overlay+сегментация собрались, но **на реальной 32GB SDHC уровни/превью не грузились** (на Unreal-хосте ОК). Юзер: «сверь логику с ChkDsk» (его FAT32-плагин ЧИТАЕТ эту карту). Сверка `Desktop/WC/Chkdsk/src` нашла ДВА расхождения RawPak vs ChkDsk:
+1. **АДРЕСАЦИЯ:** ChkDsk `sd_init = ld a,(#6015)` — флаг блочной адресации (SDBSF) из глобала WC. Мой RawPak ЖЁСТКО `sd_blkt=0` (байтовая). 32GB=SDHC → нужна БЛОЧНАЯ (arg CMD17 = номер блока, не LBA×512). Unreal=байтовая, потому и совпадало.
+2. **MBR-РАЗДЕЛ:** ChkDsk читает сектор 0, сканирует таблицу разделов MBR (offset 446, тип +4 = #0B/#0C), берёт part_lba (+8), читает BPB ПО РАЗДЕЛУ, и ВСЕ LBA = part_lba + относительный. Мой читал BPB из абс. LBA 0 без part_lba. Реальная карта с разделом → читал мусор.
+
+ФИКС (RawPak_OpenRoot выровнен с ChkDsk): sector0 — если bps=512 → суперфлоппи (Unreal, part_lba=0, байтовая); иначе MBR-скан → part_lba. FatStart/DataStart += part_lba. Адресация: #6015 = глобал WC, но в SPG #6000=Core/slot1 (НЕ WC) → читать нельзя; вместо — ПРОБА: sd_blkt=1, читаю BPB по part_lba, валидирую bps=512; невалид → откат байтовая. sd_zc уже поддерживал sd_blkt (был только жёсткий sd_init=0). НОВЫЙ test_rawpak_partitioned.py (MBR@0+FAT32@2048: part_lba/FatStart/DataStart верны, PAK найден). **На реале заработало.**
+УРОК для VDC: на TS-Conf реальная SD-карта = SDHC БЛОЧНАЯ адресация + MBR-раздел; Unreal wc.img = суперфлоппи байтовая. RawPak в SPG НЕ видит глобалы WC (#6000=своя страница). Эталон чтения карты = плагин ChkDsk (идёт через драйвер WC, знает раздел+адресацию).
+
++ Поиск ZUMALVL.PAK теперь рекурсивный по имени+размеру (любая папка), мёртвый фикс-путь убран (один путь). + «LOADING LEVELS...» на первом (медленном) переходе меню→выбор уровней (FT_Text встроенный ROM-шрифт; флаг LevelsMapLoaded), дальше из кэша мгновенно.
+
+ОПОРНАЯ **v042** (host + REAL-HW verified юзером): releases/v042-2026-05-27-real-card-mbr-block-overlay/ {ZUMA_VD2.SPG, ZUMALVL.PAK, README}. GitHub main (Zuna-Deluxe-VDAC2-FT812). Загрузка уровней с реальной SD-карты заработала.

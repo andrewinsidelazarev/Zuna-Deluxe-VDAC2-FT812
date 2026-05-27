@@ -21,6 +21,11 @@ def main():
     img = open(img_path, 'rb')
     emu = ZumaFullZ80Emulator()
     sym = emu.sym
+    # The RawPak loader now lives in a slot-3 overlay (page #40). On HW the
+    # resident trampolines map it; these tests call overlay internals directly,
+    # so map page #40 into slot 3 up front. (Calls through the trampoline, e.g.
+    # LoadGameplayLevelSpecificFromPack, set/restore PAGE3 themselves.)
+    emu.mem.pages[3] = 0x40
     sd_read = sym["Core.sd_read_sector"]
     reads = []
 
@@ -65,14 +70,17 @@ def main():
     emu.call(sym["Core.RawPak_Seek0"])
     base = curclus()
     print(f"\nafter Seek0: CurClus={base} (FileStartClus)")
+    # NB: the FAT-sector cache (RawPak_FatNext / RawPak_FatBufLba) means a short
+    # SkipB within one FAT sector now does 0 SD reads, so the B-clobber fix is
+    # checked by CurClus advancing by exactly N (not by the read count anymore).
     for n in (1, 3, 10):
         emu.call(sym["Core.RawPak_Seek0"])
         nb = len(reads)
         emu.call(sym["Core.RawPak_SkipB"], b=n)
         cc = curclus()
         exp = base + n
-        ok = (cc == exp) and (len(reads) - nb == n)
-        print(f"  SkipB({n}): CurClus={cc} expect={exp}  reads={len(reads)-nb}  "
+        ok = (cc == exp)
+        print(f"  SkipB({n}): CurClus={cc} expect={exp}  reads={len(reads)-nb} (cached)  "
               + ("OK" if ok else "FAIL"))
         if not ok:
             print("FAIL: SkipB still wrong (B-clobber not fixed)"); return 1
@@ -124,8 +132,13 @@ def main():
     try:
         emu.call(sym["Core.LoadGameplayLevelSpecificFromPack"], max_steps=20_000_000)
         cf = emu.reg.F & 1
+        # ZiFi_GpDbgStep lives in the overlay; the trampoline restored PAGE3=#04,
+        # so map page #40 back in to read it.
+        emu.mem.pages[3] = 0x40
         step = emu.get_byte(sym["Core.ZiFi_GpDbgStep"]) if "Core.ZiFi_GpDbgStep" in sym else emu.get_byte(0x6215)
         print(f"loader returned: CF={cf}  GpDbgStep=#{step:02X}  FT.WriteMem calls={len(wm_calls)}")
+        if not cf or step != 0x06:
+            print("FAIL: gameplay loader did not complete (overlay)"); return 1
         for i, w in enumerate(wm_calls[:8]):
             print(f"  WriteMem#{i}: ramg=#{w[0]:02X}{w[1]:02X}{w[2]:02X} count=#{w[3]:02X}{w[4]:02X} src=#{w[5]:04X}")
         return 0

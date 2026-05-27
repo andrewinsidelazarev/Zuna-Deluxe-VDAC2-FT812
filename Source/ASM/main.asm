@@ -453,6 +453,13 @@ FROG_DEFAULT_Y     EQU 231
 FadeMenuToLevelSelect:
                 LD   HL, Core.MenuBuildFrame
                 CALL FadeOutRoom
+                ; First time only: the PAK sector map isn't built yet, so the
+                ; upcoming asset load runs the (slow) recursive search. Show
+                ; "LOADING LEVELS..." over the faded-out menu while it works.
+                ; Later transitions reuse the cached map -> near-instant, no message.
+                LD   A, (Core.LevelsMapLoaded)
+                OR   A
+                CALL Z, Core.DrawLoadingScreen
                 JP   Core.LevelSelect
 
 FadeMenuToMoreGames:
@@ -3205,99 +3212,10 @@ VDC_AwardGapBonusSlot0:
                 LD   (VDC_StatChainCount), A
                 RET
 
-LoadLevelSelectPreviewAssets:
-                ; Preview backgrounds are now pack-resident raw ARGB4:
-                ; 280x170x2 bytes padded to 6x16K pages. Keep SD and FT
-                ; phases separated because FT812 and SD share Z-Controller SPI.
-                CALL ZiFi_Init
-                JP   NC, .err_init
-                CALL ZiFi_PakOpen
-                JP   NC, .err
-                LD   A, (CurrentLevel)
-                CP   LEVEL_RUNTIME_COUNT
-                JR   C, .idx_ok
-                XOR  A
-.idx_ok:        CALL ZiFi_PakReadToc
-                JP   NC, .err
-
-                ; Require exactly the canonical raw thumbnail size.
-                LD   HL, (ZiFi_LevelTOC + 18)           ; preview_size
-                LD   A, H
-                OR   A
-                JP   NZ, .err
-                LD   A, L
-                CP   192                                ; 6 pages * 32 sectors
-                JP   NZ, .err
-
-                ; SD phase: preview_off -> pages #07..#0C.
-                LD   HL, (ZiFi_LevelTOC + 16)           ; preview_off
-                LD   (RawPak_LogCur), HL
-                LD   A, #07
-                LD   (RawPak_StgPage), A
-                LD   B, 6
-.sd_page:       PUSH BC
-                LD   A, (RawPak_StgPage)
-                SetPage2_A
-                LD   IX, #8000
-                LD   B, 32
-.sd_sec:        PUSH BC
-                CALL RawPak_ReadOneLogicalIX
-                JR   C, .sd_read_err
-                LD   DE, 512
-                ADD  IX, DE
-                POP  BC
-                DJNZ .sd_sec
-                LD   A, (RawPak_StgPage)
-                INC  A
-                LD   (RawPak_StgPage), A
-                POP  BC
-                DJNZ .sd_page
-
-                ; FT phase: pages #07..#0C -> LS_PREVIEW_BG_RAMG.
-                DI
-                SetPage3 #04
-                LD   HL, LS_PREVIEW_BG_RAMG & #FFFF
-                LD   (BgRamL), HL
-                LD   A, (LS_PREVIEW_BG_RAMG >> 16) & #FF
-                LD   (BgRamH), A
-                LD   A, #07
-                LD   (RawPak_StgPage), A
-                LD   B, 6
-.ft_page:       PUSH BC
-                LD   A, (RawPak_StgPage)
-                SetPage2_A
-                LD   HL, #8000
-                LD   BC, 16384
-                LD   A, (BgRamH)
-                LD   DE, (BgRamL)
-                CALL FT.WriteMem
-                LD   HL, (BgRamL)
-                LD   DE, #4000
-                ADD  HL, DE
-                LD   (BgRamL), HL
-                JR   NC, .ft_no_carry
-                LD   A, (BgRamH)
-                INC  A
-                LD   (BgRamH), A
-.ft_no_carry:   LD   A, (RawPak_StgPage)
-                INC  A
-                LD   (RawPak_StgPage), A
-                POP  BC
-                DJNZ .ft_page
-                CALL SetCurrentTrackPage
-                SetPage3 #04
-                EI
-                CALL ZiFi_Done
-                SCF
-                RET
-
-.sd_read_err:   POP  BC
-                POP  BC
-.err:           CALL ZiFi_Done
-.err_init:      CALL SetCurrentTrackPage
-                SetPage3 #04
-                OR   A
-                RET
+; LoadLevelSelectPreviewAssets — moved into the loader overlay as
+; OVL_LoadLevelSelectPreviewAssets (ts-dos.asm). The same-named resident
+; trampoline in loader_resident.asm maps the overlay and calls it. Callers
+; (level-select) are unchanged.
 
 LoadLevelSelectFontNative:
                 LD   A, FONT_NATIVE_PAGE_BASE
@@ -3754,8 +3672,8 @@ str_pause_exit:    DB "REALLY WANT TO EXIT",0
 str_yes:           DB "YES",0
 str_no:            DB "NO",0
 
-                include "ts-dos.asm"
-Main0_End:                                            ; MUST be after ALL main0 code (Init_Core/Init_Int/INT_Handler/ZiFi)
+                include "loader_resident.asm"         ; resident bits of the PAK loader (VDC_ReadSampleAtHL, cross-load vars, overlay trampolines)
+Main0_End:                                            ; MUST be after ALL main0 code (Init_Core/Init_Int/INT_Handler/loader_resident)
 
                 ; ----- main1_play (slot 3, page #04) — scene-specific code -----
                 SLOT 3 : PAGE #04 : ORG #C000
@@ -3768,13 +3686,32 @@ Main1_Start:
                 include "Bullet.asm"
                 include "MainLoop.asm"
 Main1_End:
+
+                ; ----- loader overlay (slot 3, page LOADER_OVL_PAGE) — RawPak FAT
+                ; loader, mapped into slot 3 only during a level/preview load.
+                ; Shares the #C000 window with main1_play (different page), never
+                ; co-resident. Reached via the trampolines in loader_resident.asm.
+                SLOT 3 : PAGE LOADER_OVL_PAGE : ORG #C000
+LoaderOvl_Start:
+                include "ts-dos.asm"
+LoaderOvl_End:
                 endmodule
 
 Main0_Size       EQU Core.Main0_End - Core.Start
 Main1_Size       EQU Core.Main1_End - Core.Main1_Start
+LoaderOvl_Size   EQU Core.LoaderOvl_End - Core.LoaderOvl_Start
                 display "Main0:    \t", /A, Core.Start,       " size=", /D, Main0_Size, " bytes (slot 1 page 5)"
                 display "Main1:    \t", /A, Core.Main1_Start, " size=", /D, Main1_Size, " bytes (slot 3 page #04)"
+                display "LoaderOvl:\t", /A, Core.LoaderOvl_Start, " size=", /D, LoaderOvl_Size, " bytes (slot 3 page #40)"
+                ; Main1 (#04) and the loader overlay (#40) both assemble at logical
+                ; #C000 on different physical pages. Map the right page into the
+                ; slot before each SAVEBIN, else SAVEBIN dumps whichever page was
+                ; mapped last (the overlay) into main1_play.bin — corrupting it.
+                SLOT 1 : PAGE #05
                 SAVEBIN "Build/Core.bin",        Core.Start,       Main0_Size
+                SLOT 3 : PAGE #04
                 SAVEBIN "Build/main1_play.bin",  Core.Main1_Start, Main1_Size
+                SLOT 3 : PAGE Core.LOADER_OVL_PAGE
+                SAVEBIN "Build/loader_ovl.bin",  Core.LoaderOvl_Start, LoaderOvl_Size
 
                 END EntryPoint
