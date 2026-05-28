@@ -240,7 +240,7 @@ def check_build_sizes(errors: list[str]) -> None:
         return
     text = sym_path.read_text(encoding="utf-8", errors="replace")
     values: dict[str, int] = {}
-    for name in ("Main0_Size", "Main1_Size"):
+    for name in ("Main0_Size", "Main1_Size", "UiOvl_Size", "LoaderOvl_Size"):
         m = re.search(rf"^{re.escape(name)}:\s+EQU\s+0x([0-9A-Fa-f]+)", text, re.MULTILINE)
         if m:
             values[name] = int(m.group(1), 16)
@@ -253,9 +253,21 @@ def check_build_sizes(errors: list[str]) -> None:
     if main0 is not None:
         print(f"[build] Main0_Size={main0} bytes")
     if main1 is not None:
-        print(f"[build] Main1_Size={main1} bytes, free={0x4000 - main1} bytes")
+        print(f"[build] Main1_Size={main1} bytes, free={0x4000 - main1} bytes (gameplay overlay page #04)")
         if main1 > 0x3F00:
-            print("[build] warning: main1_play has less than 256 bytes free")
+            print("[build] warning: gameplay overlay (page #04) has less than 256 bytes free")
+    # Each slot-3 overlay assembles at #C000 and must fit one 16K page. They share
+    # the logical window but live on distinct physical pages (#04 gameplay, #41 ui,
+    # #40 loader); SAVEBIN remaps the slot before each dump (see main.asm).
+    for name, page, label in (("UiOvl_Size", "#41", "ui overlay"),
+                              ("LoaderOvl_Size", "#40", "loader overlay")):
+        sz = values.get(name)
+        if sz is None:
+            continue
+        if sz > 0x4000:
+            errors.append(f"{name} is {sz} bytes; {label} page {page} overflows by {sz - 0x4000} bytes")
+        else:
+            print(f"[build] {name}={sz} bytes, free={0x4000 - sz} bytes ({label} page {page})")
 
 
 def main() -> int:

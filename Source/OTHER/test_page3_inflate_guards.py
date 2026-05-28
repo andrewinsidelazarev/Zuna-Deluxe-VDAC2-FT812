@@ -26,17 +26,26 @@ from zuma_full_z80_emulator import ZumaFullZ80Emulator  # noqa: E402
 RET = 0xC9
 
 
-def code_blob_for_symbol(sym: dict[str, int], name: str) -> tuple[Path, int]:
+# Three overlays now share logical #C000 on distinct physical pages, so an address
+# in 0xC000-0xFFFF is ambiguous: caller must say which overlay the symbol lives on.
+_OVERLAY_BIN = {
+    "gameplay": "main1_play.bin",   # page #04: VDC/Frog/Bullet/MainLoop
+    "ui": "ui_ovl.bin",             # page #41: Init_Video/MenuMain/LevelSelect
+    "loader": "loader_ovl.bin",     # page #40: ts-dos RawPak loader
+}
+
+
+def code_blob_for_symbol(sym: dict[str, int], name: str, overlay: str = "gameplay") -> tuple[Path, int]:
     addr = sym[name]
     if 0xC000 <= addr <= 0xFFFF:
-        return ROOT / "Build" / "main1_play.bin", addr - 0xC000
+        return ROOT / "Build" / _OVERLAY_BIN[overlay], addr - 0xC000
     if 0x5C00 <= addr < 0x8000:
         return ROOT / "Build" / "Core.bin", addr - 0x5C00
     return ROOT / "Build" / "TSLib.bin", addr - 0x1000
 
 
-def assert_static_safe_inflate(sym: dict[str, int], func: str, size: int = 128) -> None:
-    path, off = code_blob_for_symbol(sym, func)
+def assert_static_safe_inflate(sym: dict[str, int], func: str, size: int = 128, overlay: str = "gameplay") -> None:
+    path, off = code_blob_for_symbol(sym, func, overlay)
     blob = path.read_bytes()[off : off + size]
     unsafe = bytes([0xCD, sym["FT.Coprocessor.Inflate"] & 0xFF, sym["FT.Coprocessor.Inflate"] >> 8])
     safe = bytes([0xCD, sym["SafeInflatePage2"] & 0xFF, sym["SafeInflatePage2"] >> 8])
@@ -81,8 +90,11 @@ def main() -> int:
         print(f"FAIL: missing symbols: {', '.join(missing)}")
         return 1
 
-    for func in ("LoadLevelSelectPreviewMarkers", "Core.MenuInflateAssetsFromTable"):
-        assert_static_safe_inflate(sym, func)
+    # LoadLevelSelectPreviewMarkers is resident (slot 0, TSLib.bin);
+    # MenuInflateAssetsFromTable now lives on the UI overlay (ui_ovl.bin, #41).
+    for func, overlay in (("LoadLevelSelectPreviewMarkers", "gameplay"),
+                          ("Core.MenuInflateAssetsFromTable", "ui")):
+        assert_static_safe_inflate(sym, func, overlay=overlay)
         print(f"[static] {func}: uses SafeInflatePage2, no unsafe PAGE3 inflate")
 
     assert_static_no_inflate(sym, "Core.LoadLevelSelectPreviewAssets")

@@ -11,7 +11,8 @@ Why a new test instead of fixing test_levelsel_transition.py:
 
 Method:
   * Boot ZumaFullZ80Emulator (no shadow_ft812).
-  * Init_Core to set up paging (slot 3 -> page #04 where main1_play lives).
+  * Init_Core to set up paging (slot 3 -> UI overlay page #41 where the
+    level-select / menu scene code lives after the main1_play overlay split).
   * Stub the four FT polling primitives in Z80 RAM with `OR A; RET`
     (clears CF = "no fault / FIFO ready"), so each FT_WR_INFLATE blows
     through its wait gates.
@@ -79,7 +80,7 @@ def main() -> int:
 
     # Verify slot 3 is on page #04 (where LoadLevelSelectAssets at #CCF3 lives).
     print(f"[paging] slot3 page = #{emu.mem.pages[3]:02X} "
-          f"(expect #04 for main1_play)")
+          f"(expect #41 UI overlay after Init_Core)")
 
     ls_addr = sym["Core.LoadLevelSelectAssets"]
     print(f"[call] LoadLevelSelectAssets @ #{ls_addr:04X}")

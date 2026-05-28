@@ -75,9 +75,9 @@ build.cmd
 
 Делает три шага:
 
-1. **`sjasmplus main.asm`** → `TSLib.bin`, `Core.bin`, `main.lst`
-2. **`spgbld -b spgbld_vdac2.ini zuma_vdac2.spg`** — упаковывает все `*.bin` в `.spg`
-3. **запуск** `zuma_vdac2.spg` в Unreal x64
+1. **`sjasmplus Source/ASM/main.asm`** → `Build/TSLib.bin`, `Build/Core.bin`, `Build/main1_play.bin`, `Build/main.lst`, `Build/zuma.sym`
+2. **`spgbld -b spgbld_vdac2.ini Build/zuma_vdac2.spg`** — упаковывает code blocks и graphics assets в `.spg`
+3. **запуск** `Build/zuma_vdac2.spg` в Unreal x64
 
 Пути к `sjasmplus.exe` / `spgbld.exe` / `Unreal.exe` зашиты в `build.cmd` —
 поправьте под себя.

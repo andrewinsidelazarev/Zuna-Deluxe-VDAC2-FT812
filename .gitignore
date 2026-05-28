@@ -1,4 +1,6 @@
 # ===== Build artifacts (sjasmplus / spgbld) =====
+/Build/*
+!/Build/.gitkeep
 /main.lst
 /zuma_new_spg.lst
 /user.l
@@ -13,6 +15,7 @@
 /222
 /333
 /555
+/Diagnostics/Dumps/
 
 # ===== Python cache =====
 __pycache__/
@@ -25,6 +28,11 @@ __pycache__/
 /_emu_*.txt
 /_render_test.png
 /_test_*.asm
+/Diagnostics/Logs/
+/Diagnostics/Scratch/
+/Diagnostics/FT812Bundles/
+/Graphics/Debug/
+/Docs/Notes/
 
 # ===== Screenshots (user-local) =====
 /Безымянный.png
