@@ -508,6 +508,26 @@ strong {
 <li><a href="#319">31.9 Связано</a></li>
 </ul>
 </li>
+<li><a href="#32-mrgluk-ps2-v044-2026-05-27">Глава 32. Опрос клавиатуры (Mr.Gluk PS/2) и единый глобальный модуль ввода (v044, 2026-05-27)</a><ul>
+<li><a href="#321-pc-mrgluk-z-">32.1 Железо: расширенная PC-клавиатура через Mr.Gluk Z-контроллер</a></li>
+<li><a href="#322-inputasm">32.2 Архитектура: один резидентный модуль Input.asm</a></li>
+<li><a href="#323">32.3 Схема управления и объединение источников</a></li>
+<li><a href="#324-fm_en">32.4 Лягушка: убрали хрупкий хак с FM_EN</a></li>
+<li><a href="#325-input_edgez">32.5 Навигация по меню: детектор фронта Input_EdgeZ</a></li>
+<li><a href="#326">32.6 Раскладка по сценам</a></li>
+<li><a href="#327">32.7 Связано</a></li>
+</ul>
+</li>
+<li><a href="#33-general-sound-ts-config-mod-sfx-pak">33. General Sound на TS-Config: музыка MOD и SFX из PAK</a><ul>
+<li><a href="#331-handshake">33.1. Порты и базовый handshake</a></li>
+<li><a href="#332-mod">33.2. Загрузка MOD музыки</a></li>
+<li><a href="#333-bass_musicload">33.3. Возврат в меню без повторного BASS_MusicLoad</a></li>
+<li><a href="#334-sfx-pack-gs-gameplay">33.4. SFX pack и почему нельзя сбрасывать GS перед gameplay</a></li>
+<li><a href="#335-sample">33.5. Частоты sample и скорость проигрывания</a></li>
+<li><a href="#336-sample">33.6. Устранение щелчков/хвоста sample</a></li>
+<li><a href="#337">33.7. Практические правила</a></li>
+</ul>
+</li>
 </ul>
 </div>
 
@@ -537,7 +557,7 @@ strong {
 датшитов и TSLib: аппаратная связка ZX-Evo+VDAC2, SPI-протокол, memory map,
 видеотайминги 640×480, Display List, bitmap-форматы, производительность/DMA,
 главный цикл рендера и карта TSLib API. Читается линейно как введение.</p>
-<p><strong>Часть II. Журнал разработки Zuma (главы 12–30)</strong> — практический опыт в
+<p><strong>Часть II. Журнал разработки Zuma (главы 12–32)</strong> — практический опыт в
 хронологическом порядке: каждая глава фиксирует конкретную задачу/баг/решение
 с датой и ссылками на код, baseline и память. Главы самодостаточны — можно
 читать выборочно по теме. Сквозные темы:</p>
@@ -548,9 +568,10 @@ strong {
 <li><strong>Инструменты и методология:</strong> 25 (эмулятор EveApps + дамп RAM_DL), 29 (когда эмулятор сам врёт — источник истины = RAM dump).</li>
 <li><strong>Загрузка с SD:</strong> 30 (FAT32-драйвер: эволюция от WC ZiFi к собственному CMD17+LFN).</li>
 <li><strong>Игровые системы (adventure):</strong> 31 (выбор уровня, параметры из таблицы, перенос счёта, Win/Pause).</li>
+<li><strong>Ввод:</strong> 28 (RTC через Mr.Gluk), 32 (опрос PC-клавиатуры через PS/2 FIFO + единый глобальный модуль Input.asm: клавиатура/Kempston/мышь, навигация меню).</li>
 </ul>
 <blockquote>
-<p>Нумерация глав сквозная (1→31). Историческое примечание: ранние версии
+<p>Нумерация глав сквозная (1→32). Историческое примечание: ранние версии
 учебника использовали отдельные пометки <code>§N/§M/§R</code> и нумерацию журнала
 с 18 — в ревизии 2026-05-26 всё приведено к сплошной нумерации.</p>
 </blockquote>
@@ -4994,6 +5015,298 @@ Core-хелперы, иначе следующая правка в Main1 пер�
 <ul>
 <li><code>Source/ASM/LevelSelect.asm</code>, <code>VDC.asm</code>, <code>main.asm</code>; <code>level_runtime_table.inc</code>.</li>
 <li>Memory: <code>project_zuma_vdac2_level_table_to_gameplay</code>, <code>reference_zuma_vdac2_baseline_2026-05-26_v041</code>, <code>reference_zuma_vdac2_baseline_2026-05-24_v035</code>.</li>
+</ul>
+<hr />
+<h2 id="32-mrgluk-ps2-v044-2026-05-27">Глава 32. Опрос клавиатуры (Mr.Gluk PS/2) и единый глобальный модуль ввода (v044, 2026-05-27)</h2>
+<p>Задача: дать полноценное управление с PC-клавиатуры (плюс Kempston и мышь) и
+сделать ввод <strong>по-настоящему глобальным</strong> — чтобы любая клавиша работала во всех
+сценах одинаково. Формулировка юзера: «или глобально работает, или глобально
+глюк». До этого ввод был фрагментирован (лягушка читала матрицу <code>#FE</code> + Kempston,
+диалоги — только <code>#7FFE</code>, More Games — ЛКМ+<code>#7FFE</code>), отчего Enter стрелял у
+лягушки, но не подтверждал в диалоге, а Влево/Вправо в паузе не работали.</p>
+<h3 id="321-pc-mrgluk-z-">32.1 Железо: расширенная PC-клавиатура через Mr.Gluk Z-контроллер</h3>
+<p>ZX-Evolution/TS-Conf имеют PS/2-порт, обслуживаемый контроллером Mr.Gluk (тот же
+чип, что и RTC из Главы 28). Доступ — через те же порты:</p>
+<div class="codehilite"><pre><span></span><code>OUT #EFF7, #80      ; enable Mr.Gluk
+OUT #DFF7, рег      ; выбор внутреннего регистра
+IN/OUT #BFF7        ; данные выбранного регистра
+</code></pre></div>
+
+<p>Регистр <strong><code>#F0</code></strong> — FIFO scancode'ов PS/2 (набор <strong>set-2</strong>). Чтение <code>#BFF7</code>
+достаёт по одному коду; <code>0</code> = FIFO пуст. Инициализация (<code>Input_Init</code>):</p>
+<div class="codehilite"><pre><span></span><code>LD BC,#EFF7 : LD A,#80 : OUT (C),A    ; enable
+LD BC,#DFF7 : LD A,#0C : OUT (C),A
+LD BC,#BFF7 : LD A,#01 : OUT (C),A    ; сброс буфера PS/2
+LD BC,#DFF7 : LD A,#F0 : OUT (C),A
+LD BC,#BFF7 : LD A,#02 : OUT (C),A    ; PS/2 ON
+</code></pre></div>
+
+<p>Скан-коды set-2 (make-коды), которые отслеживаем: ESC=<code>#76</code>, ↑=<code>#75</code>, ↓=<code>#72</code>,
+←=<code>#6B</code>, →=<code>#74</code>, Enter=<code>#5A</code>, Space=<code>#29</code>, Q=<code>#15</code>, A=<code>#1C</code>, O=<code>#44</code>, P=<code>#4D</code>.
+Стрелки приходят с префиксом <code>#E0</code>, но их коды уникальны → префикс игнорируем.
+Отпускание клавиши — префикс <code>#F0</code>, затем её make-код. Переполнение FIFO — <code>#FF</code>.</p>
+<p>🔴 <strong>Главная грабля — RTC гасит #EFF7.</strong> Чтение часов (<code>VDC.ReadRTCSeconds</code>,
+Глава 28) в конце своей работы выключает Mr.Gluk (<code>OUT #EFF7,#00</code>). Поэтому
+<code>Input_Scan</code> <strong>каждый кадр заново</strong> включает <code>OUT #EFF7,#80</code> и заново выбирает
+регистр <code>#F0</code> перед дренажем FIFO. Без этого <code>IN #BFF7</code> отдаёт <code>#FF</code> (= «пусто»
+после маски), и клавиатура «немеет» сразу после первого тика часов.</p>
+<h3 id="322-inputasm">32.2 Архитектура: один резидентный модуль <code>Input.asm</code></h3>
+<p>Весь ввод вынесен в <strong><code>Source/ASM/Input.asm</code></strong> (резидент, <code>module Core</code>, slot 1).
+Раз он в Core — его видят и геймплейный overlay (<code>#04</code>), и UI-overlay (<code>#41</code>) без
+переключения страниц. Контракт:</p>
+<ul>
+<li><code>Input_Init</code> — раз на старте.</li>
+<li><strong><code>Input_Scan</code> — РОВНО раз за кадр в КАЖДОЙ сцене</strong> (меню, выбор уровня, More
+  Games, геймплей). Обновляет и мышь (<code>Input.Mouse.UpdateMouseState</code>), и
+  клавиатуру (дренаж FIFO в флаги). Без него флаги клавиш «застывают».</li>
+<li>Опросы (возвращают <strong>NZ = активно</strong>, объединяя все источники):
+  <code>Input_Up / Down / Left / Right / Esc / FireKey / Fire</code>.</li>
+</ul>
+<p>Дренаж FIFO — маленький автомат с ограничителем (макс 24 байта за скан, чтобы не
+зависнуть на мусоре/потоке):</p>
+<div class="codehilite"><pre><span></span><code>.drain: IN A,(C)
+        OR A : RET Z            ; 0 = FIFO пуст
+        CP #FF : JR Z,.next     ; переполнение -&gt; пропустить
+        CP #E0 : JR Z,.next     ; extended-префикс -&gt; игнор
+        CP #F0 : JR Z,.set_brk  ; break-префикс -&gt; следующий код = отпускание
+        CALL Input_SetKey       ; иначе: scancode -&gt; выставить/сбросить флаг
+</code></pre></div>
+
+<p><code>Input_SetKey</code> сопоставляет код с адресом байт-флага (<code>Input_KEsc/KUp/.../KO/KP</code>)
+и пишет туда 1 (make) или 0 (break, если перед этим был <code>#F0</code>).</p>
+<h3 id="323">32.3 Схема управления и объединение источников</h3>
+<table>
+<thead>
+<tr>
+<th>Действие</th>
+<th>Клавиатура</th>
+<th>Kempston</th>
+<th>Мышь</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Вверх</td>
+<td>↑ | Q</td>
+<td>Up</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Вниз</td>
+<td>↓ | A</td>
+<td>Down</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Влево</td>
+<td>← | O</td>
+<td>Left</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Вправо</td>
+<td>→ | P</td>
+<td>Right</td>
+<td>—</td>
+</tr>
+<tr>
+<td>ESC</td>
+<td>ESC</td>
+<td>— (нет)</td>
+<td>—</td>
+</tr>
+<tr>
+<td>Огонь</td>
+<td>Space | Enter</td>
+<td>Fire</td>
+<td>ЛКМ</td>
+</tr>
+</tbody>
+</table>
+<p>O/P — классическая ZX-раскладка «влево/вправо». Так как <strong>все</strong> сцены читают
+направление только через <code>Input_Left</code>/<code>Input_Right</code>, добавление O/P в эти две
+функции включило их <strong>сразу везде</strong> (лягушка, диалоги, меню, выбор уровня) — это
+и есть «глобально».</p>
+<p>Огонь намеренно разделён на две функции:</p>
+<ul>
+<li><strong><code>Input_FireKey</code></strong> = Space | Enter | Kempston-Fire (БЕЗ ЛКМ). Для сцен, где ЛКМ
+  обрабатывается отдельно (лягушка-aim, hit-test диалогов/кнопок) — иначе ЛКМ дала
+  бы двойной огонь.</li>
+<li><strong><code>Input_Fire</code></strong> = <code>Input_FireKey</code> + ЛКМ. Для сцен без своего hit-test'а (выход
+  из More Games — любой ввод = «дальше»).</li>
+</ul>
+<h3 id="324-fm_en">32.4 Лягушка: убрали хрупкий хак с FM_EN</h3>
+<p>Раньше <code>ZL_AimUpdate</code> читал матрицу <code>#FE</code> (клавиши O/P/Space) напрямую, для чего
+<strong>временно гасил <code>FM_EN</code></strong> в регистре <code>FMADDR</code> — а <code>FM_EN</code> нужен включённым для
+пейджинга. Это был источник риска (см. историю brick'ов пейджинга). Теперь
+вращение = <code>Input_Left</code>/<code>Input_Right</code>, огонь = <code>Input_FireKey</code>; матрица <code>#FE</code>
+больше не читается, переключение <code>FM_EN</code> удалено (<code>ZL_FmEnRestore</code> сведён к <code>RET</code>).</p>
+<h3 id="325-input_edgez">32.5 Навигация по меню: детектор фронта <code>Input_EdgeZ</code></h3>
+<p>Для «одно нажатие = одно действие» (без автоповтора при удержании) добавлен
+резидентный хелпер. Хитрость: состояние клавиши передаётся <strong>через флаг Z</strong>, а
+<code>LD HL,addr</code> между опросом и вызовом флаги не трогает — поэтому Z доходит целым:</p>
+<div class="codehilite"><pre><span></span><code>CALL Input_Up           ; NZ = вверх нажато (флаг Z = состояние)
+LD   HL, MenuKbdUpPrev   ; LD флаги НЕ меняет -&gt; Z сохраняется
+CALL Input_EdgeZ         ; NZ = ФРОНТ (0-&gt;1); обновляет (HL)
+JR   NZ, .do_up
+</code></pre></div>
+
+<div class="codehilite"><pre><span></span><code>Input_EdgeZ: JR Z,.released
+             LD A,(HL) : LD (HL),1 : XOR 1 : RET   ; было 0 -&gt; NZ(фронт); было 1 -&gt; Z
+.released:   LD (HL),0 : XOR A : RET               ; отпущено -&gt; Z, сброс
+</code></pre></div>
+
+<p>🔴 <strong>Грабля — перенос нажатия между сценами.</strong> Если войти в сцену, удерживая Fire
+(которым выбрали пункт), её <code>*FirePrev</code>=0 → первый же кадр даст ложный фронт →
+мгновенный «выбор». Фикс: на входе в сцену все <code>*Prev</code>-флаги ставим в <strong>1</strong>
+(«как будто нажато») — тогда фронт требует сначала отпустить клавишу. Не-нажатая
+клавиша сама сбросит флаг в 0 на первом кадре, так что отклика это не задерживает.</p>
+<h3 id="326">32.6 Раскладка по сценам</h3>
+<ul>
+<li><strong>Главное меню</strong> (<code>MenuKeyboardNav</code>): Вверх/Вниз ходят по активным кнопкам
+  Adventure→More→Quit (Gauntlet/Options без действия — пропущены), по умолчанию
+  Adventure. По просьбе юзера в этом меню <strong>Вверх=Вправо, Вниз=Влево</strong> (кнопки по
+  диагонали). Выбранная кнопка подсвечивается (hover), Огонь = её нажатие (ставит
+  тот же <code>*Click</code>-флаг, что и мышь).</li>
+<li><strong>Выбор уровня</strong> (<code>LevelSelectKeyboard</code>): Вверх/Вниз = сложность
+  (<code>CurrentDifficulty</code> 0..3, Вверх легче / Вниз сложнее), Влево/Вправо = уровень
+  (ставит <code>Back/Next</code>-Click — дальше штатный <code>LevelSelectApplyLevelClick</code> с guard
+  на L1 и заворотом), Огонь = Play, ESC = выход в меню. Вызывается в
+  <code>LevelSelectUpdateControls</code> после hit-test'ов мыши, но до <code>Apply*</code>-рутин.</li>
+<li><strong>Диалоги (пауза/win)</strong>: Влево/Вправо — активная кнопка, <code>Input_FireKey</code> —
+  подтверждение, ESC в геймплее = нажать кнопку «Меню».</li>
+</ul>
+<h3 id="327">32.7 Связано</h3>
+<ul>
+<li><code>Source/ASM/Input.asm</code> (весь модуль), <code>MainLoop.asm</code> (<code>ZL_AimUpdate</code>),
+  <code>MenuMain.asm</code> (<code>MenuKeyboardNav</code>), <code>LevelSelect.asm</code> (<code>LevelSelectKeyboard</code>),
+  <code>main.asm</code> (диалоги <code>.upd_fire</code>/<code>.udlg_fire</code>), <code>MoreGamesSlot0.asm</code>.</li>
+<li>Memory: <code>reference_zuma_vdac2_zxevo_ps2_keyboard</code>, <code>reference_zuma_vdac2_mrgluk_rtc</code>,
+  baseline v044.</li>
+</ul>
+<h2 id="33-general-sound-ts-config-mod-sfx-pak">33. General Sound на TS-Config: музыка MOD и SFX из PAK</h2>
+<p>Этот раздел фиксирует рабочую схему, проверенную в Zuma VDAC2 после ошибки <code>BASS_MusicLoad() error 0x0014</code> при возврате из игры в главное меню. Ключевой вывод: меню-музыку нельзя без необходимости заново загружать в GS/BASS при каждом возврате. Надёжнее один раз загрузить MOD в GS, сохранить handle, а дальше делать только <code>STOP_MODULE</code> перед gameplay и <code>PLAY_MODULE</code> при возврате.</p>
+<h3 id="331-handshake">33.1. Порты и базовый handshake</h3>
+<p>В используемой схеме General Sound доступен через два порта:</p>
+<div class="codehilite"><pre><span></span><code><span class="nf">GS_PORT_DATA</span><span class="w">       </span><span class="no">EQU</span><span class="w"> </span><span class="mi">#00</span><span class="no">B3</span>
+<span class="nf">GS_PORT_CMD</span><span class="w">        </span><span class="no">EQU</span><span class="w"> </span><span class="mi">#00</span><span class="no">BB</span>
+<span class="nf">GS_CMD_PLAY_MODULE</span><span class="w"> </span><span class="no">EQU</span><span class="w"> </span><span class="mi">#31</span>
+<span class="nf">GS_CMD_STOP_MODULE</span><span class="w"> </span><span class="no">EQU</span><span class="w"> </span><span class="mi">#32</span>
+<span class="nf">GS_CMD_PLAY_FX</span><span class="w">     </span><span class="no">EQU</span><span class="w"> </span><span class="mi">#98</span>
+<span class="nf">GS_WAIT_TIMEOUT</span><span class="w">    </span><span class="no">EQU</span><span class="w"> </span><span class="c1">#FFFF</span>
+</code></pre></div>
+
+<p>Команда отправляется в <code>GS_PORT_CMD</code>, данные - в <code>GS_PORT_DATA</code>. После каждого <code>OUT</code> обязательно ждать готовности GS по статусным битам command port. Нельзя писать поток байт вслепую: при переполнении/неверном состоянии эмулятор GS/BASS легко уходит в ошибку загрузки или даёт мусор на конце sample.</p>
+<p>Минимальные резидентные переменные:</p>
+<div class="codehilite"><pre><span></span><code><span class="nl">GS_Present:</span><span class="w">          </span><span class="nf">DEFB</span><span class="w"> </span><span class="mi">0</span>
+<span class="nl">GS_MenuMusicLoaded:</span><span class="w">  </span><span class="nf">DEFB</span><span class="w"> </span><span class="mi">0</span>
+<span class="nl">GS_MenuMusicHandle:</span><span class="w">  </span><span class="nf">DEFB</span><span class="w"> </span><span class="mi">0</span>
+<span class="nl">GS_SfxLoaded:</span><span class="w">        </span><span class="nf">DEFB</span><span class="w"> </span><span class="mi">0</span>
+<span class="nl">GS_RamPages:</span><span class="w">         </span><span class="nf">DEFB</span><span class="w"> </span><span class="mi">0</span>
+</code></pre></div>
+
+<p><code>GS_MenuMusicLoaded</code> и <code>GS_MenuMusicHandle</code> должны жить в резидентной памяти, потому что overlay загрузчика и gameplay overlay меняются, а состояние GS должно переживать переходы menu -&gt; game -&gt; menu.</p>
+<h3 id="332-mod">33.2. Загрузка MOD музыки</h3>
+<p>Рабочий порядок для потоковой загрузки menu MOD из <code>ZUMAAUD.PAK</code>:</p>
+<div class="codehilite"><pre><span></span><code><span class="w">    </span><span class="nf">CALL</span><span class="w"> </span><span class="no">GS_Detect</span>
+<span class="w">    </span><span class="nf">CALL</span><span class="w"> </span><span class="no">GS_QueryRamPages</span>
+<span class="w">    </span><span class="nf">CALL</span><span class="w"> </span><span class="no">GS_InitFxMixer</span>
+<span class="w">    </span><span class="nf">CALL</span><span class="w"> </span><span class="no">ZiFi_Init</span>
+<span class="w">    </span><span class="nf">CALL</span><span class="w"> </span><span class="no">ZiFi_AudioPakOpen</span>
+
+<span class="w">    </span><span class="nf">LD</span><span class="w">   </span><span class="no">A</span><span class="p">,</span><span class="w"> </span><span class="mi">#30</span><span class="w">        </span><span class="c1">; Load Module</span>
+<span class="w">    </span><span class="nf">CALL</span><span class="w"> </span><span class="no">GS_SendCommandOverlay</span>
+
+<span class="w">    </span><span class="nf">LD</span><span class="w">   </span><span class="no">A</span><span class="p">,</span><span class="w"> </span><span class="c1">#D1        ; Open Stream</span>
+<span class="w">    </span><span class="nf">CALL</span><span class="w"> </span><span class="no">GS_SendCommandOverlay</span>
+
+<span class="w">    </span><span class="nf">CALL</span><span class="w"> </span><span class="no">GS_StreamAudioPakToDevice</span>
+
+<span class="w">    </span><span class="nf">LD</span><span class="w">   </span><span class="no">A</span><span class="p">,</span><span class="w"> </span><span class="c1">#D2        ; Close Stream</span>
+<span class="w">    </span><span class="nf">CALL</span><span class="w"> </span><span class="no">GS_SendCommandOverlay</span>
+
+<span class="w">    </span><span class="nf">CALL</span><span class="w"> </span><span class="no">GS_ReadHandleMaybe</span>
+<span class="w">    </span><span class="nf">LD</span><span class="w">   </span><span class="no">A</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span>
+<span class="w">    </span><span class="nf">LD</span><span class="w">   </span><span class="p">(</span><span class="no">GS_MenuMusicLoaded</span><span class="p">),</span><span class="w"> </span><span class="no">A</span>
+<span class="w">    </span><span class="nf">JP</span><span class="w">   </span><span class="no">GS_PlayMenuMusic</span>
+</code></pre></div>
+
+<p>Важная деталь: не читать data port между <code>Load Module</code> и <code>Open Stream</code>, если протокол не гарантирует готовый handle именно в этот момент. В текущей рабочей версии handle читается только после <code>Close Stream</code>. Лишнее чтение перед stream может сдвинуть внутреннее состояние GS/BASS и привести к некорректной повторной загрузке.</p>
+<h3 id="333-bass_musicload">33.3. Возврат в меню без повторного BASS_MusicLoad</h3>
+<p>Ошибка <code>BASS_MusicLoad() error 0x0014</code> проявлялась при возврате из игры, когда код снова заходил в ветку загрузки MOD с диска. Исправленная схема:</p>
+<div class="codehilite"><pre><span></span><code><span class="nl">GS_PlayMenuMusic:</span>
+<span class="w">    </span><span class="nf">LD</span><span class="w">   </span><span class="no">A</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="no">GS_Present</span><span class="p">)</span>
+<span class="w">    </span><span class="nf">OR</span><span class="w">   </span><span class="no">A</span>
+<span class="w">    </span><span class="nf">RET</span><span class="w">  </span><span class="no">Z</span>
+<span class="w">    </span><span class="nf">LD</span><span class="w">   </span><span class="no">A</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="no">GS_MenuMusicLoaded</span><span class="p">)</span>
+<span class="w">    </span><span class="nf">OR</span><span class="w">   </span><span class="no">A</span>
+<span class="w">    </span><span class="nf">RET</span><span class="w">  </span><span class="no">Z</span>
+<span class="w">    </span><span class="nf">LD</span><span class="w">   </span><span class="no">A</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="no">GS_MenuMusicHandle</span><span class="p">)</span>
+<span class="w">    </span><span class="nf">OR</span><span class="w">   </span><span class="no">A</span>
+<span class="w">    </span><span class="nf">RET</span><span class="w">  </span><span class="no">Z</span>
+<span class="w">    </span><span class="nf">CALL</span><span class="w"> </span><span class="no">GS_SendDataResident</span>
+<span class="w">    </span><span class="nf">RET</span><span class="w">  </span><span class="no">NC</span>
+<span class="w">    </span><span class="nf">LD</span><span class="w">   </span><span class="no">A</span><span class="p">,</span><span class="w"> </span><span class="no">GS_CMD_PLAY_MODULE</span>
+<span class="w">    </span><span class="nf">JP</span><span class="w">   </span><span class="no">GS_SendCommandResident</span>
+
+<span class="nl">GS_StopMenuMusic:</span>
+<span class="w">    </span><span class="nf">LD</span><span class="w">   </span><span class="no">A</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="no">GS_Present</span><span class="p">)</span>
+<span class="w">    </span><span class="nf">OR</span><span class="w">   </span><span class="no">A</span>
+<span class="w">    </span><span class="nf">RET</span><span class="w">  </span><span class="no">Z</span>
+<span class="w">    </span><span class="nf">LD</span><span class="w">   </span><span class="no">A</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="no">GS_MenuMusicLoaded</span><span class="p">)</span>
+<span class="w">    </span><span class="nf">OR</span><span class="w">   </span><span class="no">A</span>
+<span class="w">    </span><span class="nf">RET</span><span class="w">  </span><span class="no">Z</span>
+<span class="w">    </span><span class="nf">LD</span><span class="w">   </span><span class="no">A</span><span class="p">,</span><span class="w"> </span><span class="no">GS_CMD_STOP_MODULE</span>
+<span class="w">    </span><span class="nf">CALL</span><span class="w"> </span><span class="no">GS_SendCommandResident</span>
+<span class="w">    </span><span class="nf">RET</span><span class="w">  </span><span class="no">NC</span>
+<span class="w">    </span><span class="nf">SCF</span>
+<span class="w">    </span><span class="nf">RET</span>
+</code></pre></div>
+
+<p><code>GS_StopMenuMusic</code> не должен очищать <code>GS_MenuMusicLoaded</code> и <code>GS_MenuMusicHandle</code>. Это не выгрузка модуля, а только остановка проигрывания. При возврате в главное меню код видит, что MOD уже загружен, и вызывает <code>PLAY_MODULE</code> по старому handle. Повторный <code>BASS_MusicLoad()</code> не выполняется.</p>
+<h3 id="334-sfx-pack-gs-gameplay">33.4. SFX pack и почему нельзя сбрасывать GS перед gameplay</h3>
+<p>Gameplay SFX грузятся отдельно из <code>ZUMASND.PAK</code>, но загрузчик SFX не должен делать <code>#F3 reset</code>, если нужно сохранить menu MOD в памяти:</p>
+<div class="codehilite"><pre><span></span><code><span class="nl">OVL_GS_LoadGameplaySoundsMaybe:</span>
+<span class="w">    </span><span class="nf">LD</span><span class="w">   </span><span class="no">A</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="no">GS_Present</span><span class="p">)</span>
+<span class="w">    </span><span class="nf">OR</span><span class="w">   </span><span class="no">A</span>
+<span class="w">    </span><span class="nf">RET</span><span class="w">  </span><span class="no">Z</span>
+<span class="w">    </span><span class="nf">LD</span><span class="w">   </span><span class="no">A</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="no">GS_SfxLoaded</span><span class="p">)</span>
+<span class="w">    </span><span class="nf">OR</span><span class="w">   </span><span class="no">A</span>
+<span class="w">    </span><span class="nf">RET</span><span class="w">  </span><span class="no">NZ</span>
+<span class="w">    </span><span class="nf">JP</span><span class="w">   </span><span class="no">GS_LoadSfxPackNoReset</span>
+</code></pre></div>
+
+<p>Ранний вариант делал <code>#F3 reset</code> для GS с небольшим объёмом RAM и очищал <code>GS_MenuMusicLoaded</code> / <code>GS_MenuMusicHandle</code>. На возврате это принудительно загоняло меню в повторную загрузку MOD, после чего BASS выдавал <code>0x0014</code>. Для текущей цели reset-путь удалён: SFX догружаются без сброса menu MOD.</p>
+<h3 id="335-sample">33.5. Частоты sample и скорость проигрывания</h3>
+<p>В Zuma VDAC2 большая часть gameplay sample упакована как unsigned PCM с частотой 22050 Hz. Для <code>chant1</code> опытным тестом рабочая скорость получилась при payload 8000 Hz. Важно фиксировать частоту на этапе упаковки PAK, а не пытаться компенсировать её случайными параметрами GS:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">RATE_OVERRIDES</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">&quot;SND_CHANT1&quot;</span><span class="p">:</span> <span class="mi">8000</span><span class="p">,</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>Если sample играет в два раза медленнее или быстрее, сначала проверить фактический payload в <code>ZUMASND.PAK</code> и таблицу размеров/секторов, затем только менять rate override. Нельзя делать вывод по имени исходного WAV: в игре играет не WAV, а уже сконвертированный payload из PAK.</p>
+<h3 id="336-sample">33.6. Устранение щелчков/хвоста sample</h3>
+<p>Для коротких SFX с шумным хвостом рабочая практика:</p>
+<ul>
+<li>обрезать хвост silence/noise при упаковке;</li>
+<li>добавить короткий fade-out на последние сотни/тысячу sample;</li>
+<li>для проблемного игрового события ставить отложенный <code>SND_SILENCE</code>, если GS продолжает держать хвост после завершения эффекта;</li>
+<li>при открытии in-game Menu/ESC глушить текущий SFX через <code>SND_SILENCE</code>, чтобы хвост не доигрывал поверх меню.</li>
+</ul>
+<p>Пример runtime-глушения:</p>
+<div class="codehilite"><pre><span></span><code><span class="w">    </span><span class="nf">LD</span><span class="w"> </span><span class="no">A</span><span class="p">,</span><span class="w"> </span><span class="no">SND_SILENCE</span>
+<span class="w">    </span><span class="nf">CALL</span><span class="w"> </span><span class="no">GS_PlaySfx</span>
+</code></pre></div>
+
+<p>Для match/destroy эффекта в Zuma VDAC2 дополнительно используется маленький таймер, который через несколько кадров отправляет <code>SND_SILENCE</code>. Это прагматичный guard против хвоста sample на конкретном GS/BASS playback path.</p>
+<h3 id="337">33.7. Практические правила</h3>
+<ul>
+<li>Загружать MOD один раз, хранить handle в резидентной памяти.</li>
+<li><code>STOP_MODULE</code> - это пауза/остановка playback, не повод очищать loaded/handle.</li>
+<li>Не делать <code>#F3 reset</code> перед gameplay SFX, если нужно вернуть menu MOD без повторной загрузки.</li>
+<li>Поток в GS открывать через <code>#D1</code>, закрывать через <code>#D2</code>, каждый байт отправлять только после handshake.</li>
+<li>Для release хранить отдельно <code>ZUMAAUD.PAK</code> (music) и <code>ZUMASND.PAK</code> (SFX), чтобы тест на host мог проверить не только SPG, но и звуковые ресурсы.</li>
+<li>При ошибке <code>BASS_MusicLoad() 0x0014</code> первым делом проверить, почему код снова вошёл в ветку Load Module, и не был ли сброшен <code>GS_MenuMusicLoaded</code>.</li>
 </ul>
 </body>
 </html>

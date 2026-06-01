@@ -1,0 +1,4 @@
+WINEXP_MANUAL_XOFF = 1
+WINEXP_MANUAL_YOFF = -2
+spacing = 30
+phase = 0
