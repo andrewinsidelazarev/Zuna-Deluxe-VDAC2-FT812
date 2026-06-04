@@ -133,6 +133,7 @@ MENU_HANDLE_SUN     EQU 3
 MENU_HANDLE_GLOW    EQU 4
 
 MenuMain:
+                CALL ClearRamGForMenu                       ; освободить RAM_G от загрузочного экрана / остатков прошлой сцены
                 CALL GS_InitAndStartMenuMusic
                 CALL LoadMainMenuAssets
                 LD   HL, 0

@@ -90,14 +90,16 @@ LOADING_TEXT_RAMG      EQU #084000
 LOADING_TEXT_HANDLE    EQU 12
 
 BOOT_LOADING_BG_RAMG     EQU #000000
-BOOT_LOADING_BAR_RAMG    EQU #0C8000
-BOOT_TS_ANIM_RAMG        EQU #0D0000
+BOOT_LOADING_BAR_RAMG    EQU #03C000
+BOOT_TS_ANIM_RAMG        EQU #044000
 BOOT_LOADING_BG_HANDLE   EQU 14
 BOOT_LOADING_BAR_HANDLE  EQU 15
 BOOT_TS_ANIM_HANDLE      EQU 16
-BOOT_LOADING_BG_X        EQU -107
+BOOT_LOADING_BG_ENABLED  EQU 1                         ; DXT-L4 boot background, raw pages (no ZX7)
+BOOT_LOADING_BG_MASK_HANDLE EQU 17
+BOOT_LOADING_BG_X        EQU 0
 BOOT_LOADING_BG_Y        EQU 0
-BOOT_LOADING_BAR_X       EQU 129
+BOOT_LOADING_BAR_X       EQU 122
 BOOT_LOADING_BAR_Y       EQU 356
 BOOT_TS_ANIM_X           EQU 226
 BOOT_TS_ANIM_Y           EQU 272
@@ -487,7 +489,7 @@ FadeMenuToLevelSelect:
                 OR   A
                 JR   NZ, .skip_loading
                 CALL UploadLoadingText                  ; залить баннер в RAM_G #084000 (меню погашено)
-                CALL Core.DrawLoadingScreen
+                CALL Core.DrawLoadingLevelsScreen
 .skip_loading:
                 JP   Core.LevelSelect
 
@@ -2789,6 +2791,8 @@ Start:
                 CALL BootProgressReset
                 LD   A, 5
                 CALL BootProgressSetA
+                ; ПОРЯДОК ФИКСИРОВАН (НЕ МЕНЯТЬ):
+                ;   музыка (если есть GS) -> SFX (если ОЗУ GS >= 2МБ) -> тело игры.
                 CALL GS_InitAndStartMenuMusic
                 LD   A, 60
                 CALL BootProgressSetA
@@ -2799,7 +2803,7 @@ Start:
                 LD   A, LOADING_BAR_W
                 CALL BootProgressSetA
                 CALL DrawBootBlackScreen
-                JP   MenuMain
+                JP   MenuMain                           ; RAM_G освобождается в самом MenuMain (ClearRamGForMenu)
 
                 ; ----- Initialize -----
 Initialize:     CALL Init_Core
@@ -2814,13 +2818,15 @@ Initialize:     CALL Init_Core
                 RET
 
 UploadBootLoadingAssets:
+                if BOOT_LOADING_BG_ENABLED
                 LD   HL, BOOT_LOADING_BG_RAMG & 0xFFFF
                 LD   (BgRamL), HL
                 LD   A, (BOOT_LOADING_BG_RAMG >> 16) & 0xFF
                 LD   (BgRamH), A
                 LD   A, BOOT_LOADING_BG_PAGE_BASE
                 LD   B, BOOT_LOADING_BG_PAGES
-                CALL .upload_pages
+                CALL .upload_raw_pages
+                endif
 
                 LD   HL, BOOT_LOADING_BAR_RAMG & 0xFFFF
                 LD   (BgRamL), HL
@@ -2843,6 +2849,28 @@ UploadBootLoadingAssets:
                 INC  A
                 POP  BC
                 DJNZ .upload_pages
+                RET
+.upload_raw_pages:
+                PUSH BC
+                PUSH AF
+                SetPage2_A
+                LD   HL, #8000
+                LD   BC, #4000
+                LD   A, (BgRamH)
+                LD   DE, (BgRamL)
+                CALL FT.WriteMem
+                LD   HL, (BgRamL)
+                LD   DE, #4000
+                ADD  HL, DE
+                LD   (BgRamL), HL
+                JR   NC, .raw_no_carry
+                LD   A, (BgRamH)
+                INC  A
+                LD   (BgRamH), A
+.raw_no_carry: POP  AF
+                INC  A
+                POP  BC
+                DJNZ .upload_raw_pages
                 RET
 
 LoadGameplayAssets:
@@ -2968,24 +2996,10 @@ LoadGameplayAssets:
                 LD   (BgPg), A
                 DJNZ .UploadKz
 
-                ; WIN-взрыв (HD-ref animExplosion, 17 кадров, оранжевый) — ОТДЕЛЬНЫЙ
-                ; атлас в RAM_G #100000 (4 МБ RAM_G), SPG #28..#2C. Грузится своим
-                ; циклом, т.к. не смежен с killzone/destroy и адрес выше старого 1МБ.
-                LD   HL, WINEXP_RAMG_ADDR & #FFFF
-                LD   (BgRamL), HL
-                LD   A, (WINEXP_RAMG_ADDR >> 16) & #FF
-                LD   (BgRamH), A
-                LD   A, WINEXP_PAGE
-                LD   (BgPg), A
-                LD   B, WINEXP_PAGE_COUNT
-.UploadWinExp:  PUSH BC
-                LD   A, (BgPg)
-                CALL UnpackAndUploadPage
-                POP  BC
-                LD   A, (BgPg)
-                INC  A
-                LD   (BgPg), A
-                DJNZ .UploadWinExp
+                ; WIN-взрыв НЕ грузится здесь: его атлас переиспользует регион
+                ; шаров (#050000), который во время геймплея занят. Дозаливается по
+                ; SPI на входе в WIN (VDC_WinOutroInit), когда шаров уже нет. См.
+                ; WINEXP_RAMG_ADDR.
 
                 ; Залить cursor (page #5A, compressed ZX7) в RAM_G CURSOR_RAMG_ADDR.
                 ; UnpackAndUploadPage заливает 16K — последние ~15K = zeros (padding),
@@ -3171,7 +3185,7 @@ LoadGameplayAssets:
                 ; Восстановить слоты после серии compressed uploads:
                 ; slot 2 = selected TrackData, slot 3 = main1_play (page #04).
                 CALL GS_StopMenuMusic
-                CALL GS_LoadGameplaySoundsMaybe
+                CALL GS_LoadGameplaySoundsMaybeQuiet
                 CALL SetCurrentTrackPage
                 SetPage3 #04
 
@@ -3478,6 +3492,27 @@ VDC_UpdateWin:
 
 ; --- VDC_WinOutroInit — на входе в WIN: эмиттеры из head-сэмплов, пул пуст. ---
 VDC_WinOutroInit:
+                ; Дозалить атлас WIN-взрыва в регион шаров (#050000) — шаров на
+                ; экране уже нет (SlotsLen==0, проверено в VDC_CheckWinMaybe), так
+                ; что регион свободен. UnpackAndUploadPage резидентна (slot0),
+                ; использует slot3 как scratch и восстанавливает его в
+                ; CurrentCodePage (#04) — безопасно из gameplay-контекста.
+                LD   HL, WINEXP_RAMG_ADDR & #FFFF
+                LD   (BgRamL), HL
+                LD   A, (WINEXP_RAMG_ADDR >> 16) & #FF
+                LD   (BgRamH), A
+                LD   A, WINEXP_PAGE
+                LD   (BgPg), A
+                LD   B, WINEXP_PAGE_COUNT
+.winexp_up:     PUSH BC
+                LD   A, (BgPg)
+                CALL UnpackAndUploadPage
+                POP  BC
+                LD   A, (BgPg)
+                INC  A
+                LD   (BgPg), A
+                DJNZ .winexp_up
+
                 XOR  A
                 LD   (VDC_WinOutroActive), A
                 ; пул частиц → все мёртвые (f2=255 на смещении +4)
@@ -3682,6 +3717,43 @@ DrawBlackLoadingFrame:
 .dbl_wait_swap: FT_RD_REG8 FT_REG_DLSWAP
                 AND  3
                 JR   NZ, .dbl_wait_swap
+                FT_CMD_Write
+                CALL FT.Coprocessor.WaitFlush
+                FT_WR_REG8 FT_REG_DLSWAP, FT_DLSWAP_FRAME
+                RET
+
+DrawLoadingLevelsScreen:
+                FT_CMD_Start
+                FT_DL_Start
+                FT_VertexFormat 4
+                FT_ClearColorRGB32 0x000000
+                FT_ClearAll
+                FT_CMD_BUF #04FFFFFF                    ; COLOR_RGB white
+                FT_Begin FT_BITMAPS
+
+                FT_BitmapHandle LOADING_TEXT_HANDLE
+                FT_BitmapSource LOADING_TEXT_RAMG
+                FT_BitmapLayout FT_ARGB4, LOADING_TEXT_W * 2, LOADING_TEXT_H
+                FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, LOADING_TEXT_PREFIX_W, LOADING_TEXT_H
+                LD   BC, ((640 - LOADING_LEVELS_W) / 2) * 16
+                LD   DE, ((480 - LOADING_TEXT_H) / 2) * 16
+                CALL FT.Coprocessor.Vertex2f
+
+                FT_BitmapHandle LOADING_TEXT_HANDLE
+                FT_BitmapSource LOADING_TEXT_RAMG + (LOADING_TEXT_SUFFIX_LEVELS_X * 2)
+                FT_BitmapLayout FT_ARGB4, LOADING_TEXT_W * 2, LOADING_TEXT_H
+                FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, LOADING_TEXT_SUFFIX_LEVELS_W, LOADING_TEXT_H
+                LD   BC, (((640 - LOADING_LEVELS_W) / 2) + LOADING_TEXT_PREFIX_W) * 16
+                LD   DE, ((480 - LOADING_TEXT_H) / 2) * 16
+                CALL FT.Coprocessor.Vertex2f
+
+                FT_End
+                FT_Display
+                FT_CMD_Count
+.dlls_wait_swap:
+                FT_RD_REG8 FT_REG_DLSWAP
+                AND  3
+                JR   NZ, .dlls_wait_swap
                 FT_CMD_Write
                 CALL FT.Coprocessor.WaitFlush
                 FT_WR_REG8 FT_REG_DLSWAP, FT_DLSWAP_FRAME
@@ -3961,7 +4033,8 @@ VDC_AwardGapBonusSlot0:
                 LD   DE, (VDC_GaugeScore)
                 ADD  HL, DE
                 LD   (VDC_GaugeScore), HL
-                CALL GetCurrentTargetScore
+                CALL GetCurrentTargetScore             ; DE = per-level target (clobbers HL)
+                LD   HL, (VDC_GaugeScore)               ; reload score before compare
                 AND  A
                 SBC  HL, DE
                 JR   C, .done
@@ -4057,10 +4130,18 @@ DESTROY_PAGE       EQU #1C                              ; match-3 серый ani
 DESTROY_RAMG_ADDR  EQU #0EC000                         ; after killzone atlas
 
 ; --- WIN explosion (оранжевый animExplosion, 17 кадров, 5 страниц) ---
-; Отдельный атлас в RAM_G выше старой границы 1МБ (HW = 4 МБ RAM_G).
+; ВНИМАНИЕ: RAM_G у FT812 = ровно 1 МБ (FT_RAM_G_SIZE = 0x100000). Прошлая
+; сессия ошибочно сочла «4 МБ» (на самом деле это системная RAM ZX Evolution, не
+; графическая RAM_G чипа) и положила атлас на #100000 — это первый байт ЗА
+; границей RAM_G → на железе запись уходит за пределы/аливасится в низ RAM_G и
+; портит фон/текст/спрайты (на EVE-эмуляторе с бОльшим RAM_G не воспроизводилось).
+; ФИКС: к моменту WIN шаров на экране уже нет → переиспользуем регион атласа шаров
+; (#050000, 192 КБ). Атлас НЕ грузится при загрузке уровня, а дозаливается по SPI
+; на входе в WIN (VDC_WinOutroInit). После WIN→след.уровень LoadGameplayAssets
+; заново зальёт шары в #050000.
 WINEXP_PAGE        EQU #28                              ; SPG #28..#2C (5 страниц)
 WINEXP_PAGE_COUNT  EQU 5
-WINEXP_RAMG_ADDR   EQU #100000                          ; 17×48×48×2=78336 → #100000..#113280
+WINEXP_RAMG_ADDR   EQU BALLS_RAMG_ADDR                  ; #050000: 17×48×48×2=78336 (80 КБ) влезает в 192 КБ региона шаров
 
 ; --- Cursor 24×24 ARGB4 (1 page) ---
 CURSOR_PAGE        EQU #5A

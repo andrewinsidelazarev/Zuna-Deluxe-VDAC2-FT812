@@ -355,10 +355,11 @@ class ZumaFullZ80Emulator:
 
     def in_port(self, port: int) -> int:
         low = port & 0xFF
+        high = (port >> 8) & 0xFF
         if low == 0xAF:
             if high == 0x27:
                 return self.dma.status & 0xFF
-            return 0x07 if ((port >> 8) & 0xFF) == 0x00 else 0x00
+            return 0x07 if high == 0x00 else 0x00
         if low == 0x57:
             return self._read_ft_spi()
         if port == 0xBFF7:
@@ -485,6 +486,11 @@ class ZumaFullZ80Emulator:
             return self.ft.int_flags & 0xFF
         if 0x000000 <= addr < RAM_G_SIZE:
             return self.ft.ram_g[addr]
+        elif RAM_G_SIZE <= addr < 0x300000:
+            # HW: FT81x декодирует только младшие 20 бит RAM_G — адрес >=1МБ
+            # аливасится в низ RAM_G (а не читается нулём). Воспроизводим, иначе
+            # переполнение RAM_G на хосте не ловится (см. WINEXP #100000).
+            return self.ft.ram_g[addr & (RAM_G_SIZE - 1)]
         elif 0x300000 <= addr < 0x302000:
             return self.ft.ram_dl[addr - 0x300000]
         elif 0x308000 <= addr < 0x309000:
@@ -501,6 +507,11 @@ class ZumaFullZ80Emulator:
             return
         if 0x000000 <= addr < RAM_G_SIZE:
             self.ft.ram_g[addr] = value
+        elif RAM_G_SIZE <= addr < 0x300000:
+            # HW: запись по адресу >=1МБ аливасится в низ RAM_G (только младшие
+            # 20 бит декодируются) и ПОРТИТ его — раньше эмулятор молча отбрасывал
+            # такую запись, поэтому баг WINEXP #100000 был не виден на хосте.
+            self.ft.ram_g[addr & (RAM_G_SIZE - 1)] = value
         elif 0x300000 <= addr < 0x302000:
             self.ft.ram_dl[addr - 0x300000] = value
         elif 0x308000 <= addr < 0x309000:

@@ -33,6 +33,8 @@ ZL_FROG_DRAW_TONGUE  EQU 1                            ; rotated tongue
 ZL_FROG_DRAW_BALL_NOW  EQU 1                          ; ball on tongue / in mouth
 ZL_FROG_DRAW_NEXT_BALL EQU 1                          ; next ball on frog back
 ZL_FROG_DRAW_OVERLAY EQU 1                            ; rotated face overlay
+ZL_SPACE_LEVEL_INDEX EQU LEVEL_RUNTIME_COUNT - 1       ; Space is the last runtime board
+ZL_SPACE_STARS_PER_LAYER EQU 24
 
 ; ----------------------------------------------------------------------------
 ; MainLoop — точка входа. Никогда не возвращается.
@@ -206,7 +208,13 @@ ZL_DESTROY_H      EQU 48
 ZL_DESTROY_HALF_DELTA EQU ((ZL_DESTROY_W - ZL_BALL_W) / 2) * 16
 ZL_DESTROY_FRAMES EQU 13                              ; match-3 destroy: 13 кадров
 ; WIN-взрыв (оранжевый HD-ref animExplosion) — ОТДЕЛЬНЫЙ атлас/handle/RAM_G:
-ZL_WINEXP_HANDLE  EQU 26                              ; свободный bitmap handle
+ZL_WINEXP_HANDLE  EQU 9                               ; handle шаров (в WIN-стейте шаров нет → свободен).
+                                                     ; ВАЖНО: ≤15, вне диапазона ROM-шрифтов FT812 (16..31).
+                                                     ; Раньше был 26 — совпадал с font 26 у DrawDebugClock:
+                                                     ; взрыв перенастраивал BITMAP_SOURCE(26) на свой атлас
+                                                     ; #050000, и часы (CMD_NUMBER font 26) читали глифы из
+                                                     ; атласа взрыва → мусор на месте цифр (только на железе,
+                                                     ; эмулятор залипание per-handle source не моделирует).
 ZL_WINEXP_FRAMES  EQU 17                              ; HD-ref animExplosion: 17 кадров
 ZL_WINEXP_DRAW    EQU 80                              ; экранный размер взрыва (≈2.5× шара 32; оригинал scale 1.5×100)
 ZL_WINEXP_XOFF    EQU 1                               ; manual screen offset from winexp_offset_tool.py
@@ -294,6 +302,7 @@ ZL_DrawFrame:
                 FT_End
                 CALL ZL_EmitLoadId
                 CALL ZL_EmitSetMatrix
+                CALL ZL_DrawSpaceStarsMaybe
 
                 ; One bitmap primitive for the remaining bitmap layers.
                 FT_Begin FT_BITMAPS
@@ -383,6 +392,144 @@ ZL_DrawFrame:
                 CALL VDC_SwapChains
                 CALL SetCurrentTrackPage
                 JP   ZL_AfterChains
+
+; ----------------------------------------------------------------------------
+; Space-only procedural starfield. Drawn after the bitmap background, before all
+; gameplay bitmaps, so stars are above the Space picture but below track/balls.
+; Uses FT812 POINTS only: no RAM_G, no assets, no persistent star state.
+; ----------------------------------------------------------------------------
+ZL_DrawSpaceStarsMaybe:
+                LD   A, (CurrentLevel)
+                CP   ZL_SPACE_LEVEL_INDEX
+                RET  NZ
+
+                LD   C, 235 : LD D, 240 : LD E, 255
+                CALL FT.Coprocessor.ColorRGB
+
+                LD   HL, (ZL_FrameCounter)
+                SRL  H : RR L
+                CALL ZL_ReduceHLMod640
+                LD   (ZL_StarOffset), HL
+                LD   HL, ZL_StarsFar
+                LD   A, 80
+                LD   DE, 12
+                CALL ZL_DrawSpaceStarLayer
+
+                LD   HL, (ZL_FrameCounter)
+                CALL ZL_ReduceHLMod640
+                LD   (ZL_StarOffset), HL
+                LD   HL, ZL_StarsMid
+                LD   A, 130
+                LD   DE, 18
+                CALL ZL_DrawSpaceStarLayer
+
+                LD   HL, (ZL_FrameCounter)
+                ADD  HL, HL
+                CALL ZL_ReduceHLMod640
+                LD   (ZL_StarOffset), HL
+                LD   HL, ZL_StarsNear
+                LD   A, 205
+                LD   DE, 28
+                CALL ZL_DrawSpaceStarLayer
+
+                LD   E, 255
+                CALL FT.Coprocessor.ColorA
+                LD   C, 255 : LD D, 255 : LD E, 255
+                JP   FT.Coprocessor.ColorRGB
+
+; In: HL=seed pairs, A=alpha, DE=point size in 1/16 px.
+ZL_DrawSpaceStarLayer:
+                LD   (ZL_StarPtr), HL
+                LD   (ZL_StarPointSize), DE
+                LD   E, A
+                CALL FT.Coprocessor.ColorA
+                LD   DE, (ZL_StarPointSize)
+                CALL FT.Coprocessor.PointSize
+                FT_Begin FT_POINTS
+                LD   A, ZL_SPACE_STARS_PER_LAYER
+                LD   (ZL_StarCount), A
+.star_loop:     LD   HL, (ZL_StarPtr)
+                LD   A, (HL)
+                INC  HL
+                LD   E, A                                ; E = x seed
+                LD   D, (HL)                             ; D = y seed
+                INC  HL
+                LD   (ZL_StarPtr), HL
+
+                LD   L, E
+                LD   H, 0
+                ADD  HL, HL                              ; x px = seed*2
+                BIT  0, D
+                JR   Z, .x_no_hi
+                PUSH DE
+                LD   DE, 128
+                ADD  HL, DE                              ; spread into 0..638
+                POP  DE
+.x_no_hi:       PUSH DE
+                LD   DE, (ZL_StarOffset)
+                ADD  HL, DE                              ; x = (base + layer offset) % 640
+                LD   DE, 640
+                AND  A
+                SBC  HL, DE
+                JR   NC, .x_mod_ok
+                ADD  HL, DE
+.x_mod_ok:      POP  DE
+                ADD  HL, HL                              ; x subpx = px*16
+                ADD  HL, HL
+                ADD  HL, HL
+                ADD  HL, HL
+                LD   B, H
+                LD   C, L
+
+                LD   A, D
+                CP   240
+                JR   C, .y_ok
+                SUB  240
+.y_ok:          LD   L, A
+                LD   H, 0
+                ADD  HL, HL                              ; y subpx = seed*32 (px*2*16)
+                ADD  HL, HL
+                ADD  HL, HL
+                ADD  HL, HL
+                ADD  HL, HL
+                LD   D, H
+                LD   E, L
+                CALL FT.Coprocessor.Vertex2f
+
+                LD   HL, ZL_StarCount
+                DEC  (HL)
+                JR   NZ, .star_loop
+                FT_End
+                RET
+
+ZL_ReduceHLMod640:
+                LD   DE, 640
+.mod_loop:      AND  A
+                SBC  HL, DE
+                JR   NC, .mod_loop
+                ADD  HL, DE
+                RET
+
+ZL_StarOffset:    DEFW 0
+ZL_StarCount:     DEFB 0
+ZL_StarPtr:       DEFW 0
+ZL_StarPointSize: DEFW 0
+
+ZL_StarsFar:
+                DB  11,  33,  91, 207, 174,  68,  42, 149, 223,  17,  68, 232
+                DB 137, 115,  29,  86, 198, 188,  77,  51, 241, 132,   5, 221
+                DB 156,  13, 101, 176, 213, 244,  54,  98, 189,  39,  25, 163
+                DB 232, 201, 118,  72,  64, 255, 145,  25,   7, 121, 204,  44
+ZL_StarsMid:
+                DB  36, 196, 128,  57,  13, 239, 218, 104,  84,  23, 167, 155
+                DB 249,  82,  59, 214, 191,   9, 104, 128,   3,  73, 228, 186
+                DB 150, 252,  72,  41,  20, 142, 206, 226, 112,  12,  45, 171
+                DB 238, 119, 132,  94,  94, 231, 176,  64,  61, 201, 220,  31
+ZL_StarsNear:
+                DB  71,  29, 201, 218,  19, 109, 143,  46, 233, 177,  52,  88
+                DB 116, 243, 252,  14,  39, 151, 183, 197,  97,  61,   8, 227
+                DB 164, 127,  26,  69, 221,  35,  86, 209, 242, 100,  58, 251
+                DB 134,  18, 194, 166,   4,  78, 155, 234,  66, 139, 212,  54
 
 ZL_DrawActiveChain:
                 LD   A, (VDC_SlotsLen)
@@ -729,6 +876,10 @@ DrawWinStateVisual:
                 RET
 
 ZL_AfterChains:
+                LD   A, (VDC_GameState)
+                CP   VDC_STATE_WIN
+                CALL Z, DrawWinStateVisual
+
                 ; --- Reset BITMAP_TRANSFORM к identity для cursor + следующих кадров ---
                 CALL ZL_EmitLoadId
                 CALL ZL_EmitSetMatrix
@@ -795,9 +946,6 @@ ZL_AfterChains:
                 LD   A, (VDC_GameState)
                 CP   VDC_STATE_PREVIEW
                 CALL Z, DrawPreviewSparklesAll
-                LD   A, (VDC_GameState)
-                CP   VDC_STATE_WIN
-                CALL Z, DrawWinStateVisual
 
                 ; --- LEVEL DONE fade-out overlay (поверх всего). При FadeAlpha=0
                 ; (обычный геймплей) DrawFadeOverlay сразу RET — безвредно. ---

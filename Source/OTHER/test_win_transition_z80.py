@@ -112,6 +112,11 @@ def main() -> int:
     # mid-frame dialog handler. Stub MainLoop with RET so the handoff still
     # returns to this harness after setting CurrentLevel/CurrentCodePage.
     sim.set_byte(sim.sym["Core.MainLoop"], 0xC9)  # RET
+    # VDC_WinOutroInit now re-uploads the WIN-explosion atlas into the (now empty)
+    # balls RAM_G region via UnpackAndUploadPage (real zx7 decomp + FT.WriteMem).
+    # That needs the resident winexp SPG pages, which this focused harness does not
+    # map, so stub the page uploader to RET — the win-state flow logic is unaffected.
+    sim.set_byte(sim.sym["UnpackAndUploadPage"], 0xC9)  # RET
 
     sim.set_byte(sim.sym["CurrentLevel"], 0)
     sim.set_byte(sim.sym["Core.VDC_GaugeFull"], 1)

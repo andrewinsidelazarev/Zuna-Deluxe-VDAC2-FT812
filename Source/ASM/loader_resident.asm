@@ -216,16 +216,35 @@ LoadLevelSelectPreviewAssets:
 
 GS_InitAndStartMenuMusic:
                 DI
+                LD   A, 1
+                LD   (BootGsLabelEnabled), A
                 SetPage3 LOADER_OVL_PAGE
                 CALL OVL_GS_InitAndStartMenuMusic
                 DI
+                XOR  A
+                LD   (BootGsLabelEnabled), A
                 SetPage3 UI_OVL_PAGE
                 EI
                 RET
 
 GS_LoadGameplaySoundsMaybe:
                 DI
+                LD   A, 1
+                LD   (BootGsLabelEnabled), A
                 SetPage3 LOADER_OVL_PAGE
+                LD   A, 1
+                CALL OVL_GS_LoadGameplaySoundsMaybe
+                DI
+                XOR  A
+                LD   (BootGsLabelEnabled), A
+                SetPage3 #04
+                EI
+                RET
+
+GS_LoadGameplaySoundsMaybeQuiet:
+                DI
+                SetPage3 LOADER_OVL_PAGE
+                XOR  A
                 CALL OVL_GS_LoadGameplaySoundsMaybe
                 DI
                 SetPage3 #04
@@ -234,9 +253,13 @@ GS_LoadGameplaySoundsMaybe:
 
 LoadMainPack:
                 DI
+                LD   A, 1
+                LD   (BootGsLabelEnabled), A
                 SetPage3 LOADER_OVL_PAGE
                 CALL OVL_LoadMainPack
                 DI
+                XOR  A
+                LD   (BootGsLabelEnabled), A
                 SetPage3 UI_OVL_PAGE
                 EI
                 RET
@@ -454,19 +477,23 @@ QuitStub_Len   EQU $ - QuitStub_Image
 LOADING_BAR_W EQU 255                         ; logical progress units, scaled to sprite width
 BOOT_TS_ANIM_START_DELAY EQU 8                ; DrawLoadingScreen ticks before frame 0 starts advancing
 BOOT_TS_ANIM_FRAME_DELAY EQU 5                ; extra DrawLoadingScreen ticks to hold each anim frame
+BOOT_GS_LABEL_X EQU 624                       ; 640 - 16 px, right-aligned
+BOOT_GS_LABEL_Y EQU 12
 BootProgressPx: DEFB 0
 BootAnimFrame:  DEFB 0
 BootAnimDelay:  DEFB 0
 BootBarFillW:   DEFW 0
 BootBusOwner:   DEFB 0                       ; 0 free, 1 GS/SD stream, 2 FT812 render
+BootGsLabelEnabled:  DEFB 0                   ; boot-only GS label, cleared by black handoff
 
 BootProgressReset:
                 XOR  A
                 LD   (BootProgressPx), A
                 LD   (BootAnimFrame), A
+                LD   (BootGsLabelEnabled), A
                 LD   A, BOOT_TS_ANIM_START_DELAY
                 LD   (BootAnimDelay), A
-                JP   DrawLoadingScreen
+                JP   BootLoadingTickSafe
 
 BootProgressSetA:
                 CP   LOADING_BAR_W
@@ -478,7 +505,7 @@ BootProgressSetA:
                 RET  NC
                 LD   A, C
                 LD   (BootProgressPx), A
-                JP   DrawLoadingScreen
+                JP   BootLoadingTickSafe
 
 BootProgressInc:
                 LD   A, (BootProgressPx)
@@ -486,7 +513,7 @@ BootProgressInc:
                 RET  NC
                 INC  A
                 LD   (BootProgressPx), A
-                JP   DrawLoadingScreen
+                JP   BootLoadingTickSafe
 
 BootProgressIncNoDraw:
                 LD   A, (BootProgressPx)
@@ -505,10 +532,21 @@ BootProgressAddA:
                 JR   C, .ok
 .max:           LD   A, LOADING_BAR_W
 .ok:            LD   (BootProgressPx), A
-                JP   DrawLoadingScreen
+                JP   BootLoadingTickSafe
+
+BootProgressAddNoDraw:
+                LD   C, A
+                LD   A, (BootProgressPx)
+                ADD  A, C
+                JR   C, .max
+                CP   LOADING_BAR_W
+                JR   C, .ok
+.max:           LD   A, LOADING_BAR_W
+.ok:            LD   (BootProgressPx), A
+                RET
 
 BootLoadingTick:
-                JP   DrawLoadingScreen
+                JP   BootLoadingTickSafe
 
 BootLoadingTickSafe:
                 PUSH AF
@@ -532,18 +570,27 @@ BootFtBegin:
 .wait:          LD   A, (BootBusOwner)
                 OR   A
                 JR   Z, .go
-                HALT
                 JR   .wait
 .go:            LD   A, 2
                 LD   (BootBusOwner), A
-                LD   BC, #0077                    ; shared SPI control: deselect SD/FT before FT macros take CS.
+                ; Shared SPI (#77/#57): release every device and clock the idle
+                ; bus before FT macros assert FT CS. This mirrors sd_csh.
                 LD   A, #03
+                LD   BC, #0077
+                OUT  (C), A
+                LD   A, #FF
+                LD   BC, #0057
                 OUT  (C), A
                 RET
 
 BootFtEnd:
-                LD   BC, #0077                    ; leave shared SPI bus deselected.
+                ; Leave the shared SPI bus deselected and clock idle once so the
+                ; next sd_csl starts from a clean boundary.
                 LD   A, #03
+                LD   BC, #0077
+                OUT  (C), A
+                LD   A, #FF
+                LD   BC, #0057
                 OUT  (C), A
                 XOR  A
                 LD   (BootBusOwner), A
@@ -556,7 +603,8 @@ BootProgressIncSafe:
                 PUSH HL
                 PUSH IX
                 PUSH IY
-                CALL BootProgressInc
+                CALL BootProgressIncNoDraw
+                CALL BootLoadingTickSafe
                 POP  IY
                 POP  IX
                 POP  HL
@@ -572,16 +620,13 @@ DrawLoadingScreen:
                 FT_ClearColorRGB32 0x000000
                 FT_ClearAll
                 FT_CMD_BUF #04FFFFFF            ; COLOR_RGB white
+
+                if BOOT_LOADING_BG_ENABLED
+                CALL DrawBootDxtBackground
+                endif
+
+                FT_CMD_BUF #04FFFFFF            ; COLOR_RGB white
                 FT_Begin FT_BITMAPS
-
-                FT_BitmapHandle BOOT_LOADING_BG_HANDLE
-                FT_BitmapSource BOOT_LOADING_BG_RAMG
-                FT_BitmapLayout FT_ARGB4, BOOT_LOADING_BG_W * 2, BOOT_LOADING_BG_H
-                FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, BOOT_LOADING_BG_W, BOOT_LOADING_BG_H
-                LD   BC, BOOT_LOADING_BG_X * 16
-                LD   DE, BOOT_LOADING_BG_Y * 16
-                CALL FT.Coprocessor.Vertex2f
-
                 FT_BitmapHandle BOOT_TS_ANIM_HANDLE
                 FT_BitmapSource BOOT_TS_ANIM_RAMG
                 FT_BitmapLayout FT_ARGB4, BOOT_TS_ANIM_W * 2, BOOT_TS_ANIM_H
@@ -624,6 +669,7 @@ DrawLoadingScreen:
                 FT_ScissorSize 640, 480
 .no_fill:      CALL BootAnimAdvance
                 FT_End
+                CALL BootDrawGsLabelHook
                 FT_Display
                 FT_CMD_Count
 .wsw:           FT_RD_REG8 FT_REG_DLSWAP
@@ -634,10 +680,66 @@ DrawLoadingScreen:
                 FT_WR_REG8 FT_REG_DLSWAP, FT_DLSWAP_FRAME
                 RET
 
+BootDrawGsLabelHook:
+                LD   A, (BootGsLabelEnabled)
+                OR   A
+                RET  Z
+                JP   OVL_DrawBootGsLabel
+
+DrawBootDxtBackground:
+                FT_SaveContext
+                FT_LoadIdentity
+                FT_SetMatrix
+
+                ; color handle: cell 0 = c0 plane, cell 1 = c1 plane.
+                FT_BitmapHandle BOOT_LOADING_BG_HANDLE
+                FT_BitmapSource BOOT_LOADING_BG_RAMG + BOOT_LOADING_BG_C0_OFFSET
+                FT_BitmapLayout FT_RGB565, BOOT_LOADING_BG_COLOR_STRIDE, BOOT_LOADING_BG_COLOR_H
+                FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, BOOT_LOADING_BG_W, BOOT_LOADING_BG_H
+
+                ; L4 mask stores per-pixel blend alpha at full 640x480 resolution.
+                FT_BitmapHandle BOOT_LOADING_BG_MASK_HANDLE
+                FT_BitmapSource BOOT_LOADING_BG_RAMG + BOOT_LOADING_BG_MASK_OFFSET
+                FT_BitmapLayout FT_L4, BOOT_LOADING_BG_MASK_STRIDE, BOOT_LOADING_BG_H
+                FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, BOOT_LOADING_BG_W, BOOT_LOADING_BG_H
+
+                FT_Begin FT_BITMAPS
+                ; Pass 1: L4 mask -> dst alpha only.
+                FT_ColorMask 0, 0, 0, 1
+                FT_BlendFunc FT_ONE, FT_ZERO
+                FT_ColorA 255
+                FT_Vertex2ii BOOT_LOADING_BG_X, BOOT_LOADING_BG_Y, BOOT_LOADING_BG_MASK_HANDLE, 0
+
+                ; Passes 2/3: draw RGB565 endpoint cells scaled from 160x120 to 640x480.
+                FT_ColorMask 1, 1, 1, 0
+                FT_LoadIdentity
+                FT_CMD_BUF FT_CMD_SCALE
+                FT_CMD_BUF #00040000
+                FT_CMD_BUF #00040000
+                FT_SetMatrix
+
+                FT_BlendFunc FT_DST_ALPHA, FT_ZERO
+                FT_Vertex2ii BOOT_LOADING_BG_X, BOOT_LOADING_BG_Y, BOOT_LOADING_BG_HANDLE, 1
+                FT_BlendFunc FT_ONE_MINUS_DST_ALPHA, FT_ONE
+                FT_Vertex2ii BOOT_LOADING_BG_X, BOOT_LOADING_BG_Y, BOOT_LOADING_BG_HANDLE, 0
+                FT_End
+                FT_RestoreContext
+                RET
+
 DrawBootBlackScreen:
+                XOR  A
+                LD   (BootGsLabelEnabled), A
                 FT_CMD_Start
                 FT_DL_Start
                 FT_VertexFormat 4
+                FT_ScissorXY 0, 0
+                FT_ScissorSize 640, 480
+                FT_ColorMask 1, 1, 1, 1
+                FT_BlendFunc FT_SRC_ALPHA, FT_ONE_MINUS_SRC_ALPHA
+                FT_ColorA 255
+                FT_CMD_BUF #04FFFFFF
+                FT_LoadIdentity
+                FT_SetMatrix
                 FT_ClearColorRGB32 0x000000
                 FT_ClearAll
                 FT_Display
@@ -649,6 +751,34 @@ DrawBootBlackScreen:
                 CALL FT.Coprocessor.WaitFlush
                 FT_WR_REG8 FT_REG_DLSWAP, FT_DLSWAP_FRAME
                 RET
+
+; ----------------------------------------------------------------------------
+; ClearRamGForMenu — явно стереть грязный хвост boot RAM_G перед главным меню.
+;   Вызывается в начале MenuMain (на КАЖДОМ входе в меню — после загрузки и при
+;   возврате из игры/level-select/more-games), ДО заливки ассетов меню.
+;   Зачем: реальный FT812 показал, что CMD_MEMZERO не является надёжным барьером
+;   для этого перехода. Поэтому для A/B-теста не используем копроцессор вообще:
+;   прямой SPI-записью затираем область boot progress/logo #0C8000..#0F8000.
+; ----------------------------------------------------------------------------
+CLEAR_RAMG_TAIL_ADDR   EQU #0C8000
+CLEAR_RAMG_TAIL_SIZE   EQU #030000
+CLEAR_RAMG_CHUNK_SIZE  EQU #000400
+CLEAR_RAMG_CHUNKS      EQU CLEAR_RAMG_TAIL_SIZE / CLEAR_RAMG_CHUNK_SIZE
+
+ClearRamGForMenu:
+                LD   A, (CLEAR_RAMG_TAIL_ADDR >> 16) & #FF
+                LD   DE, CLEAR_RAMG_TAIL_ADDR & #FFFF
+                LD   B, CLEAR_RAMG_CHUNKS
+.wipe_loop:    PUSH BC
+                LD   HL, ClearRamGZeroBuf
+                LD   BC, CLEAR_RAMG_CHUNK_SIZE
+                CALL FT.WriteMem                         ; advances A:DE by BC
+                POP  BC
+                DJNZ .wipe_loop
+                RET
+
+ClearRamGZeroBuf:
+                DEFS CLEAR_RAMG_CHUNK_SIZE
 
 BootProgressToBarPixels:
                 ; HL ~= progress * 1.5; final 255 clamps to full sprite width.

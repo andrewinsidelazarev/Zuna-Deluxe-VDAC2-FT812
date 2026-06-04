@@ -6024,3 +6024,309 @@ TODO опц.: всплывающий "+100" текст (msgs), pop-звук per 
 2026-06-01: Boot/main split implemented (first working stage). New small boot SPG via spgbld_boot.ini contains TSLib page #00, Core #05, loader overlay #40, UI overlay #41, and loading text pages #25..#27 only. Current full game pages are packed by Source/OTHER/make_main_pack.py into Build/ZUMAMAIN.PAK as 16K page images; generated Source/ASM/main_pak_table.inc tells the loader which page and sector to load. Startup now: Initialize -> UploadLoadingText -> progress screen -> GS_InitAndStartMenuMusic (music only, plays immediately if GS present) -> progress 20 -> GS_LoadGameplaySoundsMaybe (SFX only if GS_RamPages >= 128, i.e. >=2 MB at 16K/page) -> progress 40 -> LoadMainPack -> progress full -> MenuMain. OVL_GS_InitAndStartMenuMusic no longer loads SFX; SFX stage is explicit. OVL_LoadMainPack opens ZUMAMAIN.PAK through RawPak/FAT32 and loads 168 pages (2,752,512 bytes), updating progress after each page. inject/check host now include ZUMAMAIN.PAK. Note: this first stage uses page-image loading; existing ZX7/zlib compressed asset pages remain compressed in ZUMAMAIN.PAK and are decompressed later by existing game routines. Per-record bootloader decompression can be added as a later pack-format optimization. Build OK; gap/score/win tests OK; wc.img updated. SHA256 ZUMA_VD2.SPG=a174ecf14029f3d9653c497ee4a91e52d6c4f32176ed194856e7f53d44ee7a12; ZUMAMAIN.PAK=2fdcb475b308f88f804e7ff2eccaf4108548ce67bdc153e76cb55438979196ce; ZUMASND.PAK=8393db5bb8ec2fda98c970a3303c43bdef86a5ca5b4cf09ff09f8fc0c53409da.
 
 2026-06-01: Baseline saved as releases/v054-2026-06-01-boot-mainpak-loading-baseline with Source, Build, build scripts, spgbld_boot.ini/spgbld_vdac2.ini/spgbld.ini, Чат.txt and BASELINE_NOTES.md. Also saved release artifacts: .spg, .zumamain.pak, .zumasnd.pak. This baseline is the first confirmed boot/main split where the loader itself exists and ZUMAMAIN.PAK is delivered. SHA256 ZUMA_VD2.SPG=a174ecf14029f3d9653c497ee4a91e52d6c4f32176ed194856e7f53d44ee7a12; ZUMAMAIN.PAK=2fdcb475b308f88f804e7ff2eccaf4108548ce67bdc153e76cb55438979196ce; ZUMASND.PAK=8393db5bb8ec2fda98c970a3303c43bdef86a5ca5b4cf09ff09f8fc0c53409da.
+
+## [2026-06-02] VDAC2 → VDC: ZUMAMAIN.PAK сильно фрагментирован — fallback после overflow run-table
+**Контекст:** на реальной FAT-карте ZUMAMAIN.PAK может быть не просто non-contiguous, а иметь больше RAWPAK_RUN_MAX=128 экстентов. Обычная фрагментация уже обрабатывалась run-table; новый тест показал, что 12 экстентов грузятся byte-for-byte. Но worst-case 5376 одно-кластерных экстентов раньше давал ZiFi_MainPakOpen CF=0, а main.asm игнорировал результат LoadMainPack и доходил до меню с недогруженной page #04, что могло выглядеть как висяк при входе в gameplay.
+**Фикс:** Source/ASM/ts-dos.asm: RawPak_BuildRunTable при overflow теперь не падает, а возвращает CF=1 с RawPak_RunCount=0. RawPak_ReadOneLogicalIX при RunCount=0 использует последовательный FAT-chain cursor (RawPak_ChainLog/Clus/Sec): быстрый run-table путь остаётся для нормальных файлов, overflow-путь ходит по FAT и сохраняет IX вокруг pre-advance, чтобы не портить destination и overlay-память.
+**Проверки:** build.cmd OK; test_rawpak_main_fragmented.py normal: 12 extents, OVL_LoadMainPack byte-for-byte 168 pages OK; test_rawpak_main_fragmented.py --cluster-runs: 5376 extents, RunCount=0 fallback, 168 pages OK; test_rawpak_fragmented.py Build/test_wc_main.img OK для ZUMALVL.PAK; test_win_transition_z80.py OK; test_dual_chain_fastfill.py OK; test_match3_full_same_color_run_z80.py OK. Host wc.img обновлён inject_zuma_to_wc_img.py; check_host_wc_img.py hash_match=True для SPG/SYM/ZUMAMAIN/ZUMALVL/ZUMAAUD/ZUMASND.
+
+## [2026-06-02] VDAC2 real-hw debug: откат к опорной после DMA/fade/checksum экспериментов
+
+Симптом на реале: при входе в уровень сначала была свёрнутая развёртка FT812 и зависание. В эмуляторе исходно всё работало. После A/B с `ZL_FT_CMD_DMA_ENABLED EQU 0` зависание ушло: уровень, фон и трек стали целыми. Значит подтверждённый аппаратный фактор: gameplay path через `DMA_RAM_SPI` для отправки FT812 command-buffer отличается от обычного `FT_CMD_Write` и на реале может ломать FT/SPI/DL, тогда как меню/loading/level-select через обычный путь живут.
+
+Что было сделано в ходе диагностики и затем признано побочным:
+- checksum-диагностика `ZUMAMAIN.PAK` и `ZUMALVL.PAK` с fatal-кодами на boot/loading;
+- генерация `level_pak_checksums.inc` и расширение `main_pak_table.inc` checksum-полем;
+- fade/transition правки вокруг `DrawFadeOverlay` и `DrawBlackLoadingFrame`;
+- A/B выключение `DMA_RAM_SPI` в `MainLoop.asm`.
+
+Результат дальнейших тестов пользователя: после снятия зависания появились глюки в Win-state/menu/gameplay. Поэтому диагностические checksum/fade/transition изменения и A/B оставлять в рабочей ветке нельзя. Выполнен откат кодовых файлов к опорной: `Source/ASM/MainLoop.asm`, `Source/ASM/main.asm`, `Source/ASM/ts-dos.asm`, `Source/ASM/main_pak_table.inc`, `Source/OTHER/make_main_pack.py`, `Source/OTHER/make_level_pack.py`.
+
+Практический вывод на будущее: если снова идти в эту сторону, начинать от чистой опорной и делать один минимальный тест: только заменить gameplay отправку FT812 CMD с `DMA_RAM_SPI` на обычный `FT_CMD_Write` или чинить DMA path отдельно. Не смешивать это с checksum/fade/level-pack диагностикой.
+
+## [2026-06-02] VDAC2 → VDC: ★ КОРЕНЬ «мусор вместо чёрного фейда + порча спрайтов после WIN на железе» — WIN-атлас лежал ЗА границей RAM_G (#100000), т.к. «4 МБ» отнесли к RAM_G чипа, а это системная RAM ZX Evolution
+**Симптом (только реал, эмулятор ОК):** при входе в уровень вместо чёрного фейда — мусор; игра стартует; ПОСЛЕ Win-state портятся спрайты. Признак юзера: «что-то пишется не в ту страницу памяти».
+**КОРЕНЬ:** 2026-06-01 WIN-explosion атлас (оранжевый animExplosion, 17 кадров, 78336 Б) положили в RAM_G по адресу `WINEXP_RAMG_ADDR EQU #100000` с обоснованием в памяти «RAM_G = 4 МБ (BT81x)». Это БЫЛА ОШИБКА: 4 МБ — это системная RAM ZX Evolution, а НЕ графическая RAM_G чипа FT812. У FT81x `FT_RAM_G_SIZE = 0x100000` = РОВНО 1 МБ. Адрес #100000 = первый байт ЗА концом RAM_G → на железе запись/чтение уходит за границу/аливасится в низ RAM_G (затирает текст/фон/спрайты), на EVE-эмуляторе (RAM_G больше) НЕ воспроизводится. Это единственный адрес RAM_G ≥ 1 МБ во всём проекте (остальные ≤ DESTROY #0EC000..#0FAC80, в норме).
+**Почему нельзя просто перенести в свободную дыру:** geom-аудит RAM_G показал, что в gameplay непрерывных 80 КБ (#14000) свободных НЕТ — самая большая дыра ~21 КБ (#0FAC80..#100000). DIALOG_FRAME 400×327 PALETTED4444 = ~128 КБ занимает #0AC000..#0CBEF0 (думал что свободно — нет).
+**ФИКС (по подсказке юзера «к моменту взрывов шаров уже нет → можно дозалить по SPI»):** WIN-атлас ПЕРЕИСПОЛЬЗУЕТ регион атласа шаров `BALLS_RAMG_ADDR #050000` (192 КБ, в WIN свободен, т.к. SlotsLen==0). `WINEXP_RAMG_ADDR EQU BALLS_RAMG_ADDR`. Заливка УБРАНА из `LoadGameplayAssets` и перенесена в `VDC_WinOutroInit` (вход в WIN) — дозаливается по SPI через `UnpackAndUploadPage`. После WIN→след.уровень `LoadGameplayAssets` заново зальёт шары в #050000. Страницы атласа #28..#2C резидентны (есть в MainPakPageTable), декомпрессия/upload работают.
+**Безопасность пейджинга:** `UnpackAndUploadPage` (#3C24, slot0 резидент) использует slot3 как scratch и восстанавливает его в `CurrentCodePage`. На входе в WIN `CurrentCodePage=#04` (его ставит `EnterGameplayForCurrentLevel`), поэтому slot3 возвращается в gameplay-overlay #04 → возврат в `VDC_UpdateAllChains` (slot3) корректен. `VDC_WinOutroInit`/`VDC_CheckWinMaybe` сами резидентны (slot1 #60xx).
+**Проверки:** build 0 err/10 fwdref; WINEXP_RAMG_ADDR=0x050000. test_win_transition_z80 PASS (добавлен стаб UnpackAndUploadPage=RET), test_dual_chain_fastfill / test_match3_full_same_color_run / test_gap_bonus_score PASS, _probe_winsnap PASS (37 cmd на 14 частиц; в профиль добавлен CurrentCodePage=#04 — он зовёт LoadGameplayAssets напрямую мимо EnterGameplay). Доставлено inject_zuma_to_wc_img (in-place changed sectors), check_host_wc_img hash_match=True для всех файлов. ZUMA_VD2.SPG SHA-256 575dbca85e18034683e97d970f32f561504eec7cfb3940953316315ac86d6bfc; ZUMAMAIN.PAK SHA-256 287f08cb86db329c7bcac41a0ac374fce72d32439fd5266a98b7fd8cab631678. SD-пакет Build/SD/Games/ обновлён. ЖДЁТ HW-ретеста: вход в уровень (чёрный фейд без мусора) + победа (оранжевые взрывы, спрайты целы).
+**Урок (для обоих окон):** «4 МБ» = системная RAM ZX Evolution. Графическая RAM_G FT812/FT81x = 1 МБ (FT_RAM_G_SIZE=0x100000). НЕ класть ассеты ≥ #100000. Если RAM_G полон — переиспользовать регион ассета, который к нужному моменту не нужен (шары в WIN), дозаливая по SPI.
+
+## [2026-06-03] VDAC2 → VDC: ★ КОРЕНЬ «мусор при входе в игру (виден загрузочный экран) + мусор после WIN на железе» — RAM_G НЕ ОСВОБОЖДАЕТСЯ после загрузки; чистить в начале MenuMain
+**Симптом (только реал, эмулятор ОК):** при переходе в уровень вместо чёрного фейда — мусор, и В ЭТОМ МУСОРЕ ЧИТАЕТСЯ загрузочный экран; после WIN-state тоже мусор.
+**КОРЕНЬ (полный аудит RAM_G, Source/OTHER/audit_ramg_full.py по ground-truth из zuma.sym):** статически всё ВЛЕЗАЕТ в 1 МБ и живых перекрытий НЕТ (после фикса WINEXP→#050000). Баг не в переполнении, а в ОСТАТОЧНЫХ данных: загрузочный экран занимает RAM_G #000000..#0F8000 (≈992К), а главное меню заполняет только до #0AC480 → регион #0AC480..#0F8000 (≈300К, в т.ч. TS-лого #0D0000, бар, хвост фона) меню НЕ перезаписывает. level-select оставляет дыры #0D0000..#0D4000 и #0EA580..#0F8000. Эти пиксели загрузочного экрана живут в верхнем RAM_G сквозь меню/level-select и проступают «мусором» при переходе в игру (геймплей перетирает #000000..#0FC000, но во время фейда/SPI-заливки стейл виден). DrawBootBlackScreen гасит лишь ЭКРАННЫЙ буфер, не RAM_G.
+**Почему эмулятор молчал:** zuma_full_z80_emulator.py имел RAM_G=1МБ и (а) непрописанный RAM_G читал НУЛЁМ (а не стейлом), (б) запись по addr>=#100000 МОЛЧА отбрасывал (а не аливасил в низ как HW). Оба исправлены: теперь read/write RAM_G в [#100000,#300000) аливасятся `& 0xFFFFF` — переполнение ловится на хосте.
+**ФИКС:** новая ClearRamGForMenu (loader_resident.asm) — CMD_MEMZERO ВСЕГО RAM_G (1 МБ, on-chip, без SPI) вызывается в НАЧАЛЕ MenuMain (MenuMain.asm), ДО GS_InitAndStartMenuMusic/LoadMainMenuAssets. Срабатывает на КАЖДОМ входе в меню (после загрузки И при возврате из игры/level-select/more-games → попутно чистит остатки геймплея/WIN). НЕ в boot-последовательности (Core.Start просто JP MenuMain). Меню сразу следом перезаливает свои ассеты.
+**Проверки:** build.cmd 0 err; audit_ramg_full.py = «все профили влезают в 1МБ, живых перекрытий нет»; check_memory_map PASS. Прежний фикс WINEXP→BALLS #050000 (от 2026-06-02) остаётся. ЖДЁТ HW-ретеста: вход в уровень (чёрный фейд без загрузочного экрана) + WIN (без мусора). Открыто: путь WIN→след.уровень (LoadNextLevelWithLoading) идёт мимо MenuMain — если мусор после WIN останется, добавить чистку RAM_G и в EnterGameplayForCurrentLevel.
+
+## [2026-06-03] VDAC2 → VDC: RAM_G full audit после отказа от checksum/FAT-гипотезы
+**Контекст:** выполнен полный аудит RAM_G по ветке «утечки/переполнение RAM_G», а не по ложному пути checksum/FAT-загрузки файлов. Усилен `Source/OTHER/audit_ramg_full.py`: теперь он проверяет не только ручные live-профили сцен, но и runtime upload extents (включая 16K auto-advance `UnpackAndUploadPage`), coverage всех `RAMG/RAM_G` asset-символов из `Build/zuma.sym` и stale-комментарии про старую ошибку «4 МБ RAM_G». Документационная мина в `make_win_explosion_atlas.py` исправлена: WINEXP не «4 МБ RAM_G», а 5 страниц, дозаливаемых в `BALLS_RAMG_ADDR #050000` на входе в WIN.
+**Результат:** по свежему `Build/zuma.sym` все профили влезают в 1 МБ и живых перекрытий нет. Max extents: boot_loading #0F8000 (32K free), main_menu #0AC480 (~335K free), level_select #0EA580 (~86K free), gameplay/win_state #0FC000 (16K free). WINEXP живёт #050000..#064000 поверх BALLS только в WIN. Runtime uploads тоже не выходят за #100000: bg stream #010000..#030000, balls #050000..#080000, frog #030000..#050000, kz+destroy #0D4000..#0FC000, boot loading #000000..#0F8000. Проверено 96 RAM_G-символов — все покрыты хотя бы одним профилем; stale-комментариев про 4 МБ RAM_G в Source нет.
+**Переходы:** `LevelSelect→Gameplay` и `WIN→next level` сходятся в `EnterGameplayForCurrentLevel`: сначала `UploadLoadingText` + чёрный loading DL, затем `LoadGameplayAssets`; перед перезаписью `LOADING_TEXT_RAMG == FRAME_TOP_RAMG` код вызывает `DrawBlackLoadingFrame`, поэтому отдельный `ClearRamG` перед gameplay сейчас не требуется. Критичная очистка остаётся в начале `MenuMain`: `ClearRamGForMenu` чистит весь RAM_G через `CMD_MEMZERO`, потому что меню не перезаписывает хвост boot/loading RAM_G.
+**Проверки:** `build.cmd` OK (0 errors, 10 старых fwdref warnings); `audit_ramg_full.py` OK; `check_memory_map.py` PASS; `test_gameplay_level_load_ramg.py` OK bg/palette byte-for-byte; `test_win_transition_z80.py` PASS; `test_levelsel_transition.py` PASS; `py_compile audit_ramg_full.py make_win_explosion_atlas.py` OK.
+**Вывод:** текущих статических переполнений RAM_G и живых intra-profile перекрытий не найдено. Если на железе мусор останется, следующий проверяемый класс — не FAT/checksum и не статическая RAM_G-карта, а конкретный DL/transition момент: какой bitmap handle/source экран читает во время SPI-заливки и был ли перед этим `CMD_MEMZERO`/black DL swap.
+
+## [2026-06-03] VDAC2 → VDC: ★ КОРЕНЬ вероятного real-hw мусора после чистого RAM_G-аудита — DLSWAP/RAM_G race, не FAT и не статическое переполнение
+**Контекст:** после полного RAM_G-аудита статических переполнений/живых перекрытий не найдено, но на реале мусор при входе в gameplay и после WIN остаётся объяснимым: `FT_REG_DLSWAP=FT_DLSWAP_FRAME` только ЗАПРАШИВАЕТ swap на следующий frame boundary. `FT.Coprocessor.WaitFlush` гарантирует, что RAM_DL построен, но НЕ гарантирует, что новый DL уже стал активным на экране. Старый видимый DL может ещё один кадр читать bitmap sources из RAM_G, пока Z80 уже начинает `CMD_MEMZERO`/SPI upload/перезапись тех же RAM_G областей. Эмулятор эту scanout-гонку обычно не моделирует, поэтому в нём всё чисто.
+**Фикс:** добавлен `Core.WaitDLSwapDone` (poll `FT_REG_DLSWAP & 3 == 0`) и поставлены барьеры только перед RAM_G-mutating переходами, не в обычный frame loop: после `DrawBootBlackScreen` перед `MenuMain/ClearRamGForMenu`; в начале `EnterGameplayForCurrentLevel` перед `UploadLoadingText/LoadGameplayAssets`; после `DrawBlackLoadingFrame` перед перезаписью `LOADING_TEXT_RAMG == FRAME_TOP_RAMG`; после `DrawBlackTransitionFrame` перед возвратом в `MenuMain`. Helper вынесен в Core page #05, т.к. inline loops переполняли slot0 (`LOG_BLOCK_END`); финально slot0 `LOG_BLOCK_END=#3FFB`, запас 5 байт.
+**Проверки:** `build.cmd` OK (0 errors, 10 старых fwdref warnings); `audit_ramg_full.py` OK; `check_memory_map.py` PASS; `test_gameplay_level_load_ramg.py` OK; `test_win_transition_z80.py` PASS; `test_levelsel_transition.py` PASS. Host `wc.img` обновлён `inject_zuma_to_wc_img.py`; повторный `check_host_wc_img.py` hash_match=True для SPGBLD.INI/ZUMA_VD2.SPG/ZUMA.SYM/ZUMAMAIN.PAK/ZUMALVL.PAK/ZUMAAUD.PAK/ZUMASND.PAK. SHA256: ZUMA_VD2.SPG `4a8404f140f8afa206b9889879e7c70cc7926865a324196b385524989559d546`, ZUMAMAIN.PAK `6e4e68868b06b5d92a97344fe70006c97a77d23f60af9b7888808dda5be72895`.
+**Вывод:** если hw-ретест подтвердит, root-cause — не неверная загрузка файлов и не статическая карта RAM_G, а отсутствие ожидания фактического DLSWAP перед изменением RAM_G, которую ещё читает старый активный DL.
+
+## [2026-06-03] VDAC2 real-hw debug: DLSWAP/RAM_G race не подтвердился; текущий чистый A/B — выключен gameplay DMA_RAM_SPI
+**Контекст:** пользователь сообщил, что после DLSWAP-barrier сборки глюки на железе не исчезли. Значит гипотеза «старый DL читает RAM_G во время перезаписи до фактического swap» как основной root-cause не подтвердилась. Чтобы не смешивать эксперименты, DLSWAP-barrier изменения сняты. Следующий A/B строго минимальный и основан на уже известном аппаратном факторе: gameplay MainLoop единственный использовал `DMA_RAM_SPI` для отправки FT812 command buffer, тогда как menu/loading/level-select используют обычный `FT_CMD_Write`.
+**Фикс/A-B:** `Source/ASM/MainLoop.asm`: `ZL_FT_CMD_DMA_ENABLED EQU 1` → `0`. Теперь gameplay frame command buffer отправляется тем же обычным `FT_CMD_Write`, что и остальные сцены. Никаких checksum/FAT/fade-pack диагностик не добавлялось.
+**Проверки:** `build.cmd` OK; `Build/zuma.sym` подтверждает `Core.ZL_FT_CMD_DMA_ENABLED=0`; `audit_ramg_full.py` OK; `test_gameplay_level_load_ramg.py` OK; `test_win_transition_z80.py` PASS; `test_levelsel_transition.py` PASS. Host `wc.img` обновлён последовательно; `check_host_wc_img.py` hash_match=True для всех файлов. SHA256: ZUMA_VD2.SPG `0202ab4f95787134ae44d5716c6fc8a1574508ecc33185bd4dc68b6e1494ac90`, ZUMAMAIN.PAK `546c53847e2e30330ed2a48e3802cb274f6d9883d304183afb6e763e359d4cc4`.
+**Ожидаемый HW-ретест:** вход в gameplay и переход после WIN. Если глюки исчезнут — root-cause в `ZL_FT_CMD_Write_DMA`/`DMA_RAM_SPI` stream path. Если нет — DMA тоже исключён, дальше нужен новый симптом-ориентированный аудит по тому, КАК именно выглядит мусор (старый boot/loading/menu/WIN pixels или испорченные FT812 commands/bitmap handles).
+
+## [2026-06-03] VDAC2 real-hw debug: общий корень артефактов загрузки и Win/HUD оказался в неверном DL/экранном пути, не в RAM_G wipe
+
+Контекст сеанса:
+- Пользователь спросил: «Что затирается при выходе из игры по меню, что не затирается прямым проходом от старта?»
+- Предыдущие гипотезы уже были проверены и не подтвердились как основной корень: неверная загрузка файлов/checksum, статическое переполнение RAM_G, CMD_MEMZERO/direct wipe, DLSWAP/RAM_G race, hard FT812 reset перед loading-графикой.
+- Симптомы на реальном FT812: при первом проходе от старта появляется мусор/boot-loading артефакт перед входом в игру; при выходе в меню и повторном входе мусора уже нет. В Win State взрывы визуально «ломали аппаратные часы» HUD.
+
+Что проверено по коду:
+1. Разница первого прохода и повторного входа:
+   - В `FadeMenuToLevelSelect` найден first-only путь:
+     `LevelsMapLoaded == 0` → `UploadLoadingText` → `Core.DrawLoadingScreen` → `Core.LevelSelect`.
+   - После первого прохода `LevelsMapLoaded` уже установлен, поэтому при выходе из игры в меню и повторном входе эта ветка пропускается.
+   - Это объясняет, почему баг есть только на первом проходе: дело не в том, что «выход в меню что-то затирает», а в том, что повторный проход НЕ вызывает первый-only loading screen.
+
+2. Проверка назначения `Core.DrawLoadingScreen`:
+   - В `loader_resident.asm` комментарий и код показывают, что `DrawLoadingScreen` — boot-only renderer загрузочного экрана: boot DXT background, progress bar, TS/Zx Evolution logo.
+   - То есть first-only `FadeMenuToLevelSelect` после `UploadLoadingText` ошибочно вызывал boot-loading renderer, а не простой экран `LOADING LEVELS...`.
+   - Это прямо совпадает с наблюдением пользователя: мусор/следы boot-loader спрайтов видны только в первом проходе.
+
+3. Win State / HUD clock:
+   - Проверен `MainLoop.asm`.
+   - `DrawWinStateVisual` рисовал WIN explosion particles через `BITMAP_HANDLE 26`, `BITMAP_SOURCE WINEXP_RAMG_ADDR (#050000)`, `ARGB4`, `80x80`.
+   - До правки вызов `DrawWinStateVisual` стоял в самом конце `ZL_DrawFrame`, после `DrawHudTopText`, `DrawHudProgress`, `DrawHudMenu` и cursor.
+   - Следовательно, Win-взрывы рисовались поверх HUD/часов. Это не «аппаратный генератор часов» ломался, а обычный overdraw поверх области часов.
+
+Сделанные правки:
+1. `Source/ASM/main.asm`
+   - В `FadeMenuToLevelSelect` заменён вызов:
+     было: `CALL Core.DrawLoadingScreen`
+     стало: `CALL Core.DrawLoadingLevelsScreen`
+   - Добавлена новая процедура `DrawLoadingLevelsScreen`:
+     - строит чёрный display list;
+     - рисует `LOADING LEVELS...` из `LOADING_TEXT_RAMG #084000`;
+     - не использует boot DXT background, boot progress bar, TS/Zx Evolution logo;
+     - делает обычный `FT_CMD_Write`, `WaitFlush`, `DLSWAP_FRAME`.
+   - Смысл: first-only slow PAK-map loading больше не переиспользует boot-only экран и не возвращает boot-state/boot-handles в переход меню→level-select.
+
+2. `Source/ASM/MainLoop.asm`
+   - Перенесён вызов `DrawWinStateVisual`.
+   - Было: Win-взрывы рисовались в самом конце `ZL_AfterChains`, после HUD и курсора.
+   - Стало: Win-взрывы рисуются в начале `ZL_AfterChains`, до reset matrix, frame strips, HUD, progress/menu/cursor overlays.
+   - Смысл: взрывы остаются поверх playfield/цепочки, но frame/HUD/часы/курсор теперь рисуются поверх них и не разрушаются визуально.
+
+3. `Source/OTHER/zuma_full_z80_emulator.py`
+   - Исправлен локальный дефект harness:
+     в `in_port()` использовалась переменная `high`, но она не была вычислена.
+   - Добавлено:
+     `high = (port >> 8) & 0xFF`
+   - Это нужно было для запуска локального FT812/Z80 harness и не меняет игровой код.
+
+4. `Source/OTHER/audit_win_hud_dl.py`
+   - Добавлен новый диагностический скрипт.
+   - Что делает:
+     - использует существующий `FullStackTrace`/shadow FT812 harness;
+     - загружает gameplay assets;
+     - прогревает level L05 с двумя цепочками;
+     - создаёт живые Win particles;
+     - вызывает `Core.DrawWinStateVisual` и декодирует emitted DL;
+     - проверяет, что WINEXP заново выставляет `BITMAP_HANDLE 26`, `BITMAP_SOURCE #050000`, `BITMAP_LAYOUT ARGB4 stride=96 height=48`, `BITMAP_SIZE 80x80` и vertices;
+     - статически проверяет порядок в `ZL_AfterChains`: `DrawWinStateVisual` должен быть раньше `DrawHudTopText` и cursor.
+   - Первый вариант аудитора пытался декодировать весь `ZL_DrawFrame`, но полный frame buffer содержит смесь DL-команд и coprocessor commands (`CMD_LOADIDENTITY`, `CMD_SETMATRIX`, etc.), поэтому простой `disasm_dl` давал мусорные `UNKNOWN/DISPLAY`. Скрипт был упрощён до надёжных проверок: изолированный Win renderer + статический порядок кадра.
+
+Проверки, выполненные после правок:
+1. `build.cmd`
+   - Успешно.
+   - SjASMPlus: 0 errors, 10 старых fwdref warnings.
+   - `ZUMAMAIN.PAK` пересобран: 168 pages, 2752512 bytes.
+
+2. `python Source\OTHER\test_win_transition_z80.py`
+   - PASS: win-state enters, awards bonus, advances, wraps, and resets level state.
+
+3. `python Source\OTHER\test_levelsel_transition.py`
+   - PASS/OK: shadow coprocessor caught up, inflate sequence completed.
+   - Примечание: этот harness всё ещё грубый для полноценного DL-анализа level-select, но как регрессия перехода проходит.
+
+4. `python Source\OTHER\audit_ramg_full.py`
+   - OK: все профили влезают в 1 МБ, живых перекрытий нет.
+   - WINEXP остаётся в `#050000..#064000` поверх BALLS только в Win State.
+
+5. `python Source\OTHER\audit_win_hud_dl.py`
+   - PASS.
+   - Подтверждено:
+     - `DrawWinStateVisual` эмитит `BITMAP_HANDLE 26`, `BITMAP_SOURCE #050000`, `ARGB4 stride=96 height=48`, `BITMAP_SIZE 80x80`, 14 vertices для 14 живых частиц.
+     - В `ZL_AfterChains` порядок теперь: `DrawWinStateVisual` раньше `DrawHudTopText` и cursor.
+     - Сообщение аудитора: `OK: WIN explosions are emitted before frame/HUD/cursor overlays`.
+
+Результаты сборки:
+- `zuma_vdac2.spg` SHA-256:
+  `DAAE7B500B4EC5B431C2BF41F86A22D4F994505147E2FCEB05055CD5C1D3D7EC`
+- `Build/ZUMAMAIN.PAK` SHA-256:
+  `459A519230FAC4964C866E465A6F1CBA538D16EA782D9439D368370B758356FB`
+
+Что НЕ делалось:
+- Host `wc.img` не обновлялся.
+- Инжект в образ не выполнялся.
+- Unrelated dirty files/worktree не откатывались.
+
+Текущий вывод:
+- Первый артефакт загрузки объясняется first-only веткой `LevelsMapLoaded == 0`, которая ошибочно вызывала boot-only `Core.DrawLoadingScreen`. Повторный вход чистый не потому, что меню что-то дополнительно затирает, а потому что эта ветка больше не вызывается.
+- Win/HUD проблема объясняется порядком отрисовки: WIN explosion particles рисовались после HUD и перекрывали часы. Исправлено переносом Win-взрывов под frame/HUD/cursor overlays.
+- Это один класс ошибок: не статическая RAM_G-карта и не wipe, а неправильный display-list/renderer path и порядок screen layers на переходах.
+
+## [2026-06-03] VDAC2 → VDC: ★ КОРЕНЬ «мусор/композиция boot-экрана перед игрой» + «GS-музыка/SFX не грузятся на реале» = чередование FT812↔SD на ОБЩЕЙ SPI-шине во время GS-загрузки; + фикс часов (handle 26 vs ROM-шрифт)
+
+**Симптомы (только реал, эмулятор чист):**
+1. Перед входом в уровень (1-й проход от старта) — полноэкранный цветной шум, в котором ЧИТАЕТСЯ КОМПОЗИЦИЯ загрузочного экрана (псевдо-DXT фон + прогресс-бар + ZX-лого). Не зависит от формата boot-фона (ARGB4/DXT — меняется лишь характер шума). При возврате игра→меню→игра — чисто.
+2. WIN-взрывы портят «аппаратные часы» в левом нижнем углу (часы рисуются ВСТРОЕННЫМ ROM-шрифтом FT812, font 26).
+3. На реале GS-музыка и SFX в буте НЕ грузятся; звук появлялся только после начала игры.
+
+**КОРЕНЬ №1 (часы) — ПОДТВЕРЖДЁН, ИСПРАВЛЕН:** `DrawDebugClock` (MainLoop.asm) рисует часы через `CMD_NUMBER/CMD_TEXT font 26` = встроенный ROM-шрифт FT81x. На FT81x ROM-шрифт 16..31 «прописан» в свойствах bitmap-handle с тем же номером; `CMD_NUMBER` НЕ переустанавливает BITMAP_SOURCE, полагается на дефолт. WIN-взрыв (`ZL_WINEXP_HANDLE EQU 26`) рисовал свой атлас через ТОТ ЖЕ handle 26 → `BITMAP_SOURCE(26)=#050000` → часы читали «глифы» из атласа взрыва = мусор. ROM не портится — угоняется регистр source у handle. Эмулятор реюз per-handle source между примитивами не моделирует. **ФИКС:** `ZL_WINEXP_HANDLE` 26 → 9 (handle шаров, в WIN свободен; ≤15 = вне ROM-шрифтового диапазона 16..31).
+
+**КОРЕНЬ №2 (boot-композиция + GS не грузится) — ПОДТВЕРЖДЁН частично (мусор ушёл), GS-загрузка в буте ОТКРЫТО:** Прямое продолжение истории общей SPI-шины FT812+SD (#57/#77, Чат.txt 5247-5308). Загрузка GS-звука читает PAK с SD по SPI, а в тех же циклах (`GS_CacheAudioPakToRam`, `GS_SfxYieldBetweenSectors`, `GS_LoadSfxPackNoReset`, а также `OVL_LoadMainPack`) между секторными чтениями вызывался `BootLoadingTickSafe`/`BootProgressAddA` → `DrawLoadingScreen` = операции FT812 ПО ТОЙ ЖЕ шине. Чередование SD↔FT срывает шину → PAK не дочитывается (звук не грузится) + FT812 рисует мусор (boot-композиция поверх занятого игрой RAM_G). `BootFtBegin/End` (#0077=#03 deselect + BootBusOwner) не спасает — это то же чередование, что крушило старый `StreamSection`. Эмулятор SPI-арбитраж не моделирует.
+
+**Значения общего регистра SPI-CTRL #77 (SD_CONF):** FT_ON=`0x07`, FT_OFF=`0x03`, sd_csl(SD выбран)=`0x01`(SD_CS1), sd_csh(deselect)=`0x03`. bit2=CS FT812, bit0=CS SD, порт данных общий #57 (SPI_DATA). GS — ОТДЕЛЬНАЯ шина (#BB cmd / #B3 data), на SPI не висит.
+
+**Сделано в сессии:**
+- `MainLoop.asm`: ZL_WINEXP_HANDLE 26→9 (часы).
+- `ts-dos.asm`: убраны FT812-вызовы из SD-циклов `GS_SfxYieldBetweenSectors`, `GS_CacheAudioPakToRam`, `GS_LoadSfxPackNoReset`, `OVL_LoadMainPack` (только счётчик `BootProgressIncNoDraw`, без рисования).
+- `ts-dos.asm` `ZiFi_Init`: добавлен ЯВНЫЙ сброс FT812 с шины `#77=0x03` перед `sd_init` (чтобы FT не «висел» владельцем шины перед SD-сессией).
+- `main.asm` Core.Start: ПОРЯДОК ПАКОВ ФИКСИРОВАН по требованию юзера — музыка(GS) → SFX(если ОЗУ GS≥2МБ) → тело игры (LoadMainPack). Перестановка LoadMainPack вперёд давала ЧЁРНЫЙ ЭКРАН — откатили.
+
+**Проверки:** build.cmd 0 errors / 10 прежних fwdref. `Core.ZL_WINEXP_HANDLE=0x9`.
+
+**Результат на железе (юзер):** мусор/boot-композиция между уровнями УШЛИ ✓ (корень SD↔FT чередования подтверждён). ОТКРЫТО: GS-музыка/SFX в буте всё ещё не грузятся (юзер: «загрузчик SPG вообще ничего не кладёт в GS»; SD-чтение при этом ИСПРАВНО — уровни грузятся, CRC сходится). Текущий билд (deselect FT в ZiFi_Init + убраны все FT↔SD чередования) ЖДЁТ HW-ретеста. Если GS не заработает — корень не SPI-чередование, а вероятно `GS_Detect` (#BB) cold-start в буте (GS не отвечает слишком рано); следующий шаг — минимальная on-screen диагностика стадий (GS_Present / GS_MenuMusicLoaded), как делали в MenuDrawGsDiag (см. 5707).
+
+**Урок:** любой FT812-доступ (рендер прогресс-бара/DrawLoadingScreen) ВНУТРИ SD-цикла чтения PAK срывает общую SPI-шину FT812+SD на реале (эмулятор чист). Прогресс рисовать ТОЛЬКО на границах фаз, когда SD отдал шину. Встроенные ROM-шрифты FT81x (CMD_TEXT/NUMBER font 16..31) занимают bitmap-handle с тем же номером — НЕ переиспользовать handle 16..31 под свои bitmap'ы, если рисуешь ROM-шрифтом.
+## [2026-06-04 00:18] СЕССИЯ ЗАВЕРШЕНА: откат разрушавшей boot GS-диагностики, сохранена рабочая точка
+
+Контекст:
+- Пользователь сообщил: после попыток вывести `GS NONE / GS 1 MB / GS 2 MB ORE MORE` стартовый экран главного меню разрушен.
+- Дальнейшие гипотезы остановлены. Решение принято не гадать, а откатить визуальный boot/menu path к сохраненной опоре `v057-2026-06-03-no-gameplay-sfx-boot-artifacts-baseline`.
+
+Что оказалось разрушителем:
+- Не сам GS-опрос как идея, а добавленная boot GS diagnostic graphics path:
+  - новый atlas `boot_gs_diag_*`;
+  - новые SPG pages `#C3/#C4`;
+  - `BOOT_GS_DIAG_*` symbols;
+  - `BootGsDiagState`;
+  - `DrawBootGsDiagText`;
+  - измененный boot asset generator;
+  - увеличенная очистка boot tail под новый объект.
+- Эти изменения добавляли новый FT812/boot visual state и отличали SPG от опорной версии даже там, где текст уже не рисовался.
+
+Сделано:
+- `main.asm`, `loader_resident.asm`, `MenuMain.asm`, `make_boot_loading_assets.py`, `audit_ramg_full.py`, `spgbld_boot.ini`, `boot_loading_assets.inc` возвращены к visual boot/menu path опоры `v057`.
+- В runtime/SPG больше нет `BOOT_GS_DIAG`, `BootGsDiag`, `DrawBootGsDiagText`, `boot_gs_diag`, pages `#C3/#C4`.
+- `MenuMain.asm` снова байт-в-байт совпадает с опорой по boot/menu entry.
+- Сохранен только полезный GS-опрос для логики загрузки SFX:
+  - WC-compatible команда `#23`;
+  - один байт ответа в `GS_RamPages`;
+  - SFX gate по `GS_RamPages >= #40`;
+  - `#20`/трехбайтовый `GS_RamKb` путь из рабочего алгоритма убран.
+
+Проверки:
+- `build.cmd`: OK, 0 errors, 10 старых fwdref warnings.
+- `audit_ramg_full.py`: OK, все профили влезают в 1 МБ, живых перекрытий нет.
+- `check_host_wc_img.py`: OK, все файлы `hash_match=True`.
+- Host `wc.img` обновлен in-place.
+
+Итоговая сборка:
+- `Build\zuma_vdac2.spg`
+- SHA256: `558E4CB61C329C2E633F92CD0F9497D702444444881D2AB349F43553B4E0E274`
+- `Build\ZUMAMAIN.PAK`
+- SHA256: `95A1D8B9FCA6470608E6C1AF97BEA576DBA940784452AEA1CD797341B6BC335D`
+
+Сохраненная точка сессии:
+- `releases\v058-2026-06-04-boot-menu-v057-visual-gs23-session`
+
+Правило на следующую сессию:
+- Не добавлять FT812-текст/bitmap/diagnostic в boot/main-menu path без отдельного A/B и без сравнения SPG с опорой.
+- Для диагностики GS сначала использовать невизуальные признаки/дампы/символы или уже существующий безопасный overlay, а не новый boot asset/DL path.
+- Опорная логика определения памяти GS должна смотреть на WC `gsplayer`: `GS_GETRAMINFO EQU #23`, один байт ответа, не команда `#20`.
+## [2026-06-04] VDAC2 -> Space: procedural starfield доведён и проверен
+
+Контекст:
+- Продолжили после аварийно завершённой сессии. Последний видимый этап по Space был именно процедурное звёздное небо в `Source/ASM/MainLoop.asm`.
+- Space остаётся последним runtime board: `LEVEL_RUNTIME_COUNT=22`, `ZL_SPACE_LEVEL_INDEX = LEVEL_RUNTIME_COUNT - 1`, runtime index 21 / level 22.
+
+Сделано:
+- В `MainLoop.asm` сохранён Space-only starfield:
+  - 3 слоя звёзд `ZL_StarsFar`, `ZL_StarsMid`, `ZL_StarsNear`;
+  - 24 звезды на слой;
+  - движение от `ZL_FrameCounter`: дальний слой медленнее, средний обычный, ближний быстрее;
+  - рисование через `FT_POINTS`, без RAM_G assets и без persistent state.
+- Порядок рендера: фон уровня -> `ZL_DrawSpaceStarsMaybe` -> gameplay bitmap layers. То есть звёзды поверх Space-фона, но под треком/шарами/прочими bitmap-слоями.
+- Исправлен FT812 state-risk: в `ZL_DrawSpaceStarLayer` добавлен явный `FT_End` после `FT_Begin FT_POINTS`, чтобы следующий общий `FT_Begin FT_BITMAPS` начинался из чистого состояния.
+- Добавлен статический регрессионный тест `Source/OTHER/test_space_starfield_static.py`, который проверяет:
+  - Space привязан к последнему runtime level;
+  - starfield вставлен между фоном и gameplay bitmap layers;
+  - есть 3 слоя;
+  - `FT_POINTS` закрывается через `FT_End`;
+  - таблицы звёзд содержат по 24 пары x/y.
+
+Проверки:
+- `build.cmd`: OK, 0 errors, 10 старых fwdref warnings.
+- `python Source\OTHER\test_space_starfield_static.py`: PASS.
+- `python Source\OTHER\audit_ramg_full.py`: OK, все профили влезают в 1 МБ, живых перекрытий нет.
+- `python Source\OTHER\check_memory_map.py`: PASS.
+- `python Source\OTHER\test_win_transition_z80.py`: PASS.
+- `python Source\OTHER\test_levelsel_transition.py`: OK/PASS.
+- `python Source\OTHER\test_gameplay_level_load_ramg.py`: OK.
+- `python Source\OTHER\test_gap_bonus_score_z80.py`: PASS.
+- `python Source\OTHER\test_dual_chain_fastfill.py`: PASS.
+- `python Source\OTHER\test_dual_chain_tail_render.py`: PASS.
+- `python Source\OTHER\test_level_pack_second_tracks.py`: PASS.
+- `python Source\OTHER\audit_win_hud_dl.py`: PASS после обновления теста под текущий WINEXP handle 9.
+- `python Source\OTHER\test_match3_full_same_color_run_z80.py`: PASS.
+- `python Source\OTHER\test_cascade_requires_gap_bridge_z80.py`: PASS.
+- `python Source\OTHER\test_pending_shot2_survives_new_match_z80.py`: PASS.
+- `python Source\OTHER\test_shot2_cleanup_z80.py`: PASS.
+- `python Source\OTHER\test_explosion_color_mapping.py`: PASS.
+
+Дополнительно:
+- `audit_win_hud_dl.py` был устаревшим и ожидал WINEXP handle 26. Это уже неверно после фикса конфликта с ROM font 26; тест обновлён на чтение `Core.ZL_WINEXP_HANDLE` из `Build/zuma.sym`. Сейчас он подтверждает handle 9, `BITMAP_SOURCE #050000`, ARGB4 layout 96x48, размер 80x80 и порядок до HUD/cursor.
+- `test_rawpak_main_fragmented.py` на старом default `Build\test_wc.img` не нашёл `ZUMAMAIN.PAK`; на `Build\test_wc_main.img` открыл fragmented MAIN PAK, но показал mismatch первых двух sampled sectors. Это похоже на отдельную проблему устаревшего/специального тестового image fixture, не на Space renderer. В Space/визуале глюков не замечено.
+
+Текущий вывод:
+- Звёздное небо Space доведено до аккуратного ASM-состояния и не ломает проверенные регрессии рендера, win-flow, level-select, RAM_G, dual-chain и match/cascade.
+- По визуальной проверке: глюков вроде нет.
+
+## [2026-06-04] Baseline v061: Space starfield baseline saved with sources
+
+Сохранена опорная версия:
+- `releases\v061-2026-06-04-space-starfield-baseline`
+
+Состав:
+- `Source\`
+- `Build\`
+- `build.cmd`
+- `spgbld.ini`
+- `spgbld_boot.ini`
+- `spgbld_vdac2.ini`
+- `Чат.txt`
+- `README.TXT`
+
+Отдельные release-артефакты:
+- `releases\v061-2026-06-04-space-starfield-baseline.spg`
+- `releases\v061-2026-06-04-space-starfield-baseline.zumamain.pak`
+- `releases\v061-2026-06-04-space-starfield-baseline.zumalvl.pak`
+- `releases\v061-2026-06-04-space-starfield-baseline.zumaaud.pak`
+- `releases\v061-2026-06-04-space-starfield-baseline.zumasnd.pak`
+
+SHA256:
+- `Build\zuma_vdac2.spg`: `C9DCE2E296290A7CC4720FAF04A28C4BA04EBA864C52B03E6AD95983DE8C8521`
+- `Build\ZUMAMAIN.PAK`: `01B6349E36B555CA7120F6B46EB8B9A35EECC08835898D7758479FE021EE8A30`
+- `Build\ZUMALVL.PAK`: `1E1728170B64A36D60F5666930735A5E2200779262AFA0F75E46EAA6F6F2981C`
+- `Build\ZUMAAUD.PAK`: `72EF97514A816962D725193DC27C3232373505C859362784C469A8CF057FB017`
+- `Build\ZUMASND.PAK`: `8393DB5BB8EC2FDA98C970A3303C43BDEF86A5CA5B4CF09FF09F8FC0C53409DA`
+
+Примечание:
+- Это текущая рабочая точка после доводки Space procedural starfield. Визуально глюков не замечено; проверочные тесты по Space/рендеру/RAM_G/level-select/win-flow/dual-chain/match прошли.

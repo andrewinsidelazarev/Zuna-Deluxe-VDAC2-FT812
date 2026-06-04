@@ -80,6 +80,16 @@ RAWPAK_WC_PATH_ONLY EQU 0              ; основной путь WC #F7, пр�
 ;   after a successful init.
 ZiFi_Init:
                 DI
+                ; FT812 и SD на ОДНОЙ SPI-шине Z-Controller (рег #77). Перед началом
+                ; SD-сессии ЯВНО снимаем CS FT812 (#77 = SPI_FT_CS_OFF = #03), иначе,
+                ; если перед этим по шине работал FT812 (boot loading screen), он
+                ; остаётся владельцем шины и первое SD-обращение срывается.
+                LD   BC, #0077
+                LD   A, #03
+                OUT  (C), A
+                LD   BC, #0057
+                LD   A, #FF
+                OUT  (C), A
                 LD   A,  TSLibPage
                 SetPage0_A
                 CALL sd_init
@@ -90,6 +100,12 @@ ZiFi_Init:
 
 ; ZiFi_Done — restore TSLib in slot 0, EI.
 ZiFi_Done:
+                LD   BC, #0077
+                LD   A, #03
+                OUT  (C), A
+                LD   BC, #0057
+                LD   A, #FF
+                OUT  (C), A
                 LD   A,  TSLibPage
                 SetPage0_A
                 EI
@@ -1779,8 +1795,9 @@ OVL_GS_InitAndStartMenuMusic:
                 JR   Z, .needLoad
                 JP   GS_PlayMenuMusic
 .needLoad:      CALL GS_Detect
-                RET  NC
-                LD   A, 1
+                JR   C, .gsDetected
+                RET
+.gsDetected:    LD   A, 1
                 LD   (GS_Present), A
                 LD   (GS_MenuMusicHandle), A
                 XOR  A
@@ -1801,7 +1818,7 @@ OVL_GS_InitAndStartMenuMusic:
                 LD   A, #D1                         ; Open Stream
                 CALL GS_SendCommandOverlay
                 RET  NC
-                CALL GS_StreamAudioCacheToDevice
+                CALL GS_StreamAudioCacheToDevice    ; стрим RAM->GS + тик прогресс-бара
                 JR   NC, .closeFail
                 LD   A, #D2                         ; Close Stream
                 CALL GS_SendCommandOverlay
@@ -1809,6 +1826,7 @@ OVL_GS_InitAndStartMenuMusic:
                 CALL GS_ReadHandleMaybe
                 LD   A, 1
                 LD   (GS_MenuMusicLoaded), A
+                CALL GS_PostLoadSettle              ; пауза перед командой включения музыки
                 JP   GS_PlayMenuMusic
 .closeFail:     LD   A, #D2
                 CALL GS_SendCommandOverlay
@@ -1831,8 +1849,8 @@ GS_QueryRamPages:
                 LD   A, #23
                 CALL GS_SendCommandOverlay
                 RET  NC
-                LD   BC, GS_PORT_DATA
-                IN   A, (C)
+                CALL GS_ReadDataWaitOverlay
+                RET  NC
                 LD   (GS_RamPages), A
                 RET
 
@@ -1851,23 +1869,79 @@ GS_ReadHandleMaybe:
                 LD   (GS_MenuMusicHandle), A
                 RET
 
+; Boot GS label is drawn by the resident loading-screen renderer while this
+; overlay is mapped in slot 3. It uses FT812 ROM font 26 (same as the in-game
+; clock), so no RAM_G bytes are allocated or overwritten.
+OVL_DrawBootGsLabel:
+                FT_SaveContext
+                FT_ScissorXY 0, 0
+                FT_ScissorSize 640, 480
+                FT_ColorMask 1, 1, 1, 1
+                FT_BlendFunc FT_SRC_ALPHA, FT_ONE_MINUS_SRC_ALPHA
+                FT_ColorA 255
+                FT_LoadIdentity
+                FT_SetMatrix
+                LD   C, 255
+                LD   D, 255
+                LD   E, 255
+                CALL FT.Coprocessor.ColorRGB
+                LD   A, (GS_Present)
+                OR   A
+                JP   Z, .noGs
+                LD   A, (GS_RamPages)
+                CP   48
+                JP   NC, .gs2
+.gs1:           FT_Text BOOT_GS_LABEL_X, BOOT_GS_LABEL_Y, 26, FT_OPT_RIGHTX
+                FT_CMD_BUF #31205347           ; "GS 1"
+                FT_CMD_BUF #00424D20           ; " MB",0
+                JP   .done
+.gs2:           FT_Text BOOT_GS_LABEL_X, BOOT_GS_LABEL_Y, 26, FT_OPT_RIGHTX
+                FT_CMD_BUF #32205347           ; "GS 2"
+                FT_CMD_BUF #00424D20           ; " MB",0
+                JP   .done
+.noGs:          FT_Text BOOT_GS_LABEL_X, BOOT_GS_LABEL_Y, 26, FT_OPT_RIGHTX
+                FT_CMD_BUF #47204F4E           ; "NO G"
+                FT_CMD_BUF #00000053           ; "S",0
+.done:          FT_RestoreContext
+                RET
+
 OVL_GS_LoadGameplaySoundsMaybe:
+                LD   (GS_SfxProgressDraw), A
                 LD   A, (GS_Present)
                 OR   A
                 RET  Z
                 LD   A, (GS_SfxLoaded)
+                CP   1
+                RET  Z
+                LD   A, (GS_SfxProgressDraw)
                 OR   A
-                RET  NZ
-                JP   GS_LoadSfxPackNoReset
+                JR   Z, .load
+                LD   A, (GS_RamPages)
+                CP   #40
+                JR   NC, .load
+                LD   HL, GS_SfxBootMenuTable
+                LD   B, GS_SFX_BOOT_MENU_COUNT
+                LD   A, 2
+                LD   (GS_SfxLoadedTarget), A
+                JP   GS_LoadSfxPackWithTable
+.load:          JP   GS_LoadSfxPackNoReset
 
 GS_LoadSfxPackNoReset:
+                LD   HL, GS_SfxPreloadTable
+                LD   B, GS_SFX_PRELOAD_COUNT
+                LD   A, 1
+                LD   (GS_SfxLoadedTarget), A
+GS_LoadSfxPackWithTable:
+                LD   (GS_SfxTablePtr), HL
+                LD   A, B
+                LD   (GS_SfxTableCount), A
                 LD   A, (GS_Present)
                 OR   A
                 RET  Z
                 CALL ZiFi_Init
                 RET  NC
                 CALL ZiFi_SoundPakOpen
-                JR   NC, .doneFail
+                JP   NC, .doneFail
                 LD   HL, GS_SfxHandles
                 LD   B, GS_SOUND_COUNT
                 LD   A, #FF
@@ -1881,8 +1955,9 @@ GS_LoadSfxPackNoReset:
                 LD   (RawPak_LogCur), HL
                 CALL RawPak_ReadOneLogicalIX          ; sector 0 validates/readies the pack
                 JR   C, .doneFail
-                LD   HL, GS_SfxPreloadTable
-                LD   B, GS_SFX_PRELOAD_COUNT
+                LD   HL, (GS_SfxTablePtr)
+                LD   A, (GS_SfxTableCount)
+                LD   B, A
                 XOR  A
                 LD   (GS_SfxLoadedCount), A
                 LD   (GS_SfxChunkCount), A
@@ -1910,8 +1985,16 @@ GS_LoadSfxPackNoReset:
                 ADD  HL, DE
                 PUSH HL
                 PUSH BC
+                LD   A, (GS_SfxProgressDraw)
+                OR   A
+                JR   Z, .progressNoDraw
                 LD   A, 1
                 CALL BootProgressAddA
+                JR   .progressDone
+.progressNoDraw:
+                LD   A, 1
+                CALL BootProgressAddNoDraw
+.progressDone:
                 POP  BC
                 POP  HL
                 DJNZ .loop
@@ -1919,13 +2002,18 @@ GS_LoadSfxPackNoReset:
                 OR   A
                 JR   Z, .doneFail
                 CALL ZiFi_Done
-                LD   A, 1
+                LD   A, (GS_SfxLoadedTarget)
                 LD   (GS_SfxLoaded), A
                 RET
 .doneFail:      CALL ZiFi_Done
                 XOR  A
                 LD   (GS_SfxLoaded), A
                 RET
+
+GS_SFX_BOOT_MENU_COUNT EQU 2
+GS_SfxBootMenuTable:
+                DB SND_BUTTON1, 245, 0, 11, 0, 0
+                DB SND_BUTTON2, 0, 1, 6, 0, 0
 
 GS_LoadOneSfxFromPak:
                 LD   A, #38                         ; Load FX, unsigned PC sample
@@ -2038,6 +2126,9 @@ GS_SfxYieldBetweenSectors:
                 LD   A, (GS_SfxChunkCount)
                 AND  #07
                 RET  NZ
+                LD   A, (GS_SfxProgressDraw)
+                OR   A
+                RET  Z
                 JP   BootLoadingTickSafe
 
 GS_AUDIO_CACHE_PAGE_BASE EQU #A8
@@ -2084,7 +2175,29 @@ GS_CacheAudioPakToRam:
 .err:           OR   A
                 RET
 
+; ============================================================================
+; GS_PostLoadSettle — пауза перед командой включения музыки (MODPLAY). После
+; стрима модуля в GS железу нужно время «доварить» модуль; без паузы MODPLAY
+; уходил слишком рано и игнорировался (симптом «нет музыки в буте»). Чистая
+; CPU-задержка, FT/SPI/GS-шину не трогает. ~2.4 c при B=20 (тюнить при желании).
+GS_POSTLOAD_SETTLE_OUTER EQU 20
+GS_PostLoadSettle:
+                LD   B, GS_POSTLOAD_SETTLE_OUTER
+.o:             PUSH BC
+                LD   BC, 0
+.i:             DEC  BC
+                LD   A, B
+                OR   C
+                JR   NZ, .i
+                POP  BC
+                DJNZ .o
+                RET
+
+; ============================================================================
+
 GS_StreamAudioCacheToDevice:
+                XOR  A
+                LD   (GS_StreamTick), A
                 LD   HL, EXPECTED_AUDIO_PAK_FULL_SECS
                 LD   (GS_AudioStreamSecsLeft), HL
                 LD   A, GS_AUDIO_CACHE_PAGE_BASE
@@ -2101,6 +2214,7 @@ GS_StreamAudioCacheToDevice:
                 LD   DE, (GS_AudioStreamSecsLeft)
                 DEC  DE
                 LD   (GS_AudioStreamSecsLeft), DE
+                CALL GS_StreamProgressTick          ; тик прогресс-бара (GS != SPI шина)
                 LD   A, H
                 CP   #C0
                 JR   NZ, .secLoop
@@ -2119,6 +2233,34 @@ GS_StreamAudioCacheToDevice:
                 SCF
                 RET
                 ENDIF
+
+; Тик прогресс-бара во время стрима MOD->GS. Безопасно: GS на ОТДЕЛЬНОЙ шине
+; (#BB/#B3), а FT-рисование — на SPI (#77/#57); BootBusOwner=0 между секторами
+; (GS_StreamBufferDE отдаёт его в .ok). Каждые 256 секторов двигаем бар на 1px
+; (в рамках бюджета фазы «музыка» 5..60), каждые 32 — перерисовка (анимация жива,
+; экран не «висит» ~3 c стрима). Полностью сохраняет регистры вызывающего.
+GS_StreamProgressTick:
+                PUSH HL
+                PUSH DE
+                PUSH BC
+                PUSH AF
+                LD   A, (GS_StreamTick)
+                INC  A
+                LD   (GS_StreamTick), A
+                JR   NZ, .noAdv                       ; перенос 255->0 каждые 256 секторов
+                CALL BootProgressIncNoDraw
+.noAdv:         LD   A, (GS_StreamTick)
+                AND  #1F
+                JR   NZ, .done                        ; перерисовка каждые 32 сектора
+                CALL BootLoadingTickSafe
+                LD   A, (GS_AudioStreamPage)          ; восстановить slot2 на текущую стрим-страницу
+                SetPage2_A
+.done:          POP  AF
+                POP  BC
+                POP  DE
+                POP  HL
+                RET
+GS_StreamTick:  DEFB 0
 
 GS_StreamBufferDE:
                 LD   A, 1
@@ -2209,6 +2351,10 @@ GS_SfxFullSecs:     DEFB 0
 GS_SfxTailBytes:    DEFW 0
 GS_SfxLoadedCount:  DEFB 0
 GS_SfxChunkCount:   DEFB 0
+GS_SfxProgressDraw: DEFB 0
+GS_SfxLoadedTarget: DEFB 0
+GS_SfxTablePtr:     DEFW 0
+GS_SfxTableCount:   DEFB 0
 GS_LastLoadedFxHandle: DEFB 0
 GS_AudioCacheSecsLeft: DEFW 0
 GS_AudioCachePage:     DEFB 0
