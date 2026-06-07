@@ -1,4 +1,4 @@
-# Zuma Cross-Project Chat
+﻿# Zuma Cross-Project Chat
 
 Канал общения между двумя сессиями Claude на этой машине:
 - **VDC** — TS-Conf, нативный 360×288, `c:/z80/zuma/`
@@ -6437,9 +6437,9 @@ SHA256:
 [2026-06-06] SESSION SAVE / current state: tunnel top-mask + pause/dialog + win-dialog визуальные переходы стабилизированы. RAM_G swap окно #0AC000..#0CC000 используется попеременно: gameplay top-cover и DIALOG_FRAME. При входе в pause порядок: frame1 скрывает TRACKF_TUNNEL шары при включенной top-cover mask; frame2 mask уже выключена, но DIALOG_FRAME ещё не грузится; frame3 lazy upload DIALOG_FRAME и рисование pause window. ZL_DialogFrameUploadDeferred = barrier counter 0/1/2. ZL_DrawActiveChainForLevel всегда восстанавливает slot2 через ZL_RestoreActiveTrackPage перед чтением TrackData, иначе после lazy upload диалога исчезает вся цепочка. ZL_DrawFrogLayer: в pause barrier и DLG_WIN_DONE лягушка остаётся видимой пока DialogFrameLoaded=0, и скрывается только когда окно реально загружено. Match-3 explosions используют 7-byte ball cache stride. Последний build OK: Main1 size=15978, free=406 bytes. Регрессы OK: build.cmd, test_tunnel_pause_dialog_skip.py, test_explosion_color_mapping.py, test_top_mask_overlay_commands.py, test_top_mask_mainpak_delivery.py, check_memory_map.py, test_tunnel_render_pass_priority.py, render_l09_tunnel_eve_frame.py. wc.img обновлен через inject_zuma_to_wc_img.py.
 
 ## [2026-06-07 06:39] VDAC2: v063 current-build reference snapshot
-**Контекст:** создана локальная опорная версия текущего dirty-worktree build после v062: releases\v063-2026-06-07-current-build-reference. Скопированы Build, Source, Graphics, Docs, build.cmd, build_wc_img.cmd, spgbld.ini, spgbld_boot.ini, spgbld_vdac2.ini, Чат.txt. Это filesystem snapshot, не git-tag.
+**Контекст:** создана локальная опорная версия текущего dirty-worktree build после v062: releases\v063-2026-06-07-tunnel-levels-zorder-reference. Скопированы Build, Source, Graphics, Docs, build.cmd, build_wc_img.cmd, spgbld.ini, spgbld_boot.ini, spgbld_vdac2.ini, Чат.txt. Это filesystem snapshot, не git-tag.
 **Проверка:** SHA256 Build\zuma_vdac2.spg = 0872F4A44EFAEEC62A6E8340BC179ECEE5292138006986B13FBDC4084F236D2E; Build\ZUMAMAIN.PAK = B6DCD583FB0F8CAC2DD0F044C0AA478721B793369646088033E462F00BD947E5; Build\ZUMALVL.PAK = CDFC11F19361A93BBEFDDED8C193377789AFA9F6C14C9726EA7D7D8BFE6D6D01. Хэши рабочего Build и snapshot совпали.
-**Ссылки:** releases\v063-2026-06-07-current-build-reference.
+**Ссылки:** releases\v063-2026-06-07-tunnel-levels-zorder-reference.
 
 
 ## [2026-06-07 06:51] VDAC2: level-select preview fills placeholder
@@ -6470,10 +6470,10 @@ SHA256:
 
 
 ## [2026-06-07 07:37] VDAC2: v063 reference replaced with level-select preview fixed build
-**Контекст:** по просьбе пользователя последняя опорная версия releases\v063-2026-06-07-current-build-reference заменяется текущим рабочим состоянием. Это версия с исправленным level-select preview: 306x196 @ (177,240), Z-order sky -> preview -> background -> UI, crop-aware frog/kill-zone markers, 8-page ZUMALVL preview storage.
+**Контекст:** по просьбе пользователя последняя опорная версия releases\v063-2026-06-07-tunnel-levels-zorder-reference заменяется текущим рабочим состоянием. Это версия с исправленным level-select preview: 306x196 @ (177,240), Z-order sky -> preview -> background -> UI, crop-aware frog/kill-zone markers, 8-page ZUMALVL preview storage.
 **Проверки перед сохранением:** build.cmd OK; check_memory_map.py PASS; audit_ramg_full.py PASS; test_levelsel_transition.py OK; test_levelsel_loader_walks.py PASS; wc.img обновлён.
 **SHA256:** Build\zuma_vdac2.spg = 0C8F9A60B2B7230F63156E1AA2C1DC6CCCD63571E8FEE04615FD56D97AF86E43; Build\ZUMALVL.PAK = A73E84F63331D944372BBD6ECEE75B40DC50E5A395DF095ADD2CC5C675F5E3D6; Build\ZUMAMAIN.PAK = E8869D2CE00829299BD4DB8275779D316034ED7861D586C093F6039249239A1C.
-**Ссылки:** releases\v063-2026-06-07-current-build-reference.
+**Ссылки:** releases\v063-2026-06-07-tunnel-levels-zorder-reference.
 
 
 ## [2026-06-07 08:06] VDAC2: L13 upper-right tunnel flag fix
@@ -6491,8 +6491,15 @@ SHA256:
 
 
 ## [2026-06-07 08:25] VDAC2: v063 reference replaced with tunnel Z-index fixed build
-**Контекст:** по просьбе пользователя текущая версия после исправления Z-index тоннелей сохранена вместо крайней опорной версии releases\v063-2026-06-07-current-build-reference.
+**Контекст:** по просьбе пользователя текущая версия после исправления Z-index тоннелей сохранена вместо крайней опорной версии releases\v063-2026-06-07-tunnel-levels-zorder-reference.
 **Состав snapshot:** Build, Source, Graphics, Docs, build.cmd, build_wc_img.cmd, spgbld.ini, spgbld_boot.ini, spgbld_vdac2.ini, Чат.txt. Snapshot заменён полностью.
 **Проверка:** SHA256 рабочего Build и snapshot совпали. Build\zuma_vdac2.spg = B6EE19480605E57E61592CBB0196B6C445D26A7202B277B1E4B247CFB8AA99BB; Build\ZUMALVL.PAK = 173DE933A5A61C27B364A09559EF12B7A403D241DE5958E69AC4DFFAD1ECA2C5; Build\ZUMAMAIN.PAK = A1A1036633F35A2C981044C8C457F42BDC9337B87D7E25B5F848FE826C30A22D.
-**Ссылки:** releases\v063-2026-06-07-current-build-reference.
+**Ссылки:** releases\v063-2026-06-07-tunnel-levels-zorder-reference.
+
+
+
+## [2026-06-07 08:39] VDAC2: v063 reference renamed
+**Контекст:** старое имя опорной папки releases\v063-2026-06-07-current-build-reference было слишком расплывчатым.
+**Решение:** опорная версия переименована в releases\v063-2026-06-07-tunnel-levels-zorder-reference, потому что ключевой смысл версии — исправление Z-order на уровнях с тоннелями/top-mask: under/tunnel balls -> top-mask -> drawAbove balls.
+**GitHub:** rename будет отправлен отдельным commit после проверки.
 
