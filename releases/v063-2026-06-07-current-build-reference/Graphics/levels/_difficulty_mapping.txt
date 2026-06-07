@@ -1,0 +1,26 @@
+# Mapping: difficulty rank → original source index
+# Source = level_src_NN.png (исходный порядок в zuma_levels_22.png)
+# Final  = level_NN.png (по возрастанию сложности)
+
+level_01.png  <-  level_src_02.png   # S-curve
+level_02.png  <-  level_src_11.png   # U-shape
+level_03.png  <-  level_src_06.png   # single ring
+level_04.png  <-  level_src_03.png   # loop+turn
+level_05.png  <-  level_src_01.png   # small spiral
+level_06.png  <-  level_src_04.png   # concentric ovals
+level_07.png  <-  level_src_07.png   # moon arc / space theme
+level_08.png  <-  level_src_08.png   # medium spiral
+level_09.png  <-  level_src_09.png   # snake winding
+level_10.png  <-  level_src_10.png   # loop + center frog
+level_11.png  <-  level_src_14.png   # long meander
+level_12.png  <-  level_src_13.png   # cave with obstacles
+level_13.png  <-  level_src_16.png   # nested rounded squares
+level_14.png  <-  level_src_17.png   # rectangle winds
+level_15.png  <-  level_src_15.png   # triangle spiral
+level_16.png  <-  level_src_19.png   # long rectangular
+level_17.png  <-  level_src_20.png   # stadium (Hong Kong)
+level_18.png  <-  level_src_18.png   # city maze
+level_19.png  <-  level_src_05.png   # TWO FROGS (simple)
+level_20.png  <-  level_src_12.png   # TWO FROGS (meander)
+level_21.png  <-  level_src_21.png   # HIDDEN segments
+level_22.png  <-  level_src_22.png   # SPACE (no track)
