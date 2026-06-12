@@ -1,0 +1,14 @@
+=== mainloop: 1 frame(s) through shadow ===
+[1] game_init (Init_Core + VDC_Init + Frog_Init + Bullet_Init)
+    OK. Init_Video pre-state: PC=#FFFE, SP=#40F2
+[2] Init_Video (with HALT-skip)
+    OK. After Init_Video: swap_writes=1, frames=67
+[3] MainLoop forward until 1 swap(s)
+    done. steps=50000000, halts=0, swaps_captured=0
+shadow regs: frames=67 clock=28140000 dlswap=2 int_flags=00 cmd_r=0 cmd_w=0 hsize=640 vsize=480 pclk=1
+shadow stats: swap_writes=1 swaps_done=1 int_flags_reads=1
+  0000: CLEAR_COLOR_RGB(r=0, g=0, b=0)
+  0004: CLEAR(c=1, s=1, t=1)
+  0008: DISPLAY
+
+DL 3 ops: CLEAR_COLOR_RGB=1, CLEAR=1, DISPLAY=1

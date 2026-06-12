@@ -1,0 +1,1574 @@
+{
+  "level_index": 4,
+  "level": 5,
+  "warm_frames": 300,
+  "slots_len_1": 38,
+  "slots_len_2": 38,
+  "hsa_1": 37,
+  "has_second_chain": 1,
+  "cmd_bytes": 1116,
+  "cmd_words_raw": 279,
+  "capture_mode": "chain_budget",
+  "models": [
+    {
+      "pal_rate": 16,
+      "cmd_count": 278,
+      "clear_count": 1,
+      "sprite_count": 81,
+      "walk_per_line": 278,
+      "worst_y": 445,
+      "worst_line_clocks": 391,
+      "worst_fill_only": 113,
+      "over_lines": 0,
+      "frame_total": 176544,
+      "frame_budget": 399360,
+      "frame_pct": 44.20673076923077,
+      "sprite_fill_total": 43104,
+      "line_samples": {
+        "440": 381,
+        "441": 381,
+        "442": 383,
+        "443": 385,
+        "444": 389,
+        "445": 391,
+        "446": 391,
+        "447": 388,
+        "448": 388,
+        "449": 388,
+        "450": 386
+      },
+      "top_sprites": [
+        {
+          "handle": 1,
+          "cell": 0,
+          "x": 0,
+          "y": 0,
+          "size": [
+            640,
+            480
+          ],
+          "draw": [
+            640,
+            480
+          ],
+          "fmt": "PALETTED4444",
+          "filter": 0,
+          "clocks_per_line": 40,
+          "area_clocks": 19200
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 274,
+          "y": 405,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 306,
+          "y": 407,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 338,
+          "y": 406,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 369,
+          "y": 404,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 401,
+          "y": 402,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 433,
+          "y": 398,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 464,
+          "y": 389,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 493,
+          "y": 377,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 521,
+          "y": 362,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 547,
+          "y": 343,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 569,
+          "y": 319,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 584,
+          "y": 291,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 597,
+          "y": 262,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 600,
+          "y": 230,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 598,
+          "y": 198,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 594,
+          "y": 167,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 586,
+          "y": 136,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 570,
+          "y": 108,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 550,
+          "y": 83,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        }
+      ]
+    },
+    {
+      "pal_rate": 8,
+      "cmd_count": 278,
+      "clear_count": 1,
+      "sprite_count": 81,
+      "walk_per_line": 278,
+      "worst_y": 445,
+      "worst_line_clocks": 431,
+      "worst_fill_only": 153,
+      "over_lines": 0,
+      "frame_total": 195744,
+      "frame_budget": 399360,
+      "frame_pct": 49.01442307692308,
+      "sprite_fill_total": 62304,
+      "line_samples": {
+        "440": 421,
+        "441": 421,
+        "442": 423,
+        "443": 425,
+        "444": 429,
+        "445": 431,
+        "446": 431,
+        "447": 428,
+        "448": 428,
+        "449": 428,
+        "450": 426
+      },
+      "top_sprites": [
+        {
+          "handle": 1,
+          "cell": 0,
+          "x": 0,
+          "y": 0,
+          "size": [
+            640,
+            480
+          ],
+          "draw": [
+            640,
+            480
+          ],
+          "fmt": "PALETTED4444",
+          "filter": 0,
+          "clocks_per_line": 80,
+          "area_clocks": 38400
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 274,
+          "y": 405,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 306,
+          "y": 407,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 338,
+          "y": 406,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 369,
+          "y": 404,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 401,
+          "y": 402,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 433,
+          "y": 398,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 464,
+          "y": 389,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 493,
+          "y": 377,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 521,
+          "y": 362,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 547,
+          "y": 343,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 569,
+          "y": 319,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 584,
+          "y": 291,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 597,
+          "y": 262,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 600,
+          "y": 230,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 598,
+          "y": 198,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 594,
+          "y": 167,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 586,
+          "y": 136,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 570,
+          "y": 108,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 550,
+          "y": 83,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        }
+      ]
+    },
+    {
+      "pal_rate": 4,
+      "cmd_count": 278,
+      "clear_count": 1,
+      "sprite_count": 81,
+      "walk_per_line": 278,
+      "worst_y": 445,
+      "worst_line_clocks": 511,
+      "worst_fill_only": 233,
+      "over_lines": 0,
+      "frame_total": 234144,
+      "frame_budget": 399360,
+      "frame_pct": 58.62980769230769,
+      "sprite_fill_total": 100704,
+      "line_samples": {
+        "440": 501,
+        "441": 501,
+        "442": 503,
+        "443": 505,
+        "444": 509,
+        "445": 511,
+        "446": 511,
+        "447": 508,
+        "448": 508,
+        "449": 508,
+        "450": 506
+      },
+      "top_sprites": [
+        {
+          "handle": 1,
+          "cell": 0,
+          "x": 0,
+          "y": 0,
+          "size": [
+            640,
+            480
+          ],
+          "draw": [
+            640,
+            480
+          ],
+          "fmt": "PALETTED4444",
+          "filter": 0,
+          "clocks_per_line": 160,
+          "area_clocks": 76800
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 274,
+          "y": 405,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 306,
+          "y": 407,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 338,
+          "y": 406,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 369,
+          "y": 404,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 401,
+          "y": 402,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 433,
+          "y": 398,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 464,
+          "y": 389,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 493,
+          "y": 377,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 521,
+          "y": 362,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 547,
+          "y": 343,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 569,
+          "y": 319,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 584,
+          "y": 291,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 597,
+          "y": 262,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 600,
+          "y": 230,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 598,
+          "y": 198,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 594,
+          "y": 167,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 586,
+          "y": 136,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 570,
+          "y": 108,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 550,
+          "y": 83,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        }
+      ]
+    },
+    {
+      "pal_rate": 2,
+      "cmd_count": 278,
+      "clear_count": 1,
+      "sprite_count": 81,
+      "walk_per_line": 278,
+      "worst_y": 445,
+      "worst_line_clocks": 671,
+      "worst_fill_only": 393,
+      "over_lines": 0,
+      "frame_total": 310944,
+      "frame_budget": 399360,
+      "frame_pct": 77.86057692307692,
+      "sprite_fill_total": 177504,
+      "line_samples": {
+        "440": 661,
+        "441": 661,
+        "442": 663,
+        "443": 665,
+        "444": 669,
+        "445": 671,
+        "446": 671,
+        "447": 668,
+        "448": 668,
+        "449": 668,
+        "450": 666
+      },
+      "top_sprites": [
+        {
+          "handle": 1,
+          "cell": 0,
+          "x": 0,
+          "y": 0,
+          "size": [
+            640,
+            480
+          ],
+          "draw": [
+            640,
+            480
+          ],
+          "fmt": "PALETTED4444",
+          "filter": 0,
+          "clocks_per_line": 320,
+          "area_clocks": 153600
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 274,
+          "y": 405,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 306,
+          "y": 407,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 338,
+          "y": 406,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 369,
+          "y": 404,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 401,
+          "y": 402,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 433,
+          "y": 398,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 464,
+          "y": 389,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 493,
+          "y": 377,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 521,
+          "y": 362,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 547,
+          "y": 343,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 569,
+          "y": 319,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 584,
+          "y": 291,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 597,
+          "y": 262,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 600,
+          "y": 230,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 598,
+          "y": 198,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 594,
+          "y": 167,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 586,
+          "y": 136,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 570,
+          "y": 108,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        },
+        {
+          "handle": 0,
+          "cell": null,
+          "x": 550,
+          "y": 83,
+          "size": [
+            32,
+            32
+          ],
+          "draw": [
+            32,
+            32
+          ],
+          "fmt": "ARGB4",
+          "filter": 0,
+          "clocks_per_line": 2,
+          "area_clocks": 64
+        }
+      ]
+    }
+  ]
+}

@@ -18,8 +18,9 @@ Shown while the main pak is being loaded.
 | `#000000..#03C000` | `BOOT_LOADING_BG_DXT_L4` | 640x480 pseudo-DXT L4 raw, 15 pages |
 | `#03C000..#044000` | `BOOT_LOADING_BAR` | 395x37 ARGB4, 2 pages |
 | `#044000..#06C000` | `BOOT_TS_ANIM` | 188x407 ARGB4 atlas, 10 pages |
+| `#06C000..#070000` | `BOOT_SFX_AUTHORS` | Claude/Codex 48x48x2 ARGB4 atlas, 1 page; shown only while GS SFX load |
 
-Max end: `#06C000`.
+Max end: `#070000`.
 
 ## Main menu profile
 

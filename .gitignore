@@ -93,3 +93,13 @@ main1_play.bin
 
 # Audit/local notes
 аудит*.txt
+
+# ===== Local-only heavy artifacts (never push) =====
+/Buildmain.lst
+/_work_backup_before_overlay_split_2026-05-27/
+/Sounds/Converted/tools/
+releases/**/*.img
+releases/**/ffmpeg-release-essentials.zip
+releases/**/dosbox-x-portable.zip
+releases/**/Sounds/Converted/tools/
+releases/**/_z80_lib_cburbridge/

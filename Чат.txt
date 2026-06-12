@@ -6503,3 +6503,574 @@ SHA256:
 **Решение:** опорная версия переименована в releases\v063-2026-06-07-tunnel-levels-zorder-reference, потому что ключевой смысл версии — исправление Z-order на уровнях с тоннелями/top-mask: under/tunnel balls -> top-mask -> drawAbove balls.
 **GitHub:** rename будет отправлен отдельным commit после проверки.
 
+
+## [2026-06-07] VDAC2 gap bonus rule correction — через дырку + уничтожение
+
+Правило из wiki/FAQ-like источников по Zuma: gap bonus начисляется не за сам факт пролёта шара через пустую дырку и не за off-screen expire. Бонус начисляется только если выстрел прошёл через видимый gap и уничтожил/взорвал шары в более дальней части цепочки. Чем уже gap, тем больше бонус; последовательные gap-shot'ы сохраняют multiplier, но обычный match без gap сбрасывает gap-streak, не ломая chain.
+
+Исправление:
+- `Source/ASM/Bullet.asm`: offscreen/miss больше не вызывает `VDC_AwardGapBonus`; он вызывает `VDC_BreakShotStats`. После `VDC_InsertAt` gap bonus вызывается только при `A!=0`, то есть когда вставка дала match/explosion.
+- `Source/ASM/VDC.asm`: добавлен `VDC_BreakShotStats`; shot без match сбрасывает `VDC_BulletGapCount` и `VDC_StatChainCount`. `VDC_AwardGapBonus` переописан как successful through-gap destroy.
+- `Source/ASM/main.asm`: `VDC_AwardGapBonusSlot0` больше не сбрасывает `VDC_StatChainCount` после успешного gap bonus и не сбрасывает chain при matched non-gap; сбрасывает только consecutive gap-shot streak.
+- `Source/OTHER/vdc_visual_emulator.py`: mirror той же логики; offscreen = MISS, collision+matched = возможный GAP_BONUS.
+- Тесты: добавлен `Source/OTHER/test_gap_bonus_event_rule.py`, обновлён `test_gap_bonus_score_z80.py` на сохранение chain.
+
+Verified:
+- `build.cmd` OK, sjasmplus 0 errors, Main0=9171 bytes, Main1=15999 bytes/free=385.
+- `python Source/OTHER/test_gap_bonus_event_rule.py` PASS.
+- `python Source/OTHER/test_gap_bonus_score_z80.py` PASS.
+- `python Source/OTHER/test_gauge_score_z80.py` PASS.
+- `python Source/OTHER/test_score24_z80.py` PASS.
+- `python Source/OTHER/test_cascade_requires_gap_bridge_z80.py` PASS.
+- `python Source/OTHER/test_insert_immediate_match_z80.py` PASS.
+- `python Source/OTHER/check_memory_map.py` PASS.
+- `python Source/OTHER/audit_ramg_full.py` OK.
+- `python Source/OTHER/inject_zuma_to_wc_img.py` updated `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` in-place.
+- `python Source/OTHER/check_host_wc_img.py` PASS/hash_match=True.
+
+Artifacts:
+- `Build/zuma_vdac2.spg` SHA256 `C169E8B81879487F818E2D6945089080C6A4FCC4FFACE33844E7ECCC9AB613CF`
+- `Build/ZUMAMAIN.PAK` SHA256 `C878E4F8F9E81406F10848ECB6F7455639A402A90B299E83C48367F72CA78847`
+- `Build/ZUMALVL.PAK` SHA256 `173DE933A5A61C27B364A09559EF12B7A403D241DE5958E69AC4DFFAD1ECA2C5`
+
+## [2026-06-07] Boot loader SFX preload animation
+
+Во время загрузки GS SFX (`GS_LoadSfxPackWithTable`, когда `GS_SfxProgressDraw != 0`) старый ZX Evolution/TS sprite на boot loading screen выключается через `BootSfxLogoEnabled=1`. Вместо него рисуется SFX preload block: два ARGB4 logo sprites одинакового размера 96x96 (`boot_sfx_logo_atlas_argb4`, cells 0/1) и текст `Andrew Lazarev AKA INSiDE present`. Логотипы в SFX-фазе меняются местами по `BootAnimFrame & 1`, то есть есть простая анимация без отдельного таймера.
+
+Реализация:
+- `Source/OTHER/make_boot_loading_assets.py` генерирует `boot_sfx_logo_atlas_preview.png` и страницы `boot_sfx_logo_atlas_argb4_p00..p02_zx7.bin`.
+- `Source/ASM/boot_loading_assets.inc`: `BOOT_SFX_LOGO_*` meta, page base `#C3`, 3 pages.
+- `spgbld_boot.ini`: добавлены boot SPG pages `#C3..#C5`.
+- `Source/ASM/main.asm`: `BOOT_SFX_LOGO_RAMG=#06C000`, `BOOT_SFX_LOGO_HANDLE=18`, загрузка logo atlas после TS anim atlas.
+- `Source/ASM/loader_resident.asm`: resident Core содержит только flag/hook; тяжёлая отрисовка вынесена из Core, чтобы не пересечь page #05.
+- `Source/ASM/ts-dos.asm`: `OVL_DrawBootSfxLogos` и `OVL_DrawBootSfxPresent`; SFX loader включает/выключает `BootSfxLogoEnabled`.
+- `Source/OTHER/audit_ramg_full.py`: boot profile учитывает `BOOT_SFX_LOGOS` #06C000..#078000.
+
+Verified:
+- `build.cmd` OK; Main0=9215 bytes (на 1 байт ниже page #05 boundary), Main1=15999/free=385, LoaderOvl=8873/free=7511.
+- `python Source/OTHER/check_memory_map.py` PASS.
+- `python Source/OTHER/audit_ramg_full.py` OK.
+- `python Source/OTHER/test_gap_bonus_event_rule.py` PASS.
+- `python Source/OTHER/test_gap_bonus_score_z80.py` PASS.
+- `python Source/OTHER/test_score24_z80.py` PASS.
+- `python Source/OTHER/inject_zuma_to_wc_img.py` updated `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` in-place.
+- `python Source/OTHER/check_host_wc_img.py` PASS/hash_match=True.
+
+Known unrelated harness state during this check: `test_rawpak_z80.py` / fragmented RawPak harness still fail at OpenRoot step `#A6`, and `test_zifi_pipeline_python.py` still reports L1 track mismatch. These are not from the SFX animation path and were not fixed here.
+
+Artifacts:
+- `Build/zuma_vdac2.spg` SHA256 `CA89AF13F556AA8C5401E30303CAEE6EB7343D31FD84C61011349CD5644C60D1`
+- `Build/ZUMAMAIN.PAK` SHA256 `2590766D0DE21D72156BD20695AB98F0B1E68C74B9480432337EA644758FA65E`
+- `Build/ZUMALVL.PAK` SHA256 `173DE933A5A61C27B364A09559EF12B7A403D241DE5958E69AC4DFFAD1ECA2C5`
+
+2026-06-07: Boot SFX loading animation rule: when GS SFX loading begins, BootSfxLogoEnabled latches and the old ZX Evolution/TS animation is not drawn again on the boot loading screen. Reveal order by BootProgressPx: >=60 first AI/logo sprite, >=64 second AI/cloud sprite, >=68 Andrew Lazarev, >=72 AKA INSiDE, >=76 present. Flag clears only on DrawBootBlackScreen or SFX load failure. Build/inject verified: ZUMA_VD2.SPG SHA256 2528D108D6D223B6C97DFF2CC752352FB64CE8988308C90766C6FD924F2642EB; host wc.img file hashes match local build.
+
+2026-06-07: Boot SFX logo sprites reduced from 96x96 to 48x48 after hardware hang on cloud sprite. Visual centers preserved by moving draw origins to LEFT_X=242 RIGHT_X=350 Y=274. boot_sfx_logo_atlas now uses 1 SPG/RAMG page (#C3 only); spgbld_boot.ini no longer includes #C4/#C5 for SFX logos. Rebuilt and injected to host wc.img; ZUMA_VD2.SPG size 336384 SHA256 E8FC6DF12C1499E2EB5103B7B867309F74311D700EC78C344905ADEC40B8AA74.
+
+2026-06-07: Boot SFX logo/present animation canceled/rolled back after hardware hang. Loader is back to original boot TS animation only; no BootSfxLogoEnabled, no BOOT_SFX_LOGO symbols, no boot_sfx_logo pages in spgbld_boot.ini. Rebuilt and injected rollback to host wc.img; ZUMA_VD2.SPG size 334848 SHA256 46FB0DCAD358F036B20CDABDCA08B84D2FDA321423449A144A10A731AA25E7C4.
+
+## [2026-06-07] VDAC2: Boot SFX authors row restored safely
+**Контекст:** отменённая boot SFX animation возвращена в безопасном виде: во время загрузки SFX в General Sound (`GS_LoadSfxPackWithTable`, только когда `GS_SfxProgressDraw=1`) старая TS/ZX Evolution animation скрывается и вместо неё рисуется одна горизонтальная строка авторов: Claude sprite, comma, Codex sprite, comma, `Andrew Lazarev AKA INSiDE present`. Строка центрирована по горизонтали и стоит по вертикали на месте старой TS animation.
+**Архитектура:** тяжёлая отрисовка оставлена в loader overlay (`OVL_DrawBootSfxAuthors`), resident Core содержит только compact state через `BootGsLabelEnabled`: 0=off, 1=GS label, 2=SFX authors+GS label. Спрайты Claude/Codex генерируются из `Graphics\Logo\Claude.png` и `Graphics\Logo\codex-color.png` в маленький 48x48x2 ARGB4 atlas `BOOT_SFX_AUTHORS` at RAM_G #06C000, SPG page #C3. Это не повторяет старый риск: нет 96x96/многостраничного atlas и нет тяжёлой отрисовки в Core.
+**Проверки:** build.cmd OK (0 errors, 10 старых fwdref warnings), Main0=9205 bytes, Main1=15999/free=385, LoaderOvl=9018/free=7366; check_memory_map.py PASS; audit_ramg_full.py OK; inject_zuma_to_wc_img.py обновил host wc.img; check_host_wc_img.py PASS/hash_match=True.
+**SHA256:** Build\zuma_vdac2.spg = 6A0450800DA24E73D34546C5CC3C6F24F1C12E7EE9172845ECF4E813BA2A92AE; Build\ZUMAMAIN.PAK = 1131F7FE7EB955C70B875D6526D36A5D337F01EB0BE200CD32C80F0F7EAAF989; Build\ZUMALVL.PAK = 173DE933A5A61C27B364A09559EF12B7A403D241DE5958E69AC4DFFAD1ECA2C5.
+
+2026-06-07 boot SFX authors animation update: during GS_LoadGameplaySoundsMaybe the loader shows one-line author reveal: Claude sprite, comma, Codex sprite, comma, Andrew Lazarev AKA INSiDE, then final frame redraws the same tail as 'Andrew Lazarev AKA INSiDE present' at the same x position (no separate present block). Text is white ROM font 27 with black FT hardware shadow, AI sprites are 48x48. BootGsLabelEnabled mode 2 keeps loader overlay mapped through LoadMainPack so redraws can call OVL_DrawBootSfxAuthors. Reveal is driven by BootAnimFrame/BootAnimDelay=18, not BootProgressPx. Built and injected to wc.img. SPG SHA256 133FF5B104C6ADE4A522933973DE2991FCD6BE5A7211BB65EC1C3531DC431570.
+
+2026-06-07 boot SFX authors timing fix: added a real pause after ZX Evolution by making BootAnimFrame 0 draw nothing for the initial delay; author reveal now starts at frame 1. BootAnimAdvance moved after BootDrawGsLabelHook so the current frame is drawn before advancing. Reveal thresholds: frame1 Claude/comma, frame2 Codex/comma, frame3 Andrew Lazarev AKA INSiDE, frame4 same tail with present. BOOT_TS_ANIM_FRAME_DELAY increased to 36. Built/injected to wc.img. SPG SHA256 932734F7BEF77EDB2213EEB7B6664CE07B1C8152F088122ED84AC8E46C64FE73.
+
+2026-06-07 boot SFX authors delay update: BOOT_TS_ANIM_FRAME_DELAY increased from 36 to 90 redraw ticks to make pauses between reveal frames much longer. Built/injected to wc.img. SPG SHA256 17C2015A99926F42B230D2E0867FF12614C8D583B7B9B1DA5D0C363F5DF34437.
+
+2026-06-07 boot SFX authors hardware fade-in: OVL_DrawBootSfxAuthors now fades each newly revealed frame element with FT812 ColorA based on BootAnimDelay. Previous elements stay at alpha 255; frame4 keeps the base author text full and overlays the full 'Andrew Lazarev AKA INSiDE present' string from the same x with fade alpha, so present appears inline without a separate side word. Added OVL_BootSfxFadeAlpha in loader overlay; resident Core unchanged. Built/injected to wc.img. SPG size 338944, SHA256 6D048F72FE0DE26D38F411D83B669FDBCB8BA4E5D8560C1108D292B720EBBCDE.
+
+2026-06-07 boot SFX authors present fade loop fix: final full-string fade now runs only when BootAnimFrame == 4. For BootAnimFrame > 4 the full 'Andrew Lazarev AKA INSiDE present' overlay is drawn at alpha 255, preventing repeated fade-in cycles while the shared boot animation counter continues toward the TS atlas limit. Built/injected to wc.img. SPG SHA256 812D74D64737490423070E43242574C712DA73508BBA692B69DEFC54FE757DC9.
+
+2026-06-07 boot SFX authors timing/fade fix after regression: restored ZX Evolution BOOT_TS_ANIM_FRAME_DELAY to 5 and added separate BOOT_SFX_AUTHORS_FRAME_DELAY=90. GS_LoadGameplaySoundsMaybe initializes BootAnimDelay with the SFX delay; BootAnimAdvance selects delay based on BootGsLabelEnabled==2. Fixed final present fade: .shadowFullText/.whiteFullText now call OVL_BootSfxFadeAlpha only when BootAnimFrame==4, otherwise alpha 255. Main0 fits at 9214 bytes, memory-map PASS. Built/injected to wc.img. SPG SHA256 354882DC92E704ACE75A44F6028C39154B3E63CC28F4ECE633722DD6BD6081CD.
+
+2026-06-07 boot GS settle + ZX fade-out update: increased GS_POSTLOAD_SETTLE_OUTER from 20 to 40 before GS_PlayMenuMusic/MODPLAY after streaming ZUMAAUD.PAK, giving GS more settle time. Added BootGsLabelEnabled state 3 for hardware fade-out of ZX Evolution before SFX authors: GS_LoadGameplaySoundsMaybe sets state 3 + BOOT_TS_FADE_OUT_DELAY=16; OVL_BootTsFadeOutWait calls BootLoadingTickSafe until BootAnimDelay reaches 0, then switches to state 2 and resets author animation delay. OVL_DrawBootGsLabel overlays a black FT_RECTS alpha fade over the TS animation area using FT812 ColorA. ZX Evolution frame timing remains BOOT_TS_ANIM_FRAME_DELAY=5; SFX authors remain BOOT_SFX_AUTHORS_FRAME_DELAY=90. Built/injected to wc.img. SPG SHA256 3E7DBDAA61DC11FA6E4D40C17484F9123E938AE700F3A0CF2939DEF2874A2962.
+
+2026-06-07 boot ZX fade-out correction: removed the black FT_RECTS overlay fade because it showed as a black rectangle. DrawLoadingScreen now calls OVL_BootTsApplyAlpha for both ZX Evolution shadow and main sprite; when BootGsLabelEnabled==3 it derives ColorA from BootAnimDelay, so the ZX Evolution bitmap itself fades out. BOOT_TS_FADE_OUT_DELAY is 15. GS_POSTLOAD_SETTLE_OUTER remains 40. Built/injected to wc.img. SPG SHA256 1C435E0FE0B9924C42C83B9A4103F5E491606DE9F46C8377CE5B93207C1728F3.
+
+2026-06-07 boot black-screen fix for ZX fade-out: removed unsafe OVL_BootTsApplyAlpha calls from resident DrawLoadingScreen because loader overlay is not mapped during normal boot TS animation. Resident now uses FT.Coprocessor.ColorA normally and skips TS animation for BootGsLabelEnabled>=2. During fade state 3, OVL_DrawBootGsLabel calls OVL_DrawBootTsFadeOut, which draws the ZX Evolution bitmap itself from loader overlay with decreasing FT812 ColorA. No black rectangle overlay; no unmapped overlay call during normal boot. Built/injected to wc.img. SPG SHA256 B1474EC291208F8056E160206940873709435250E42B76BFB8BB2E896A0A3BA3.
+
+2026-06-07 boot ZX fade timing moved after GS start: GS_LoadGameplaySoundsMaybe now leaves BootGsLabelEnabled=1 and sets BOOT_TS_POST_GS_DELAY=24, so after GS music/MODPLAY the normal ZX Evolution loading view continues briefly. OVL_BootTsFadeOutWait first waits this post-GS delay with BootLoadingTickSafe, then switches to state 3 for ZX bitmap ColorA fade-out, then state 2 for SFX authors. This avoids doing fade work immediately at the heavy GS music start moment. Built/injected to wc.img. SPG SHA256 5583FE9228C6208D95297CFE901CCE01CE1ED5AD578480C2E402832EC0F395A0.
+
+2026-06-08 gameplay render optimization / tunnel Z-order notes:
+- Повторный вход после HUD MENU -> main menu -> новая загрузка уровня проверен: на текущей сборке не зависает. Reset/wait эксперименты в main.asm откатили, потому что они ломали вход в главное меню; причина зависания не лечится общим reset'ом переходов.
+- Для уровней с top-mask/тоннелями введено правило: полностью выключать animation spin и per-ball rotation шаров. Практический вывод записан в Docs/uchebnik_tsconf_vdac2.md, глава 20.6: маскирование/отсечение шаров под тоннелем не помогло на реальном FT812, потому что основная цена остается в DL-walk и matrix state changes.
+- Для двухцепочных уровней без тоннеля: порог считается по сумме VDC_SlotsLen + VDC2_SlotsLen. Если total >= 70, spin/rotation выключены. Если total < 70, используется 4 группы углов (AND #C0), а не 8.
+- Для pause/dialog поворот шаров отключается через ZL_BallRotationDisabled.
+- L13 groovefest: маска есть (TopMaskL13 = 17 компонентов). Исправлен неправильный Z-index в правом верхнем overpass: ручной DRAW_ABOVE override расширен с samples 1614..1770 до 1614..1850 в Source/OTHER/make_track_4_3_all.py; перегенерирован Graphics/levels/Original/13-groovefest/13-groovefest-4-3.dat.
+- Собрано Build/zuma_vdac2.spg: build.cmd OK, Errors: 0. Последние размеры: Log end=#3FF8, Main0 size=9210, Main1 size=16134, UiOvl size=6598, LoaderOvl size=10958.
+
+=== 2026-06-08: L13 groovefest z-order fix / reference v065 ===
+- Пользователь показал проблему в правом верхнем углу уровня 13: шар заходил под верхнюю часть тоннеля, затем визуально выпрыгивал наверх.
+- Проверили реальный 64K дамп `111`: по offset #8000 лежал L13 track, и в игре были старые флаги:
+  1614..1770 = TRACKF_DRAW_ABOVE(2), 1771..1913 = 0, 1914..2003 = TRACKF_DRAW_ABOVE(2).
+- Причина: ранее был исправлен generated original track, но `Graphics/levels/Converted/pack/track_l13_640.bin`, который реально грузится из ZUMALVL.PAK, не был обновлен.
+- Исправление в `Source/OTHER/make_track_4_3_all.py`:
+  `13-groovefest-4-3.dat`: samples 1614..2003 принудительно `TRACKF_TUNNEL=1`.
+- Перегенерированы tracks через `python Source\OTHER\make_track_4_3_all.py`.
+- Обновлены pack assets через `python Source\OTHER\make_all_level_pack_assets.py`.
+- Проверка packed track:
+  sample 1614 = 1, 1771 = 1, 1850 = 1, 1914 = 1, 2003 = 1, 2004 = 0.
+- Собрано `build.cmd`: Errors: 0.
+- Выполнен инжект в `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img`.
+- `check_host_wc_img.py` подтвердил hash_match=True для SPG и всех PAK.
+- Пользователь подтвердил: "да, исправил".
+- Сохранена опорная версия:
+  `releases/v065-2026-06-08-l13-groovefest-zorder-reference`
+  Состав: Build, Source, Graphics, Docs, Sounds, build/config files, Чат.txt, REFERENCE.txt.
+- Hashes reference/injected build:
+  Build/zuma_vdac2.spg = CB15DC27C2CD0FB1EF570AFBB02E351AFA5B4396D653855582A08D4A1124424C
+  Build/ZUMALVL.PAK   = 76803269E6C34965950A23DBB2D6A059B80F776E6B34AC620E8D9B75D50D82E7
+  Build/ZUMAMAIN.PAK  = B63F7D7DB5B3748853C16D36C39F19FA61F18DC72A0D2F2C9CB68ACA4DF0CB05
+- Важная память на следующую сессию:
+  * `111` может быть 64K страницей игры даже если в начале виден мусор/остаток Wild Commander.
+  * Для проверки реального track в игре искать track по offset #8000 в дампе slot/page.
+  * При изменении generated original tracks обязательно обновлять `Graphics/levels/Converted/pack/track_lNN_640.bin` через `make_all_level_pack_assets.py`, иначе ZUMALVL.PAK и игра не увидят правку.
+  * Для L13 правый верх фиксирован именно packed флагами TRACKF_TUNNEL=1 на 1614..2003.
+=== end session ===
+
+## [2026-06-08] VDAC2: dual-chain lose absorb animation fix
+**Контекст:** на уровнях с двумя цепочками lose-state/absorb animation была некорректной: `VDC_UpdateAllChains` после обновления первой цепочки выходил при `VDC_GameState != PLAY`, поэтому во время `VDC_STATE_ABSORB` вторая цепочка не получала absorb update. Дополнительно `VDC_UpdateAbsorb` финалил `GAMEOVER`, списывал жизнь и открывал retry/game-over dialog сразу после опустошения активной цепочки, даже если inactive chain ещё содержала шары.
+**Исправление:** `Source/ASM/VDC.asm`: добавлен `VDC_UpdateSecondAbsorbMaybe`, который в `ABSORB` свопает на chain2 и прогоняет тот же `VDC_UpdateAbsorb`; добавлен `VDC_DualAbsorbWaitOther`, который удерживает global `ABSORB`, пока inactive chain не пустая. `Source/ASM/main.asm`: `.ua_done` теперь вызывает `Core.VDC_DualAbsorbWaitOther` и финалит lose dialog/lives только когда обе цепочки дососались.
+**Проверки:** `build.cmd` OK, Errors: 0; `Log end=#3FFC` (4 байта до лимита), `Main1 size=16174/free=210`; `python Source/OTHER/check_memory_map.py` PASS; `python Source/OTHER/test_dual_chain_fastfill.py` PASS; `python Source/OTHER/test_dual_chain_tail_render.py` PASS; `inject_zuma_to_wc_img.py` обновил `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img`; `check_host_wc_img.py` hash_match=True для SPG и всех PAK.
+**Artifacts:** `Build/ZUMA_VD2.SPG` SHA256 `80E0D5E7D42BCBAA4D3F5B2B3C5988141F85C772FA9B2A73AC75E8A8853424A2`; `Build/ZUMAMAIN.PAK` SHA256 `E279DD1230C28CCDDE88A2E72BD8C3C421CFF5FD359E09D79AD7071AA3F17ED8`; `Build/ZUMALVL.PAK` SHA256 `76803269E6C34965950A23DBB2D6A059B80F776E6B34AC620E8D9B75D50D82E7`.
+
+## [2026-06-08] VDAC2: dual-chain lose absorb correction — rush before absorb
+**Контекст:** предыдущий dual-chain lose fix был неполным: chain2 начинала `VDC_UpdateAbsorb` на своей текущей позиции, поэтому визуально уходила не в kill-zone, а там, где была в момент проигрыша; второй skull frame тоже мог глючить, потому что update не ставил second track page перед расчётом kill-zone.
+**Исправление:** `Source/ASM/VDC.asm`: `VDC_UpdateSecondAbsorbMaybe` теперь после `VDC_SwapChains` вызывает `SetSecondTrackPage`, затем `VDC_UpdateAbsorbOrRush`. Пока `VDC_KzFrame != 11`, chain2 делает lose-rush: сбрасывает `ChainFreezeCnt`, ускоренно вызывает `VDC_MoveChain` + `VDC_CheckKillzone`, тем самым обновляя собственный `VDC2_KzFrame` и доводя голову до своего skull. Только после `KzFrame=11` запускается обычный `VDC_UpdateAbsorb` с удалением head-шаров.
+**Проверки:** `build.cmd` OK, Errors: 0; `Log end=#3FFC`, `Main1 size=16225/free=159`; `check_memory_map.py` PASS; `test_dual_chain_fastfill.py` PASS; `test_dual_chain_tail_render.py` PASS; `inject_zuma_to_wc_img.py` обновил host `wc.img`; `check_host_wc_img.py` hash_match=True для SPG и всех PAK.
+**Artifacts:** `Build/ZUMA_VD2.SPG` SHA256 `8F686B5C3E6E7B7A02EC8018DF663E1F794971089FCB03CCEC3B86762A5C7282`; `Build/ZUMAMAIN.PAK` SHA256 `E934120681F7C3E40DE73DF8605113BA3286566695A31AE703B7148D615457AC`; `Build/ZUMALVL.PAK` SHA256 `76803269E6C34965950A23DBB2D6A059B80F776E6B34AC620E8D9B75D50D82E7`.
+
+## [2026-06-08] VDAC2: dual-chain lose head fade gate
+**Контекст:** даже после rush-before-absorb chain2 на момент появления lose menu могла визуально терять последний шар слишком рано: renderer применял `VDC_HeadAbsorbAlpha` к slot0 при любом `VDC_GameState=ABSORB`, включая фазу, когда chain2 ещё только едет к своей kill-zone.
+**Исправление:** `Source/ASM/MainLoop.asm`: в `.PBCheckHeadAbsorb` добавлен gate `VDC_KzFrame == 11`. Пока активная цепочка в `ABSORB`, но её skull ещё не открыт до frame 11, head-шар рисуется обычным alpha=255; fade-out начинается только после фактического достижения kill-zone.
+**Проверки:** `build.cmd` OK, Errors: 0; `Log end=#3FFC`, `Main1 size=16232/free=152`; `check_memory_map.py` PASS; `test_dual_chain_fastfill.py` PASS; `test_dual_chain_tail_render.py` PASS; `inject_zuma_to_wc_img.py` обновил host `wc.img`; `check_host_wc_img.py` hash_match=True для SPG и всех PAK.
+**Artifacts:** `Build/ZUMA_VD2.SPG` SHA256 `264028FE138A02923B3C3C966E762B0E15164EEBC7C21A42B8FF04DC8D6BB24E`; `Build/ZUMAMAIN.PAK` SHA256 `3448578E8660A8C10983E3AD83E4A2CAE8FCDE9AF27CFF5E3D7D9A72FA3B3CA0`; `Build/ZUMALVL.PAK` SHA256 `76803269E6C34965950A23DBB2D6A059B80F776E6B34AC620E8D9B75D50D82E7`.
+
+## [2026-06-08] VDAC2: dual-chain lose absorb starts only after KZ sub-boundary
+**Контекст:** по скриншоту chain2 всё ещё не доходила до второй kill-zone перед lose menu. Причина: `VDC_UpdateAbsorbOrRush` стартовал `VDC_UpdateAbsorb` сразу при `KzFrame=11`; это значит skull уже открыт, но head-шар мог ещё не пройти до безопасной sub-boundary дырки.
+**Исправление:** `Source/ASM/VDC.asm`: после `KzFrame=11` chain2 продолжает rush до `VDC_HSub==0`; только затем разрешается `VDC_UpdateAbsorb`. В rush-loop попадание `KzFrame=11` без `HSub==0` больше не запускает absorb. `Source/ASM/MainLoop.asm`: fade head-шара дополнительно запрещён, пока `VDC_HeadAbsorbAlpha==255`, чтобы rush/open-skull ожидание рисовало шар полным alpha.
+**Проверки:** `build.cmd` OK, Errors: 0; `Log end=#3FFC`, `Main1 size=16252/free=132`; `check_memory_map.py` PASS; `test_dual_chain_fastfill.py` PASS; `test_dual_chain_tail_render.py` PASS; `inject_zuma_to_wc_img.py` обновил host `wc.img`; `check_host_wc_img.py` hash_match=True для SPG и всех PAK.
+**Artifacts:** `Build/ZUMA_VD2.SPG` SHA256 `91C094FB5F64555E92A03022B9FB048756E27CFC2E63F9D91D3771D580BF0FAA`; `Build/ZUMAMAIN.PAK` SHA256 `2C5BCD188A46C6CF1F2AAB05674E5CA9E42C539223787064DC1E2CF9D7685ECE`; `Build/ZUMALVL.PAK` SHA256 `76803269E6C34965950A23DBB2D6A059B80F776E6B34AC620E8D9B75D50D82E7`.
+
+## [2026-06-08] VDAC2: dual-chain lose autonomous regression + infinite-loop fix
+**Контекст:** попытка ждать `KzFrame=11 && HSub=0` перед chain2 absorb дала бесконечный цикл. Реальный `VDC_CheckKillzone` держит skull frame 11 только около trigger range; когда `HSub` wraps to 0, frame уже снова становится 8/9. Поэтому состояние `11+0` было недостижимым, что подтвердил новый Z80 test.
+**Исправление:** `Source/ASM/VDC.asm`: `VDC_UpdateAbsorbOrRush` теперь делает armed-rush. Если перед `VDC_MoveChain` skull уже был `KzFrame=11`, то loop ждёт wrap `HSub` через 0 (`new_hsub < old_hsub`), затем фиксирует `HSub=0`, `KzFrame=11` и возвращается. На следующем кадре `KzFrame=11` на входе разрешает обычный `VDC_UpdateAbsorb`. Это даёт “доехать до дырки” без недостижимого условия.
+**Автотест:** добавлен `Source/OTHER/test_dual_chain_lose_absorb_z80.py`. Он ставит chain1 empty+ABSORB, chain2 перед второй kill-zone, гоняет реальный `Core.VDC_UpdateAllChains` в `ZumaFullZ80Emulator` и проверяет: dialog не открывается пока `VDC2_SlotsLen>0`; `VDC2_SlotsLen` не уменьшается до достижения KZ-boundary; цикл завершается конечным числом кадров. Текущий результат: `PASS: dual lose finished boundary_frame=19 first_drop_frame=22 dialog_frame=34`.
+**Проверки:** `build.cmd` OK, Errors: 0; `Main1 size=16257/free=127`; `test_dual_chain_lose_absorb_z80.py` PASS; `check_memory_map.py` PASS; `test_dual_chain_fastfill.py` PASS; `test_dual_chain_tail_render.py` PASS; `test_win_transition_z80.py` PASS; `inject_zuma_to_wc_img.py` обновил host `wc.img`; `check_host_wc_img.py` hash_match=True для SPG и всех PAK.
+**Artifacts:** `Build/ZUMA_VD2.SPG` SHA256 `433C56B9CAE1B2F0A9C6DF4BE084712B43188AD0D8B7BF25CAF189A12D5EEBD4`; `Build/ZUMAMAIN.PAK` SHA256 `0354ACAEF1F7BD6EB26DFB704EB2C03140B277D69182D0693E42AD74F4EB45EB`; `Build/ZUMALVL.PAK` SHA256 `76803269E6C34965950A23DBB2D6A059B80F776E6B34AC620E8D9B75D50D82E7`.
+
+## [2026-06-08] VDAC2: dual-chain lose menu post-empty delay
+**Контекст:** после finite-fix меню lose появлялось почти правильно, но визуально чуть рано: последний шар chain2 уже был удалён из массива, но экрану не хватало нескольких кадров, чтобы уход в kill-zone выглядел завершённым.
+**Исправление:** `Source/ASM/main.asm`: перед финализацией `.ua_done` добавлен `Core.VDC_DualLoseDelayMaybe`. `Source/ASM/VDC.asm`: добавлен `VDC_DualLoseMenuDelay` и `VDC_DUAL_LOSE_MENU_DELAY=4`; задержка применяется только на dual-chain lose, когда обе цепочки уже пустые. Если другая цепочка ещё не пустая, `VDC_DualAbsorbWaitOther` сбрасывает delay.
+**Автотест:** `Source/OTHER/test_dual_chain_lose_absorb_z80.py` теперь дополнительно требует минимум `MIN_DIALOG_DELAY_AFTER_EMPTY=6` кадров между `VDC2_SlotsLen==0` и появлением dialog. Текущий результат: `PASS: dual lose finished boundary_frame=19 first_drop_frame=22 empty_frame=34 dialog_frame=42 delay=8`.
+**Проверки:** `build.cmd` OK, Errors: 0; `Log end=#4000`, `Main1 size=16299/free=85`; `test_dual_chain_lose_absorb_z80.py` PASS; `check_memory_map.py` PASS; `test_dual_chain_fastfill.py` PASS; `test_dual_chain_tail_render.py` PASS; `test_win_transition_z80.py` PASS; `inject_zuma_to_wc_img.py` обновил host `wc.img`; `check_host_wc_img.py` hash_match=True для SPG и всех PAK.
+**Artifacts:** `Build/ZUMA_VD2.SPG` SHA256 `9A55BD2D9A6F7E77118ECC6F31C8A27FB51A16B263C20BDF2514D95982ED3411`; `Build/ZUMAMAIN.PAK` SHA256 `50DE96FE9D0A31C3B956B7095547354D918C5C7DB8E451E7129BC74BBD8FE56C`; `Build/ZUMALVL.PAK` SHA256 `76803269E6C34965950A23DBB2D6A059B80F776E6B34AC620E8D9B75D50D82E7`.
+
+## [2026-06-08] VDAC2: dual-chain lose KZ coordinate regression fixed
+**Контекст:** post-empty delay был недостаточен: на реальном кадре update идёт до draw, поэтому head-шар мог удаляться в том же update, где визуально ещё не дошёл до второй kill-zone. Первые автотесты проверяли конечность/задержку, но не проверяли координату head→KZ, поэтому пропускали баг. Расширенный тест по L05/L12/L19 показал: L12 first-drop dist=10 px, L19 dist=8 px при пороге 6.
+**Исправление:** `Source/ASM/VDC.asm`: `VDC_DualLoseHoldLastMaybe` превращён в hold для каждого head-шара chain2 перед удалением, а не только для последнего. На dual-chain lose, когда chain1 уже empty, при `KzFrame=11` и `HSub>=24` код несколько кадров держит active chain2 head в `HSub=31`, `HeadAbsorbAlpha=255`, не вызывая `VDC_UpdateAbsorb`; затем разрешает удаление. Убран сброс `VDC_DualLoseMenuDelay` из `VDC_DualAbsorbWaitOther`, который переинициализировал hold и создавал цикл. `test_dual_chain_lose_absorb_z80.py` теперь проверяет L05/L12/L19 и реальную дистанцию `VDC_SlotPos(0)` до `VDC2_KzDraw + KZ_SPR_HALF`.
+**Автотест:** `test_dual_chain_lose_absorb_z80.py` PASS:
+L05 `first_drop_dist=0`, L12 `first_drop_dist=3`, L19 `first_drop_dist=1`; `empty_frame=54`, `dialog_frame=62`, `delay=8`.
+**Проверки:** `build.cmd` OK, Errors: 0; `Log end=#4000`, `Main1 size=16351/free=33`; `check_memory_map.py` PASS; `test_dual_chain_lose_absorb_z80.py` PASS; `test_dual_chain_fastfill.py` PASS; `test_dual_chain_tail_render.py` PASS; `test_win_transition_z80.py` PASS; `inject_zuma_to_wc_img.py` обновил host `wc.img`; `check_host_wc_img.py` hash_match=True для SPG и всех PAK.
+**Artifacts:** `Build/ZUMA_VD2.SPG` SHA256 `A371D27162133052FF56C46F463C4BD7C36C80F3FA30F91597AAF2C37920F490`; `Build/ZUMAMAIN.PAK` SHA256 `A5F934DD3B443C5C288AFB16E60C1F4E0753C3D13C2906A62813444FC689D2D6`; `Build/ZUMALVL.PAK` SHA256 `76803269E6C34965950A23DBB2D6A059B80F776E6B34AC620E8D9B75D50D82E7`.
+## [2026-06-08] VDAC2 → VDAC2: визуальная регрессия lose-анимации второй цепочки
+
+**Контекст:** после предыдущего исправления вторая цепочка могла выглядеть недоехавшей к правой kill-zone в момент появления меню, а кадр черепа второй kill-zone дёргался при переходе в GAMEOVER.
+
+**Причина:** визуальная диагностика по Z80-состоянию (`Source/OTHER/render_dual_chain_lose_absorb.py`) показала, что старый численный тест проверял только первый drop головы около KZ, но не финальное окно перед меню. Отдельно найден draw-баг: `DrawSecondKillzoneDual` при GAMEOVER переключался на общий `VDC_KzFrame` (`CP 2`), а общий кадр в этот момент уже сбрасывался, поэтому правый череп перескакивал вместо удержания `VDC2_KzFrame`.
+
+**Фикс:** в `Source/ASM/main.asm` правая kill-zone использует свой кадр до состояния GAMEOVER включительно (`CP 3`). В `Source/ASM/VDC.asm` задержка меню после полного исчезновения второй цепочки увеличена: `VDC_DUAL_LOSE_MENU_DELAY` 4 → 12. В `Source/OTHER/test_dual_chain_lose_absorb_z80.py` минимальная задержка после `len2=0` поднята до 12 кадров. Добавлен визуальный диагностический рендер `Source/OTHER/render_dual_chain_lose_absorb.py`, PNG-контакт-листы лежат в `Diagnostics/dual_lose_absorb/`.
+
+**Проверка:** `.\build.cmd` PASS, `Main1 size=16351`, свободно 33 байта. `python Source\OTHER\test_dual_chain_lose_absorb_z80.py` PASS: L05 `boundary=19 first_drop=27 dist=0 empty=54 dialog=78 delay=24`; L12 `boundary=19 first_drop=27 dist=3 empty=54 dialog=78 delay=24`; L19 `boundary=19 first_drop=27 dist=1 empty=54 dialog=78 delay=24`. `python Source\OTHER\render_dual_chain_lose_absorb.py` PASS: контакт-листы по L05/L12/L19 на 79 кадров, после кадра 55 `len2=0`, видимых шаров второй цепочки до меню нет. Также PASS: `check_memory_map.py`, `test_dual_chain_fastfill.py`, `test_dual_chain_tail_render.py`, `test_win_transition_z80.py`.
+
+**Образ:** выполнены `python Source\OTHER\inject_zuma_to_wc_img.py` и `python Source\OTHER\check_host_wc_img.py`, хеши в `wc.img` совпали. `ZUMA_VD2.SPG` SHA256 `4E1CD0D106280122AAA032922293196FE970B8C4A2E88325C882EBCD453C1338`; `ZUMAMAIN.PAK` SHA256 `D1444A725F2AAB81C7C65930B7AB694BAAC142BBAB241D1C0A9723A803B0FA99`; `ZUMALVL.PAK` SHA256 `76803269E6C34965950A23DBB2D6A059B80F776E6B34AC620E8D9B75D50D82E7`.
+## [2026-06-08] VDAC2 → VDAC2: сохранена опорная версия v066
+
+**Контекст:** пользователь подтвердил, что исправление lose-анимации второй цепочки работает. Текущая рабочая версия сохранена как опорная с исходниками.
+
+**Ссылки:** папка `releases/v066-2026-06-08-dual-chain-lose-kz-baseline/` содержит `Source`, `Build`, `Graphics`, `Sounds`, `Docs`, конфиги, `Чат.txt` и `REFERENCE.txt`. Отдельно рядом сохранены `v066-2026-06-08-dual-chain-lose-kz-baseline.spg`, `.zumamain.pak`, `.zumalvl.pak`, `.zumaaud.pak`, `.zumasnd.pak`.
+
+**Хеши:** `SPG` SHA256 `4E1CD0D106280122AAA032922293196FE970B8C4A2E88325C882EBCD453C1338`; `ZUMAMAIN.PAK` SHA256 `D1444A725F2AAB81C7C65930B7AB694BAAC142BBAB241D1C0A9723A803B0FA99`; `ZUMALVL.PAK` SHA256 `76803269E6C34965950A23DBB2D6A059B80F776E6B34AC620E8D9B75D50D82E7`; `ZUMAAUD.PAK` SHA256 `72EF97514A816962D725193DC27C3232373505C859362784C469A8CF057FB017`; `ZUMASND.PAK` SHA256 `8393DB5BB8EC2FDA98C970A3303C43BDEF86A5CA5B4CF09FF09F8FC0C53409DA`.
+2026-06-08: Разведены реальные цепочки Adventure и Gauntlet. Adventure стартует из главного меню напрямую по StageProgression, Gauntlet остается через выбор карты/ранга. Таблица цепочек вынесена в Build/level_chain_table.bin и SPG page #42; резолвер работает в loader overlay #40, чтобы Core page #05 не пересекала TrackData page #06. Проверки: build.cmd PASS, check_memory_map.py PASS, test_adventure_gauntlet_chains.py PASS, test_gameplay_level_load_ramg.py L01/L07 PASS, test_levelsel_transition.py PASS. SHA256 Build/zuma_vdac2.spg=745BA33D09B52EA723ADFB456F18942902221551E525D2F1306F38FA5884D7DE. build_wc_img.cmd остановился на существующей проверке ZiFi pack pipeline: A: L1 track mismatch.
+2026-06-08: Проверка после жалобы "Adventure опять позволяет выбрать уровень": кодовый маршрут Adventure в Source/ASM/MenuMain.asm уходит через FadeMenuToAdventure напрямую в Core.EnterGameplayForCurrentLevel, без LevelSelect. Причина наблюдаемого поведения была в старом host wc.img: build_wc_img.cmd остановился на постороннем тесте test_zifi_pipeline_python.py (A: L1 track mismatch) до обновления host-образа. Host wc.img обновлен вручную через Source/OTHER/inject_zuma_to_wc_img.py, затем Source/OTHER/check_host_wc_img.py подтвердил совпадение хэшей всех файлов. ZUMA_VD2.SPG SHA256: 745ba33d09b52ea723adfb456f18942902221551e525d2f1306f38fa5884d7de.
+2026-06-08: По требованию "Все ЛКМ/ПКМ только через input.asm" убраны прямые вызовы Input.Mouse.KeyState из Frog.asm, MenuMain.asm, LevelSelect.asm и main.asm. Теперь игровые/UI-модули читают ЛКМ только через Input_MouseLMB / Core.Input_MouseLMB; прямой SVK_LBUTTON остается только внутри Source/ASM/Input.asm как низкоуровневый слой. Заодно сохранена правка HUD MENU: состояние ЛКМ трактуется единообразно 0=released, 1=pressed, что устраняет ложный/зависший вход в pause/menu path. Проверки: rg прямого mouse key state показывает только Input.asm; build.cmd PASS; check_memory_map.py PASS; host wc.img обновлен и check_host_wc_img.py подтвердил hash_match=True для всех файлов. ZUMA_VD2.SPG SHA256: c2b94b982088ca27d34be0331b12fdef4f463ffef504ceacaa589def100a0507.
+2026-06-08: Жалоба "зависает даже посреди игры". В MainLoop.asm убран вечный wait по FT_INT_SWAP в основном игровом кадре: потерянный swap interrupt edge на железе мог заморозить игру посреди уровня. Также ZL_FT_CMD_DMA_ENABLED переключен в 0, игровой кадр снова пишет FT812 command buffer через PIO FT_CMD_Write вместо TS-Config DMA_RAM_SPI, чтобы исключить зависание на DMASTATUS wait_full/wait_tail. Это компактная правка под жесткий лимит gameplay overlay: Main1 free 47 bytes после сборки. Проверки: build.cmd PASS; check_memory_map.py PASS; host wc.img обновлен; check_host_wc_img.py подтвердил hash_match=True для всех файлов. ZUMA_VD2.SPG SHA256: ed82b2270261839882c4eeba3a264850ecc0df23f27b7a5eef4436a9e7bef86d.
+2026-06-08: Повторная жалоба "зависает" после отключения FT_INT_SWAP/DMA. Дополнительно изменен gameplay submit path в Source/ASM/MainLoop.asm: DLSWAP больше не ждет в вечном цикле, если предыдущий swap pending — кадр пропускает только отправку FT812 и продолжает Z80 loop через .SkipFtSubmit. Убран явный CALL FT.Coprocessor.WaitFlush после игрового FT_CMD_Write. Важно: сам макрос FT_CMD_Write все еще вызывает FT.Coprocessor.Write, поэтому это A/B для DLSWAP/WaitFlush, не финальное исключение всех FT812-poll. Проверки: build.cmd PASS; check_memory_map.py PASS (Main1 free=50 bytes); host wc.img обновлен; check_host_wc_img.py hash_match=True. ZUMA_VD2.SPG SHA256: 0315bba01fdac5e3ddfd516c1bcb70a99dda9f4a32697c1e00b56350d0728f3a.
+2026-06-08: Жалоба "дёргается и зависает" после A/B с мгновенным skip DLSWAP. Этот A/B признан плохим: постоянный skip pending swap давал визуальный jerk и не убрал freeze. В MainLoop.asm сделана новая версия gameplay submit: DLSWAP ждет bounded 32 попытки, не бесконечно; вместо FT_CMD_Write используется ZL_FT_CMD_Write_Bounded, который bounded 32 попытки проверяет FT_REG_CMDB_SPACE и напрямую вызывает FT.WriteMem в FT_REG_CMDB_WRITE без бесконечного FT.Coprocessor.Write/WaitFlush polling. Старый ZL_FT_CMD_Write_DMA теперь собирается только при ZL_FT_CMD_DMA_ENABLED=1, в текущем build его нет. Проверки: build.cmd PASS; check_memory_map.py PASS (Main1 size=16272, free=112); Build/zuma.sym содержит ZL_FT_CMD_Write_Bounded и не содержит ZL_FT_CMD_Write_DMA; host wc.img обновлен; check_host_wc_img.py hash_match=True. ZUMA_VD2.SPG SHA256: 8ca8b96953ebd85e373cd42da27b84e5c406484ce9a5b7170a9ba6d17d273143.
+2026-06-08: Повторная жалоба "зависает" после bounded FT812 submit. Добавлен recovery: MainLoop теперь считает подряд неудачные gameplay submit (DLSWAP timeout или ZL_FT_CMD_Write_Bounded CF). После 8 подряд fail вызывается FT_CMD_RESET: REG_CPURESET=1, CMD_READ/CMD_WRITE=0, REG_CPURESET=0, затем игровой цикл продолжается. Цель: если экран замирает из-за застрявшего FT812 command FIFO/coprocessor, не оставлять игру в вечном frozen frame, а soft-resetнуть coprocessor без перезапуска уровня. Проверки: build.cmd PASS; check_memory_map.py PASS (Main1 free=37 bytes); Build/zuma.sym содержит ZL_FtSubmitFailed/ZL_FtSubmitFailCount; host wc.img обновлен; check_host_wc_img.py hash_match=True. ZUMA_VD2.SPG SHA256: 9f512b2b8ab5ae194c4df69340f156c8b805a0ea0af7665765daaf73c972ffa7.
+2026-06-08: После вопроса "Так что с Adventure и Gauntlet" и жалобы "зависает" проверен именно переход Adventure/Gauntlet, без изменений gameplay submit/render. Тест Source/OTHER/test_adventure_gauntlet_chains.py PASS. Найдено хрупкое место в EnterGameplayForCurrentLevel: после SetPage3 #04 код сразу писал LD (CurrentCodePage), A, полагаясь на side-effect macro SetPage3. Macro объявляет A как corrupt; в варианте MAPPING_REGISTERS A не обязан быть #04. Исправлено явно: после SetPage3 #04 добавлено LD A,#04 перед LD (CurrentCodePage), A. Это влияет на восстановление slot3 shared-декомпрессорами при загрузке gameplay. Проверки: build.cmd PASS; test_adventure_gauntlet_chains.py PASS; check_memory_map.py PASS; host wc.img обновлен; check_host_wc_img.py hash_match=True. ZUMA_VD2.SPG SHA256: ef525ee4756516f80fc85537dbde99174aaff8cbecb0730c17b199909113c192.
+2026-06-08: Исправлено "меню открывается при наведении курсора, а не при нажатии Fire". Причина: реальный VDAC2/Kempston mouse для ЛКМ дает флаги инверсно к ожидаемому TSLib-комменту, из-за чего UpdateHudMenuCore видел hover/released как pressed. Исправлено только в Source/ASM/Input.asm: Input_MouseLMB теперь нормализует внешний контракт Z=released, NZ=pressed через CP Input.Mouse.SVK_LBUTTON; Input_Fire проваливается в Input_MouseLMB. Все остальные модули продолжают читать ЛКМ только через Input_MouseLMB/Core.Input_MouseLMB. Проверки: rg прямого Input.Mouse.KeyState вне Input.asm нет; build.cmd PASS; check_memory_map.py PASS; test_adventure_gauntlet_chains.py PASS; host wc.img обновлен; check_host_wc_img.py hash_match=True. ZUMA_VD2.SPG SHA256: 82560939b7e3b27d2c44e4d769167b06a73bd5f09d746c447bb9dd34a3f15266.
+
+2026-06-08: Увеличена глобальная скорость игры в 2 раза. Сделано через генератор Source/OTHER/make_level_runtime_table.py: speed_x100 теперь записывается в runtime-таблицу как значение из XLSX * 2 с ограничением 255. MainLoop, FT812 submit, обработка ЛКМ/ПКМ и игровой цикл не менялись. Проверки: build.cmd PASS; check_memory_map.py PASS (Main0_Size=9210, Main1 free=37); test_adventure_gauntlet_chains.py PASS; образ \\tsclient\D\Работа.Андрей\unreal_x64\wc.img обновлён и проверен check_host_wc_img.py PASS. ZUMA_VD2.SPG SHA256=be61d22a75a9ec73972051ae5b9d048833128a746701f85fda82751c985f3411.
+
+2026-06-08: После проверки пользователем оказалось, что изменение скорости было незаметно. Причина: предыдущий патч ускорял normal-фазу через speed_x100, но стартовая fast-фаза цепочки использовала отдельную константу VDC_FAST_ADVANCE. Исправлено: Source/ASM/VDC.asm VDC_FAST_ADVANCE увеличен с 12 до 24; Source/OTHER/vdc_visual_emulator.py FAST_ADVANCE также 24 для соответствия ASM. Удвоение speed_x100 в runtime-таблице сохранено. MainLoop, FT812 submit и ввод не менялись. Проверки: build.cmd PASS; check_memory_map.py PASS (Main0_Size=9210, Main1 free=37); test_adventure_gauntlet_chains.py PASS; образ \\tsclient\D\Работа.Андрей\unreal_x64\wc.img обновлён и проверен check_host_wc_img.py PASS. Установленный ZUMA_VD2.SPG SHA256=0b2c7d2af04d5f9a13a9775e05f4dea35408ff367a5cfdb40283b1414c3b0fbc.
+
+2026-06-08: Пользователь подтвердил, что ускорился только влёт цепочки, а постоянное движение цепочки не изменилось заметно. Исправлено normal-движение: в Source/ASM/main.asm VDC_SpeedAdvance порог аккумулятора изменён с 100 на 50 и вычитание с 100 на 50, без увеличения размера кода. Это ускоряет именно постоянное движение цепочки после fast-фазы. Предыдущие изменения сохранены: speed_x100 в runtime-таблице умножается на 2, VDC_FAST_ADVANCE=24 для влёта. MainLoop, FT812 submit и ввод не менялись. Проверки: build.cmd PASS; check_memory_map.py PASS (Main0_Size=9210, Main1 free=37); test_adventure_gauntlet_chains.py PASS; образ \\tsclient\D\Работа.Андрей\unreal_x64\wc.img обновлён и проверен check_host_wc_img.py PASS. Установленный ZUMA_VD2.SPG SHA256=205f2fcfcb3d8afdd28fa7330387a25e5d2dfb89ff31b88af078d11bb1b11c61.
+
+2026-06-08: Пользователь снова не заметил увеличения скорости постоянного движения цепочки. Предыдущие попытки меняли частоту вызова VDC_MoveChain через speed_x100/порог аккумулятора и VDC_FAST_ADVANCE, но реальный визуальный шаг цепочки задаётся внутри VDC_MoveChain как изменение HSub. Исправлено чисто: Source/ASM/VDC.asm добавлен VDC_MOVE_STEP=2, VDC_MoveChain теперь делает HSub += 2 с сохранением остатка при wrap (например 31 -> 1 и HSA++). Предыдущие экспериментальные множители откатены к базовым: VDC_FAST_ADVANCE=12, speed_x100 в runtime-таблице без *2, VDC_SpeedAdvance снова порог 100/вычитание 100. Source/OTHER/vdc_visual_emulator.py синхронизирован: MOVE_STEP=2, FAST_ADVANCE=12. Добавлен тест Source/OTHER/test_chain_move_step_z80.py: проверяет машинный код VDC_MoveChain, HSub 0->2 и 31->1 с HSA++. Проверки: build.cmd PASS; test_chain_move_step_z80.py PASS; check_memory_map.py PASS (Main0_Size=9210, Main1 free=35); test_adventure_gauntlet_chains.py PASS; образ \\tsclient\D\Работа.Андрей\unreal_x64\wc.img обновлён и проверен check_host_wc_img.py PASS. Установленный ZUMA_VD2.SPG SHA256=15af61658d92bd8fd3d6c96cfda844c08115320b63167a6212ff508b8f5f10cb.
+
+## [2026-06-09] VDAC2 ↔ VDC: VDC_GLOBAL_SPEED_FACTOR — чистый множитель скорости цепочки
+
+**Контекст (VDAC2):** Предыдущая сессия добавила VDC_MOVE_STEP=2 (шаг HSub += 2 вместо INC). Это вызвало «дёргания и цмыканья»: цепочка прыгает на 2 sample (≈2.16 px) каждые 2 кадра вместо 1 sample (≈1.08 px) — визуально заметные скачки. Decay-анимации (DECAY_NEG=2, DECAY_POS=1) откалиброваны под шаг=1, т.е. после вставки шара вся анимация рассогласовывалась с движением.
+
+**Root-cause дёрганий:** большой шаг MoveChain. Увеличение скорости через шаг (MOVE_STEP) неизбежно создаёт рассогласование с decay-анимациями, которые работают в кадрах, а не в sample-шагах.
+
+**Правильная механика ускорения:** удвоить кол-во вызовов SpeedAdvance/MoveChain за кадр, не размер одного шага.
+
+**Решение (введено в VDC.asm):**
+```
+VDC_GLOBAL_SPEED_FACTOR EQU 2   ; 1=оригинал (~0.5 px/frame), 2=вдвое
+```
+- VDC_MoveChain: возврат к `INC A` (шаг всегда = 1 sample, плавно)
+- Fast phase: `LD B, VDC_FAST_ADVANCE * VDC_GLOBAL_SPEED_FACTOR` (12→24 при FACTOR=2)
+- Normal phase (обе цепочки): два `CALL VDC_SpeedAdvance` за кадр при FACTOR≥2 (через `IF VDC_GLOBAL_SPEED_FACTOR >= 2`)
+- Аккумулятор SpeedAdvance (порог 100) правильно сохраняет пропорции скоростей между уровнями
+
+**Проверено:** build.cmd PASS, 0 ошибок сборки, Main1 size=16353 (аналогично v066).
+
+**Применимо в VDC:** Та же механика — если нужно изменить скорость VDC-цепочки, вводить GLOBAL_SPEED_FACTOR через кол-во вызовов MoveChain/SpeedAdvance за кадр. Не менять шаг HSub — это ломает пропорции decay.
+
+---
+
+## [2026-06-09] VDAC2 → VDC: СПРАВОЧНИК — как правильно настраивать скорость игры
+
+### Архитектура скорости (VDAC2)
+
+Движение цепочки складывается из двух режимов:
+
+**Fast phase** (первые N шаров, «влёт поезда»):
+- `VDC_BallsSpawned < VDC_LevelStart` (= `VDC_LEVEL_START_BALLS EQU 35`)
+- Каждый кадр: `VDC_MoveChain` вызывается `VDC_FAST_ADVANCE * VDC_GLOBAL_SPEED_FACTOR` раз подряд
+- При `FACTOR=2, FAST_ADVANCE=12`: 24 вызова/кадр × 1 sample/вызов = 24 sample/кадр ≈ 26 px/кадр
+- Spawn без HSub-gate (`VDC_TrySpawn_NoHsubGate`)
+
+**Normal phase** (всё время после влёта):
+- `VDC_SpeedAdvance` вызывается `VDC_GLOBAL_SPEED_FACTOR` раз за кадр
+- Каждый вызов: `accum += speed_x100`; если `accum ≥ 100` → один `VDC_MoveChain`, `accum -= 100`
+- `speed_x100` берётся из `LevelSettingsTable` (первый байт), типичные значения: 50..100
+- При `speed_x100=50, FACTOR=2`: 1 `MoveChain`/кадр = 1 sample/кадр ≈ 1.08 px/кадр
+- При `speed_x100=75, FACTOR=2`: в среднем 1.5 `MoveChain`/кадр (аккумулятор сохраняет пропорции)
+- Spawn с HSub-gate (спавн только при `HSub==0`, т.е. раз в `CELL_SIZE=32` кадра)
+
+**`VDC_MoveChain`**: шаг всегда = **1 sample**. `HSub` 0→31→0 (wrap), при wrap `HSA++`. Не трогать шаг.
+
+---
+
+### Единственная ручка настройки скорости
+
+```asm
+; В VDC.asm, в разделе EQU-констант:
+VDC_GLOBAL_SPEED_FACTOR EQU 2    ; 1=оригинал v066, 2=вдвое, 4=вчетверо
+```
+
+Это **единственное**, что нужно менять. Оба механизма (fast/normal) масштабируются автоматически.
+
+| FACTOR | Normal speed (speed_x100=50) | Fast phase (FAST_ADVANCE=12) |
+|--------|------------------------------|-------------------------------|
+| 1      | 0.5 sample/кадр (~0.54 px)  | 12 sample/кадр (~13 px)      |
+| 2      | 1.0 sample/кадр (~1.08 px)  | 24 sample/кадр (~26 px)      |
+| 4      | 2.0 sample/кадр (~2.16 px)  | 48 sample/кадр (~52 px)      |
+
+> **Референс HD**: оригинальная Zuma 1280×720 при 60fps ≈ 1.0 px/frame в normal-phase. VDAC2 масштаб ~0.5× → целевая скорость ≈ 0.5–1.0 px/frame. `FACTOR=2` попадает в диапазон.
+
+---
+
+### Что НЕ трогать
+
+| Параметр | Почему не трогать |
+|----------|-------------------|
+| `VDC_MOVE_STEP` / шаг `INC A` в MoveChain | Шаг > 1 → прыжки > 1px за раз → видимые дёргания. Decay-анимации (DECAY_NEG/POS) работают в кадрах и рассогласуются |
+| `VDC_DECAY_NEG EQU 2` / `VDC_DECAY_POS EQU 1` | Анимация вставки шара и каскадного отката. Визуально откалиброваны под 60fps. Менять только если хочется изменить «ощущение» анимации, не скорость движения |
+| Порог `CP 100` в `VDC_SpeedAdvance` | Меняет только нормальную фазу, не fast-phase → скорости рассогласуются. Без GLOBAL_SPEED_FACTOR не масштабирует обе фазы вместе |
+| `speed_x100` в `LevelSettingsTable` | Это данные из HD-референса (50=легко, 100=макс). Умножение в таблице ломает относительные пропорции уровней и выходит за byte-диапазон при высоких уровнях |
+
+---
+
+### Где лежит код (VDAC2)
+
+- `Source/ASM/VDC.asm` строки ~31–37: все EQU-константы скорости
+- `Source/ASM/VDC.asm` `VDC_Update` / `.upd_normal_go`: normal + fast phase chain1
+- `Source/ASM/VDC.asm` `VDC_UpdateActiveChainPlayOnly` / `.upd2_normal`: то же для chain2 (dual-chain)
+- `Source/ASM/main.asm` `VDC_SpeedAdvance`: Core-резидентный аккумулятор (там не нужно ничего менять)
+- `Source/ASM/level_runtime_table.inc`: таблица `speed_x100` по уровням (генерируется `make_level_runtime_table.py`)
+
+
+---
+
+## [2026-06-09] VDAC2 → VDC: СПРАВОЧНИК — hover главного меню (мышь + клавиатура совместно)
+
+### Проблема
+
+Меню поддерживает два способа навигации: мышь и клавиатура (↑↓ + Fire). При совместном использовании возникали два дефекта:
+
+1. **Hover не переносился:** мышь наводилась на Gauntlet, но `MenuSelection` оставался на Adventure (дефолт). При уходе мыши Adventure снова подсвечивалась, игнорируя, где была мышь.
+2. **Двойная подсветка:** мышь на Options/Quit (не-навигируемые кнопки) → `MenuHighlightSelection` подсвечивала старый `MenuSelection` (Adventure/Gauntlet) одновременно с мышиным hover → две кнопки светились сразу.
+
+### Root-cause двойной подсветки
+
+`MenuUpdateButtons` сбрасывает все `MenuButtonState*` в 0 каждый кадр, потом ставит состояние только для кнопки под мышью. `MenuHighlightSelection` проверяла **только кнопку `MenuSelection`** — и если мышь была на **другой** кнопке (Options), `MenuSelection`-кнопка оставалась с state=0, и highlight добавлялся поверх мышиного.
+
+### Решение (MenuMain.asm)
+
+**1. Синхронизация `MenuSelection` от мыши** — в конце `MenuUpdateButtons`, после всех `MenuCheckButton`:
+```asm
+; Если мышь на навигируемой кнопке — обновить MenuSelection
+LD A, (MenuButtonStateAdventure) : OR A : JR Z, .ms_gaunt
+XOR A : LD (MenuSelection), A : JR .ms_done   ; 0=Adventure
+.ms_gaunt: LD A, (MenuButtonStateGauntlet) : OR A : JR Z, .ms_more
+LD A, 1 : LD (MenuSelection), A : JR .ms_done ; 1=Gauntlet
+.ms_more:  LD A, (MenuButtonStateMore) : OR A : JR Z, .ms_done
+LD A, 2 : LD (MenuSelection), A               ; 2=More
+.ms_done:
+```
+Для не-навигируемых (Options, Quit) — `MenuSelection` не трогается. При уходе мыши хранит последний hover.
+
+**2. Keyboard hover только когда мышь нигде** — `MenuHighlightSelection` сначала проверяет все 5 state-байт подряд:
+```asm
+MenuHighlightSelection:
+    LD HL, MenuButtonStateAdventure
+    LD B, 5
+.any_hover:
+    LD A, (HL) : OR A : RET NZ   ; мышь на кнопке — не добавляем keyboard hover
+    INC HL : DJNZ .any_hover
+    ; мышь нигде — подсветить MenuSelection
+    LD A, (MenuSelection)
+    OR A : JR NZ, .hs_not0
+    LD A, 1 : LD (MenuButtonStateAdventure), A : RET
+.hs_not0: CP 1 : JR NZ, .hs_not1
+    LD A, 1 : LD (MenuButtonStateGauntlet), A : RET
+.hs_not1: CP 2 : RET NZ
+    LD A, 1 : LD (MenuButtonStateMore), A : RET
+```
+
+### Итоговое поведение
+
+| Ситуация | Что подсвечено |
+|----------|---------------|
+| Мышь на Adventure | Adventure (и MenuSelection=0) |
+| Мышь на Gauntlet | Gauntlet (и MenuSelection=1) |
+| Мышь на Options | Options (MenuSelection не меняется) |
+| Мышь ушла со всех кнопок | Последний MenuSelection |
+| Только клавиатура | MenuSelection (Adventure по дефолту) |
+
+### Применимо в VDC
+
+Та же схема если появится мышь + клавиатура в VDC-меню: синхронизировать «keyboard cursor» от hover мыши, и keyboard highlight показывать только когда мышь вне всех кнопок.
+
+## [2026-06-09 17:39] VDAC2 → VDC: рефактор на 1024×768 — архитектура чистого ×1.6 апскейла
+**Контекст:** начат порт рендера с 640×480 на 1024×768@59Hz (TSLib `VM_1024_768_59Hz`, PCLK 64MHz). 1024×768 = ровно ×1.6 от 640×480 (8:5) → идеальный NEAREST. Ключевые архитектурные решения:
+
+1. **Метод апскейла — НЕ snapshot, а по-слойный matrix+NEAREST.** FT81x не имеет глобального scanout-скейлера. `CMD_SNAPSHOT2` suspend'ит вывод каждый кадр + требует ~600КБ RAM_G (в gameplay RAM_G занят полностью до #100000) → не годится. Вместо этого нативный вывод 1024×768, каждый DL-слой масштабируется через bitmap-матрицу + `FT_BitmapSize` (он сам эмитит BITMAP_SIZE_H для width>511). Фон: scale 400→1024 = ×2.56 (f16.16 `#00028F5C`).
+
+2. **Позиции шаров — через track LUT, БЕЗ изменения физики.** Гейм-логика остаётся в 640-пространстве. Трек ресэмплится по arc-length с шагом 1px (samples = длина в px, CELL_SIZE=32 = шары через 32 сэмпла). Если регенерировать track LUT, умножив выходные X/Y ×1.6 при ТОМ ЖЕ числе сэмплов, позиции шаров выходят в 1024-пространстве бесплатно, а скорость (сэмплы/кадр) и CELL_SIZE (сэмплы) НЕ меняются → feel идентичен. Tangent инвариантен к равномерному масштабу. Per-ball runtime-умножение ×1.6 НЕ нужно (было бы слишком дорого для CPU/FIFO).
+
+3. **Связанная зависимость:** коллизия пули с шаром потребляет X/Y в том же пространстве → радиусы/пороги в Bullet.asm тоже ×1.6 (compile-time константы, не per-frame).
+
+4. **Анимация шаров:** снимаются оба гейта (`ZL_HasTopMaskLevel` и `ZL_HeavyTunnelDual`+≥70) — полная spin+rotation на всех уровнях.
+
+**Сделано:** Init_Video → VM_1024_768_59Hz; фон ×2.56; ZL_SCR_W/H=1024/768. Сборка зелёная.
+
+**Применимо ли в VDC (360×288 нативный):** метод track-LUT scaling универсален — если в VDC захочется сменить разрешение, масштабировать координаты в track-генераторе при том же числе сэмплов, не трогая physics-константы (скорость/CELL_SIZE в сэмплах). Это сохраняет всю калибровку скорости/decay.
+
+**Побочно:** pre-existing баг — `make_level_pack.py` падает в cp1251-консоли на символе `×` (U+00D7). Обход: `set PYTHONIOENCODING=utf-8`. Стоит заменить `×` на `x` в print'ах.
+
+**Ссылки:** Source/ASM/Init_Video.asm:59, Source/ASM/MainLoop.asm (ZL_BG_SCALE/ZL_BG_DRAW_*), Source/OTHER/make_track_640.py, memory `res-1024x768-upscale-refactor`.
+
+## [2026-06-09 17:58] VDAC2 → VDC: 1024 рефактор — снятие аним-гейтов + паттерн scale матрицы шара
+**Контекст:** продолжение порта на 1024×768. Готово (build зелёный, Errors:0):
+1. Track LUT ×1.6 — единой точкой в `make_level_pack.py:scale_track_samples()` (×8/5 при упаковке в PAK). Source-бины 640 не тронуты → byte-for-byte тесты целы. Сэмплов столько же → физика/tangent не меняются.
+2. Сняты ОБА аним-гейта в MainLoop.asm (pre-pass spin + per-ball rotation). `ZL_HasTopMaskLevel`/`ZL_HeavyTunnelDual` ещё ставятся (нужны top-mask рендеру), но анимацию не глушат → spin+rotation на всех уровнях. Main1 16304 байт (−49 от v067).
+
+**Паттерн (применим в VDC при смене размера спрайта через BITMAP_TRANSFORM LUT):**
+Чтобы апскейлить вращающийся спрайт ×k, НЕ трогая позиционирование: в pre-baked матрице (BITMAP_TRANSFORM_A..F, screen→UV inverse) умножить ТОЛЬКО A,B,D,E на s=1/k (= atlas/draw). Трансляция C/F остаётся БЕЗ изменений, потому что s·(draw/2)=atlas/2=UV-center → fixed-point трансляции инвариантен к равномерному scale при пивоте в центре. Т.е. один множитель в генераторе LUT (`make_chain_matrix_lut.py`), C/F не пересчитывать. BITMAP_SIZE→draw, VERTEX2F HALF→draw/2.
+
+**Применимо ли в VDC:** VDC на TSU layers, не FT81x BITMAP_TRANSFORM — прямого аналога нет. Но идея «scale только линейную часть матрицы, трансляция инвариантна при центральном пивоте» универсальна для любой 2D affine.
+
+**Осталось (геометрия, выверять на эмуляторе):** размер шара/frog/killzone, frog/cursor center (320/240→512/384), bullet collision radius ×1.6, рамки/HUD/меню ×1.6, бюджет FT812 при 1024.
+
+**Ссылки:** Source/OTHER/make_level_pack.py, Source/ASM/MainLoop.asm, Source/OTHER/make_chain_matrix_lut.py, memory `res-1024x768-upscale-refactor`.
+
+## [2026-06-09 19:30] VDAC2 → VDC: 1024×768 — геймплей+рамки в 1024, техника освобождения кода
+**Сделано (инжект в хост wc.img, build зелёный):** всё ядро геймплея ×1.6 — шар 51px (matrix LUT scale), frog тело/язык/тарелка/overlay 195px (cmd_scale через Frog_EmitUpscale16), held/next/killzone/пуля 51px, destroy 77px, позиции frog/kz (таблица ×1.6), курсор/коллизия/скорость ×1.6, рамки 1024×768. Полная анимация на всех уровнях.
+
+**Техника освобождения кода (резидентные страницы были полны):**
+1. Удалить мёртвый код: `ZL_DrawActiveChainSimple` (~120 байт Main1, 0 вызовов) + дубль `LevelSelectApplyLevelClick` в level_runtime_table.inc (живая версия в LevelSelect.asm:286; page-0 копия мёртвая, ~40 байт).
+2. cmd_scale(1.6) — ОДИН резидентный helper `Frog_EmitUpscale16` (module Core, #04), зовётся отовсюду через `Core.` (во время gameplay #04 замаплен). +3 байта/сайт вместо инлайна FT_CMD_BUF (~78).
+3. Из page-0 (slot 0, полна до #4000 — там TSLib + Log + level_runtime_table.inc) scale-код не влезал; разгрузили удалением мёртвого дубликата → 42 байта → хватило на scale рамок.
+
+**Применимо в VDC:** при нехватке резидентного кода — искать мёртвые дубли (одинаковые имена в .inc и .asm, живёт ближайшая к вызову), общий scale-helper вместо инлайна.
+
+**Осталось:** HUD (жизни/прогресс/меню-кнопка/счёт) — atlas-vs-draw split, scale-матрицы, scissor в screen-space ×1.6, hit-box мыши ×1.6, шрифт счёта. Опционально: вынос level_runtime_table.inc в load-time оверлей (метаданные нужны только на загрузке, кэш текущего уровня резидентно) — освободит page 0 капитально.
+
+## [2026-06-09 21:00] VDAC2 → VDC: 1024×768 порт — статус, корень бага cmd_scale, остаток
+**ГОТОВО (build зелёный, инжект в хост wc.img, проверено на эмуляторе):**
+- Разрешение 1024×768@59Hz (Init_Video VM_1024_768_59Hz). Фон ×2.56 на весь экран.
+- Трек ×1.6 (make_level_pack.scale_track_samples ×8/5 при упаковке; source-бины 640 не тронуты). Полная анимация шаров на всех уровнях (оба гейта сняты).
+- Шары цепи 51px (chain_matrix_lut.bin: A,B,D,E×(32/51), C/F без изм). Killzone 141px, destroy 77px, пуля 51px/speed19/коллизия×1.6 — все через scale-about-origin (loadid+cmd_scale+setmatrix) ИЛИ запечённую матрицу. Рамки 1024×768 (перенесены в #04? нет — в page 0, scale через Core.Frog_EmitUpscale16). Курсор 38px (своя scale-матрица + reset). Часы в нижний-левый угол.
+- Позиции frog/kz: level_runtime_table.inc DW ×8/5 (22 уровня) + генератор make_level_runtime_table.py.
+- Освобождение кода: удалён мёртвый ZL_DrawActiveChainSimple (~120б Main1) + дубль LevelSelectApplyLevelClick из .inc (~40б page0).
+
+**КОРЕНЬ БАГА (критично, применимо в VDC):**
+`cmd_scale` НЕ компонуется в цепочке `cmd_translate+cmd_scale+cmd_rotate` одной матрицы — scale теряется, спрайт рисуется native-размером внутри увеличенного BitmapSize-rect → BORDER-кайма (выглядело как cyan-бокс вокруг frog). РАБОТАЕТ только: (1) cmd_scale СОЛО = scale-about-origin (loadid+scale+setmatrix; так сделаны фон/рамки/killzone/destroy/курсор/пуля — для axis-aligned спрайтов без вращения, позиция через vertex top-left); (2) ЗАПЕЧЁННАЯ BITMAP_TRANSFORM A..F (make_chain_matrix_lut.py — для вращающихся: шары). Helper `Frog_EmitUpscale16` (Frog.asm, module Core) эмитит cmd_scale(1.6,1.6), зовётся отовсюду через Core. (во время gameplay #04 замаплен).
+
+**ОСТАЛОСЬ (для следующей сессии):**
+1. Frog ТЕЛО/язык/тарелка/overlay — откачены к native 122px (НЕ битые, просто без ×1.6). Фикс: запечённая A..F со сглаженным углом (как ball LUT, pivot=61, scale=0.625=122/195). Inline cos/sin (Frog_SinTable ×127 → A=cos×160/127, C/F=61×256×(1-cos∓sin) в Q23.8). НЕ через cmd-цепочку. Константы FROG_SPR_DRAW=195/SCR_HALF=98/FROG_UPSCALE уже заведены, но USAGE откачен.
+2. Frog HELD ball (рот, Frog_DrawBallNow) — недомасштабирован: FROG_BALL_DST_W=51 стоит, но проверить матрицу (ZL_EmitBallMatrixFromBRAD?). NEXT ball (спина, Frog_DrawNextBall) — юзер разрешил оставить native.
+3. HUD верхней строки: счёт (DrawScore24)/жизни (DrawLivesCounter LIFE_*)/прогресс (DrawHudProgress, scissor в SCREEN-space ×1.6!)/кнопка MENU (DrawHudMenu, hit-box мыши ×1.6) — все в 640-координатах. atlas-vs-draw split + позиции ×8/5.
+4. Финальное (win) меню — отдельная сцена, не масштабирована.
+
+**Гочи:** page 0 (slot 0) и Core почти полны — добавочный scale-код требует освобождения (мёртвые дубли, или вынос level_runtime_table.inc в load-time оверлей с резидентным кэшем текущего уровня). FT_CMD_BUF инлайн ~26б — использовать общий helper. memory: res-1024x768-upscale-refactor.
+
+## [2026-06-10] VDAC2 → VDC: frog-тело ×1.6 через Python-валидированную запечённую матрицу
+**Метод (по совету юзера): сначала Python-модель, отладить, потом ASM.**
+- `Source/OTHER/sim_frog_matrix.py` — FT81x-сэмплер (u=(A·sx+B·sy+C)>>8) + float/целочисленная матрицы, рендер-сравнение (row native/float/int). Подтвердило корректность ДО ASM.
+- cmd_scale НЕ компонуется в translate+scale+rotate → матрицу A..F эмитим напрямую (как ball LUT). `Frog_EmitFrogMatrix` (Frog.asm): cos/sin из 256-записной signed Frog_SinTable (Frog_LookupSin даёт signed напрямую), A=E=cos·1.25 (=cos+cos>>2, scale 0.617), B=sin·1.25, D=-B, C=15616-(cos+sin)·123, F=15616-(cos-sin)·123 (15616=61·256, 123≈61·256/127, через сдвиги). Emit op 0x15/16/17/18/19/1A через Command_BCDE (17-bit A/B/D/E, 24-bit C/F). Тело/язык/тарелка/overlay — все на этой матрице. draw=195, vertex centre=98.
+- Main1 был полон: освободил убрав избыточные reset-матрицы между frog-слоями (каждый слой ставит свою матрицу; курсор тоже self-reset).
+
+**Применимо в VDC:** для масштаб+поворот спрайта на FT81x — только запечённая матрица A..F (cmd-цепочка scale+rotate не работает). Отлаживать математику в Python-сэмплере до ASM.
+
+**Осталось 1024-порта:** HUD верхней строки (счёт/жизни/прогресс/MENU-кнопка — 640-координаты, scissor прогресс-бара в screen-space), финальное (win) меню. Frog held-ball проверить (FROG_BALL_DST_W=51).
+
+## [2026-06-10] VDAC2 → VDC: 1024-порт — win-взрыв, диалоги, sparkles, intro-текст (всё в образе)
+**Сделано (build зелёный, инжект):**
+- WIN-взрыв ×1.6: общий helper `ZL_EmitScale16Matrix` (loadid+cmd_scale(1.6)+setmatrix, MainLoop) — курсор/destroy/win через него; ZL_WINEXP_DRAW 80→128, XOFF/YOFF ×1.6. Частицы уже в 1024 (координаты с трека).
+- Диалоги retry+pause ПОЛНОСТЬЮ ×1.6 почти без кода: scale-матрица ставится в MainLoop перед CALL DrawRetryDialog (+3б), ВСЕ позиции (рамка 192/122, draw 640×523, DLG_*/PAUSE_* текст, OK 480×54, hit-box'ы мыши) — пересчитаны в EQU (0 байт). Центрирование title: центр 512, экранная полуширина = W×4/5 (глифы рисует матрица). Найден и удалён мёртвый дубль LD HL,320 (−6б page0).
+- Sparkles превью ×1.6 (24→38, своя scale-матрица — позиции с трека 1024).
+- Intro «LEVEL N-M» + название уровня: right-align математика в 640-логике СОВМЕСТИМА со scale-матрицей (x640=610−W ↔ экран 976−1.6W — потому что обе части ×1.6) → просто HudScaleXTo16 (готовый helper ×8/5×16) вместо ×16, Y — EQU-выражение ×8/5. Глифы ×1.6 матрицей.
+- HUD-раунд ранее: жизни 32px, прогресс 101×30 (fill-математика в экранных px), MENU 126×42+hit, часы возвращены (БАГ: FT_ScissorSize 640,480 в конце DrawHudProgress клипал ВЕСЬ экран ниже 480 — теперь 1024,768; scissor персистентен в DL!), орбита held-ball 24→38, мышь delta ×1.5 (4 ветки TSLib UpdateMouseState).
+
+**Паттерн для VDC:** если весь UI-слой позиционируется EQU-константами — масштаб сцены = 1 матрица + пересчёт EQU, ноль роста кода. Центрирование/right-align при UV-scale матрице: считать в исходной логике и масштабировать РЕЗУЛЬТАТ (x_old ↔ x_new связаны ×k только если right/center тоже ×k).
+
+**Осталось:** space-звёзды (mod 640 → 1024-поле, ZL_ReduceHLMod640), gauntlet-экраны?, boot-экран (субагент в worktree работает). Top-mask тоннелей уже ок (make_top_mask_overlays.py содержит vertex ×8/5, UV через ZL_BG_SCALE=2.56).
+
+## [2026-06-10] VDAC2 → VDC: 1024-порт, сессия 2 — статус и точный план продолжения
+**ЗАКРЫТО (в образе на хосте):**
+- Lose-абсорб chain2: код БЫЛ верен (KZ_SPR_HALF=70 везде, вкл. VDC.asm:326 VDC2). Ложный FAIL давал тест test_dual_chain_lose_absorb_z80.py (хардкод +44) — обновлён на +70 → PASS L05/L12/L19, drop_dist=0..3. Юзер видел смещение дырки +26 на билде ДО KZ_SPR_HALF-фикса.
+- Тоннельные виснут на испорченном звуке: КОРЕНЬ = переполнение Z80 CMD-буфера кадра: регион #5010..#5C00 = ВСЕГО 3056 байт, дальше Core-код (затирается!). FT.Coprocessor.Write ЧАНКОВАННЫЙ (ждёт CMDB_SPACE) — FT-FIFO НЕ лимит. Временно возвращён rotation-гейт ТОЛЬКО по ZL_HasTopMaskLevel (spin везде). ЮЗЕР ТРЕБУЕТ ПОЛНУЮ АНИМАЦИЮ — план: MIDFRAME-FLUSH: после рисования цепи 1 слать буфер (FT_CMD_Count+Write-механика) и сбрасывать BufferPtr на CMD_ADDRESS_PTR — тогда кадр любого размера в 3056-окнах. Точки: MainLoop ZL_DrawFrame между цепями; механика отправки уже есть в конце кадра (стр ~1510 MainLoop, DMA-путь ZL_FT_CMD_DMA_ENABLED=1 — отправлять той же процедурой). После этого гейт удалить.
+- Часы ×1.6 (матрица курсора оставляется; позиции 45/74/84/113/123 @712). LOADING LEVEL X-X: ×1.6 центр, «...» удалён, гасится DrawBlackLoadingFrame ПОСЛЕ LoadGameplayAssets (вкл. SFX) перед свопом. Тоннель-маски: генератор ×64/25 (400-простр → 1024) вместо 640-эпохи ×8/5.
+- Диалоги ПРОПОРЦИОНАЛЬНО: рамка (192,96)=(120,60)×1.6 → все внутренние EQU ×1.6 = 1:1 оригинал. LEVEL DONE центр = 512−W×0.8 (второй непропатченный путь найден). PAUSE_TITLE_CENTER_X=455 (компенсация W/2-формулы в Core.DrawPauseDialogContent — у неё атласная полуширина; честный фикс = W×4/5, +3б Main0 НЕТ места).
+- DrawString: окно глифа ТОЧНО w×8/5 (×2 НЕЛЬЗЯ: атлас-полоса → захват соседней буквы = «палки»); advance scale=3 → ×8/5 (дефолт). Шрифты диалогов/HUD/intro целые.
+
+**ПАМЯТЬ (КРИТИЧНО): Main1 16383/16384, page0 0x3FFE/0x4000, Main0 9210 — ВСЁ ЗАБИТО.**
+Кандидаты освобождения (план юзера «выноси в резиденты/другие страницы»):
+1. page0 → LoaderOvl #40 (free 5330): DrawNextLevelLoadingScreen+slices+BuildBuf (~250б) — вызывается только при загрузке, когда #40 доступен (но щас SetPage3 #04 стоит ДО — переставить порядок: рисовать ДО SetPage3 #04).
+2. Main1: DrawDebugClock — FT_NumberDEBC/FT_Text макро-инлайны ~250б → переписать циклом по таблице координат (~80б) = −170б.
+3. RAM #500C..#5010 узко; CMD-буфер расширить НЕЛЬЗЯ (упирается в Core #5C00) — только midframe-flush.
+**ОТКРЫТО:** (1) midframe-flush + снять тоннельный гейт; (2) MENU-кнопка: гнездо ЗАМЕРЕНО по битам = (539,3) 79×26 ТОЧНО (= спрайт-EQU); код позиций совпадает; подозрение — матрица сбита между DrawFrameStrips и DrawHudMenu (SetFontCancun8 NOT guilty — он только handle/layout; проверить FT_Begin/ScissorXY в DrawHudProgress... НЕ доказано); (3) space-звёзды mod 640; (4) Init_Video.asm:22 коммент «640×480» устарел.
+**Тесты:** test_dual_chain_lose_absorb PASS; build_wc_img.cmd полный PASS; ТЕСТ-ХАРДКОДЫ при апскейле ищите по «+44/320/640» паттернам.
+
+## [2026-06-11] VDAC2 → VDC: ПОЛНАЯ анимация на всех уровнях — решено данными, не гейтами
+**Запрос юзера:** полная анимация (spin+rotation) на тоннельных без потери наклона; «ищи как освободить память»; «пиши любые Python-тесты».
+
+**Метод (воспроизводимый):** написан test_cmd_buffer_budget_z80.py — полный Z80-эмулятор грузит реальный билд, прогревает цепи, гоняет Core.ZL_DrawFrame и меряет ПИК кадрового CMD-буфера + вотчдог на затирание Core (#5C00). Сценарии: dual / tunnel / dual+tunnel / синтетика 120+120.
+
+**Главные находки:**
+1. КОРЕНЬ зависаний тоннельных: Z80-буфер кадра жил в #5010..#5C00 = ВСЕГО 3056 байт, дальше РЕЗИДЕНТНЫЙ Core-код. FT-сторона НЕ лимит: FT.Coprocessor.Write чанкованный (ждёт CMDB_SPACE), DMA-путь шлёт в REG_CMDB_WRITE кусками. Переполнение = затирание Core = «испорченный звук» + deadlock.
+2. ZL_CMD_WARN_BYTES был #0E00 (3584) — warn СРАБАТЫВАЛ ПОСЛЕ затирания Core (порог выше потолка!). Теперь #0F00 при буфере 3920.
+3. VDC_MAX_SLOTS=240 — мёртвый запас: физмакс цепи = длиннейший трек 2774/32 = 86 слотов. Ужат до 128 → массивы ×5×2цепи похудели на ~2.2KB.
+
+**Решение (всё в образе, тесты PASS):**
+- VDC_MAX_SLOTS 240→128; ball-cache #4100..#4480; GAMELOG → #4480..#4C80 (+IDX/FROZEN/TMP/END/entropy/FROG_RTC/CANARY зеркально, см. main.asm:38-45); CMD-буфер база #5010→#4CB0 = 3920 байт.
+- Гейт rotation УДАЛЁН. Замеры: dual 2656 (67%), tunnel 2632 (67%), dual+tunnel worst 2872 (73%) — полная анимация везде с запасом.
+- Двухступенчатый предохранитель НА ФАКТИЧЕСКИХ БАЙТАХ (не на типе уровня): BufferPtr≥#5800 → шары без матриц; ≥#5B00 → скип шара. В норме НЕ срабатывает никогда (worst 73%), гарантирует Core при любом апокалипсисе.
+- DrawDebugClock переписан: «HH:MM:SS» форматируется в RAM-буфер, ОДИН CMD_TEXT вместо 3×CMD_NUMBER+2×CMD_TEXT инлайнов = −316 байт Main1.
+- LOADING LEVEL X-X перенесён из Core в loader overlay #40 (loading_screen_ovl40.inc, метки OVL_*): рисуется ДО SetPage3 #04; #04-хелпер скейла заменён 20-байтным CMD-блоком (LOADIDENTITY+SCALE(1.6)+SETMATRIX) через LDIR — паттерн «матрица данными, не кодом».
+- Бюджеты после: Main0 8364 (−846 с начала), Main1 14396 (free 1988!), LoaderOvl 11811 (free 4573), page0 0x3FFE.
+- Кнопка MENU: написан test_hud_menu_matrix_z80.py — парсер CMD-потока кадра доказал: на vertex MENU (862,5) действует ровно SCALE(0x1999A) — код корректен, кривой скрин был со старого билда.
+- Инструменты обновлены на новые адреса: decode_gamelog/parse_log_dump (#4480/#4C80), trace_to_halt (canary #4C8C), profile_dual_chain_perf/audit_level5/export_ft812_bundle (CMD #4CB0 — у профайлера был ВООБЩЕ стухший 0x5E00).
+
+**Применимо в VDC:** (1) техника «замерь пик буфера эмулятором, потом решай» вместо гейтов на глаз; (2) предохранитель по фактическому указателю буфера, а не по типу контента; (3) DS-массивы по физмаксу данных, не по круглому числу; (4) при переносе кода в оверлей зависимость от недоступной страницы можно заменить готовым CMD-блоком данных + LDIR.
+
+**Тесты:** test_cmd_buffer_budget_z80 PASS (A-E), полный harness PASS, инжект в wc.img выполнен. Гоняются контрольные dual_absorb + menu_matrix на финальном бинаре.
+
+## [2026-06-11] VDAC2 → VDC: КРИТИЧЕСКИЙ ПАТТЕРН — CurrentCodePage при вызове оверлей-кода
+**Симптом:** любой уровень виснет на старте, лог эмулятора «Illegal port OUT, PC=41:EB4E» — исполнение в странице #41 по адресу #40-кода.
+**Корень:** вызов кода в slot3-оверлее (#40) ПОСЛЕ хелпера, который внутри зовёт shared-декомпрессор: декомпрессор в конце делает SetPage3(CurrentCodePage), а CurrentCodePage ещё содержал #41 от предыдущей сцены → подмена страницы ПОД будущим CALL → исполнение мусора чужой страницы.
+**Правило:** меняешь slot3-страницу → НЕМЕДЛЕННО обновляй CurrentCodePage, ДО любых вызовов, которые могут дернуть декомпрессоры/лоадеры (они восстанавливают slot3 из неё). Диагностика по крашу: «PC=NN:ADDR» где ADDR в диапазоне кода ДРУГОЙ страницы = подмена slot под исполнением.
+**Фикс:** main.asm EnterGameplayForCurrentLevel: LD A,LOADER_OVL_PAGE / LD (CurrentCodePage),A перед UploadLoadingText. В образе, harness PASS.
+
+## [2026-06-11] VDAC2 → VDC: ПРОЦЕССНАЯ ДЫРА — два билд-скрипта с разными списками генераторов
+**Симптом:** фикс генератора top-mask тайлов (×1.6→×2.56) не попадал в образ через НЕСКОЛЬКО инжектов — «тоннели неверно» при правильном генераторе.
+**Корень:** build.cmd и build_wc_img.cmd имели РАЗНЫЕ списки make-шагов: make_top_mask_overlays был только в build.cmd, а инжекты шли через build_wc_img.cmd → артефакты масок не регенерировались. Диагностика: DL-дамп кадра (render_l09_tunnel_eve_frame.py) показал vertex'ы кратные 64×1.6 при ожидаемых 64×2.56 → артефакт старый, не логика.
+**Фикс:** шаг добавлен в build_wc_img.cmd. ПРАВИЛО: make-шаги держать в ОДНОМ месте (или build_wc_img должен вызывать build.cmd), при «фикс не виден» — сначала проверять, что генератор вообще запускается билдом, по уникальным числам в артефакте.
+**Часы:** финал — ROM font 26 native, DrawDebugClock сам сбрасывает матрицу (identity) → инвариантен к фазе (интро=геймплей). Компактная CMD_TEXT-версия сохранена (−316б Main1).
+
+## [2026-06-11] VDAC2: сохранена опорная версия v068-2026-06-11-1024x768-fullanim-reference
+Папка releases/v068-... (Source+Build+ini+Чат.txt+REFERENCE.txt, 39M) + рядом .spg.
+Состояние: 1024x768@59Hz, полная анимация шаров на всех уровнях (буфер #4CB0, 3920б,
+worst 73%), тоннель-маски x2.56, часы ROM-26 native Y=712, диалоги/HUD пропорционально,
+LOADING в #40. Подтверждено юзером на эмуляторе. TODO в REFERENCE.txt.
+
+## [2026-06-11] VDAC2: level-select 1024×768 + ДВАЖДЫ наступленные грабли «#04-хелпер вне #04»
+**Рефактор level-select (Gauntlet):** весь экран ×1.6 через 2 правки макросов (DrawThree: окна+позиции; CheckControl: hit-box) + Resident_EmitScale16 (НОВЫЙ резидентный эмиттер scale-матрицы в shared_render/Main0 — LDIR 20-байт CMD-блока; доступен из ЛЮБОЙ сцены). Небо: ширина/wrap/скорость ×1.6. Превью 490×314@(283,384); коэфф. маркеров 11/23 ИНВАРИАНТЕН (вход-таблица и выход-экран оба ×1.6); kz-маркер ×1.6, frog-маркер native (вращается). Title: (640−W)/2 в 640-логике ≡ 512−0.8W экрана.
+**КРАШ-ГРАБЛИ (2-й раз!):** вызов Core.ZL_EmitScale16Matrix (#04) из сцены с slot3=#41 → исполнение мусора. Подвёл УСТАРЕВШИЙ КОММЕНТ slot0 «caller maps #04 around chain» — маппинг давно убран («machinery resident»). ПРАВИЛО: для межсценных хелперов — ТОЛЬКО резиденты (Main0/page0); комменты о маппинге проверять по факту кода вызывающего; новый Resident_EmitScale16 — канонический способ.
+
+## [2026-06-11] VDAC2: главное меню 1024×768 — рефактор завершён
+**Объём:** MenuMain.asm целиком ×1.6: небо (Resident_EmitScale16 в начале кадра + BILINEAR, окно/скролл/wrap ×8/5, субпиксельный Vertex2f сохранён), foreground, 5 кнопок ОДНОЙ правкой макроса MenuDrawOne (окно W×8/5, vertex (X×8/5)×16) + hit-box'ы макросом MenuCheckButton, курсор 38px (комменты обновлены: меню теперь тоже под scale-матрицей), fade-overlay уже был 1024×768.
+**Солнце с «дыханием»:** база масштаба переведена 1.0→1.6: offset дыхания (sin−127)×8 → ×13 (≈8×1.6, та же относительная глубина ±3.1%); offset∈[−3302..0] НЕ андерфлоит дробную часть #999A → ScaleHi=1 константой, ветвление BIT 7 удалено (код упростился). Окно ×8/5, позиция (−1,11)→(−2,18). Glow: вместо сброса в identity — Resident_EmitScale16 (свечение/курсор тоже ×1.6), позиция (−61,−45)→(−98,−72).
+**Паттерн «матрица в кадре сцены»:** канон для статичных сцен — Scale16 один раз в начале кадра, локальные матрицы (дыхание солнца) переопределяют и ВОССТАНАВЛИВАЮТ Scale16 (не identity!) после себя; все vertex — в экранных 1024-координатах (матрица растягивает только выборку атласа, не позиции).
+**Применимо в VDC:** инвариант «кто переопределил матрицу кадра — тот её и восстанавливает» избавляет от хвоста зависимостей между рисовалками сцены.
+**Сборка:** build_wc_img.cmd DONE, инжект в wc.img выполнен. MenuSwapFrame уже был vsync+DMA (см. запись о level-select).
+
+## [2026-06-11] VDAC2: КРИТИЧЕСКИЕ ГРАБЛИ 1024×768 — VERTEX2F 15-bit signed переполнение = «переходы через мусор»
+**Симптом:** межсценные переходы (меню↔level-select и др.) шли через ЯРКИЙ мусор: на экране кадр старой сцены, чьи битмапы в RAM_G уже перезаписываются ассетами новой (низкие адреса — мусор, высокие ещё целы). Фейды при этом молча НЕ работали.
+**Корень:** fade-оверлей рисовал full-screen RECT до (1024*16, 768*16) в VERTEX_FORMAT 4. Поле координаты VERTEX2F — 15-битное SIGNED (max +16383), а 1024×16=16384 → координата переполнялась в −16384, рект уезжал за левый край и НЕ закрывал экран. На 640×480 (640×16=10240) влезало — баг появился ровно из-за апскейла разрешения. sjasmplus на это не ругается (константа валидна), визуально фейд «просто отсутствует».
+**ПРАВИЛО:** в формате 4 (1/16 px) максимум координаты VERTEX2F = 1023.94px! Для full-screen примитивов на 1024-wide экране — либо кламп 16383 (непокрытые 1/16px кромки невидимы), либо VERTEX_FORMAT 0 (целые px, диапазон ±16384px). Родня граблей VERTEX2II (9-bit X, max 511) из учебника.
+**Фикс + усиление «через чёрное»:** (1) кламп 16383 в DrawFadeOverlay; (2) FadeOutRoom после гашения теперь свопает ЧИСТЫЙ чёрный DL (clear-only, ни одной ссылки на bitmap) и ЖДЁТ его показа (INT_SWAP, без очистки флага — съест следующий MenuSwapFrame) ДО возврата: загрузка RAM_G не начинается под видимым старым DL. Покрывает ВСЕ переходы (все идут через FadeOutRoom/DrawBlackTransitionFrame). (3) DrawBlackTransitionFrame перенесён page0→Main0-резидент (page0 был забит: 0x3FFE; теперь 0x3F66, запас 154б).
+**Применимо в VDC:** сам формат не ваш, но паттерн «свопни кадр-без-ссылок-на-перезаписываемое и дождись фактического показа ДО начала загрузки» — универсален для любого double-buffer + стриминга ассетов.
+**Проверено:** сборка DONE, test_hud_menu_matrix_z80 PASS, инжект в wc.img выполнен.
+
+## [2026-06-11] VDAC2: More Games 1024×768 — готово
+Экран — один full-screen PALETTED4444 битмап 640×480: Resident_EmitScale16 после ClearAll + окно W/H ×8/5 (паттерн фона level-select, 2 правки). Позиция (0,0) инвариантна, вход/выход уже через чёрные переходы FadeOutRoom. Сборка DONE, инжект выполнен. Из крупного в 1024-рефакторе остались: масштаб тела/языка/тарелки лягушки (запечённые матрицы) и space-звёзды (mod 640).
+
+## [2026-06-12] VDAC2: boot-экран загрузки 1024×768 — готово
+**Слои:** pseudo-DXT фон (L4-маска 640×480 → scale16-матрица, окно 1024×768; RGB565-плоскости 160×120: CMD_SCALE 4.0→6.4=#00066666); TS-аним атлас + тень — окна/позиции ×8/5; прогресс-бар — scissor XY ×8/5, высота клипа ×1.6, маппинг прогресса 1.5→2.4 БЕЗ деления (2+1/4+1/8+1/32=2.40625, +0.26% невидимо); GS-label/SFX-авторы (#40): спрайты-логотипы ×1.6, ROM-тексты 26/27 native (как часы) с identity-сбросом, позиции ×8/5.
+**Опять 9-битные грабли:** Vertex2ii бара — Y=356×1.6=569 > 511 → Cell+Vertex2f (вторая жертва после VERTEX2II из учебника; чек-лист: при ×1.6 любые Vertex2ii с X|Y>319 переполняются).
+**Попутный баг:** DrawBootBlackScreen и три boot-рисовалки имели ScissorSize 640×480 — CLEAR чистил только старую область, справа/снизу оставались полосы (мусор при boot→меню). Все scissor'ы → 1024×768.
+**Сборка:** DONE, LoaderOvl 11817 (free 4567), Main0 8646, инжект выполнен. Из 1024-рефактора остались: лягушка (тело/язык/тарелка, запечённые матрицы), space-звёзды 21-22, Options.
+
+## [2026-06-12] VDAC2: ТРЕТЬИ ГРАБЛИ runtime-матриц — CMD_SCALE(1.6) инвертируется НЕТОЧНО → pseudo-DXT шум
+**Симптом:** boot-экран после ×1.6 — «что-попало»: пиксельный шум по всему фону, сильнее вправо/вниз; спрайт ZX Evolution «битый» (шум просвечивает сквозь полупрозрачные пиксели).
+**Корень (доказан симуляцией sim_boot_dxt_upscale.py):** pseudo-DXT = L4-маска 640×480 (×1.6) + цветовые плоскости 160×120 (×6.4), декод требует ТОЧНОГО соответствия «пиксель маски ↔ блок c0/c1». Копроцессор FT812 строит ОБРАТНУЮ матрицу: инверсия CMD_SCALE(#0001999A=1.6) усекается → A=159/256 (≠160/256=1/1.6), а CMD_SCALE(6.4) инвертируется ровно (40/256). Слои расползаются с ростом x/y → шум (модель trunc159 = скрин юзера 1-в-1; точные 160/40 = чисто). Для обычных картинок это лишь невидимые 0.6% сжатия и потеря ~2px правого края — потому все остальные сцены «работали».
+**ПРАВИЛО (3-й раз!):** канон «запечённые BITMAP_TRANSFORM вместо runtime CMD_SCALE/ROTATE-цепочек» распространяется и на НЕцелые масштабы: дробный CMD_SCALE инвертируется с усечением. Любая многослойная композиция, требующая попиксельного выравнивания слоёв (DXT-пары, маски), — ТОЛЬКО прямые DL-слова TRANSFORM_A..F (1/1.6 = ровно 160/256, 1/6.4 = ровно 40/256). Целые масштабы (4.0) инвертируются точно — потому 640-версия работала.
+**Фикс:** BootEmitScale16Transforms (Main0, LDIR 24-байт DL-блок A=E=160/256) — все boot-рисовалки (DXT-маска, TS-аним, бар, fade-out, SFX-логотипы); цвета DXT — прямые TRANSFORM_A/E=40/256. Фильтры по выбору юзера из side-by-side симуляции: маска BILINEAR (мягкие переходы блендинга), цвета NEAREST (блоки не смазываются) — гибрид.
+**Метод:** хостовая модель FT812-сэмплинга (numpy) отрендерила 5 вариантов (640-эталон, точный NEAREST, full-BILINEAR, trunc159, гибрид) — диагноз и выбор фильтра БЕЗ итераций на железе.
+**Сборка:** DONE, инжект выполнен.
+
+## [2026-06-12] VDAC2: «шары не из-за края» (L11) — внеэкранные шары эмитились мусорными VERTEX2F
+**Симптом:** на уровнях со спавном за краем экрана (L11: старт трека x=1115 в 1024-пространстве) шары появлялись не из-за кромки.
+**Диагностика данными:** дамп трека (dump_track_start.py) — данные верны (старт за экраном); полный Z80-прогон первых кадров (test_spawn_edge_z80.py) — ЛОГИКА входа верна (первый видимый шар на x=1014, кромка); ground truth DL-дамп кадра — а вот в DL шары за правым краем уходили вершинами-«призраками» на −997..−959px: corner-координата (X−26)×16 ≥ 16384 НЕ влезает в 15-битное signed поле VERTEX2F и заворачивается в минус. ТА ЖЕ 15-битная граната, что фейд-рект (16384) и Vertex2ii бара (Y=569>511) — ТРЕТЬЕ срабатывание за два дня.
+**Фикс:** пре-пасс кэша шаров (MainLoop .PrePassLoop) отсеивает ЦЕЛИКОМ внеэкранные шары в gap-маркер: X+26<0 | X≥1050 | Y+26<0 | Y≥794 → не эмитим. Порог X≥1050 ровно совпадает с границей переполнения (corner 1024 → 16384). Бонус: экономия CMD-бюджета (за-экранный спавн-хвост и верхний въезд L01 y=−64 больше не пишутся в буфер).
+**ЧЕК-ЛИСТ 15-битных гранат (правило в учебник):** при апскейле ЛЮБАЯ экранная координата, способная выйти за 1023px (или 511px для Vertex2ii), обязана проверяться: VERTEX2F max +16383 (=1023.94px в формате 4), VERTEX2II max 511. Источники: full-screen ректы, правый/нижний край, ВНЕЭКРАННЫЕ объекты (спавн/вылет). Отсев целиком-невидимого — самый дешёвый и универсальный фикс.
+**Проверено:** DL первых кадров L11 чист (0 призраков, вход с кромки 1014→976→937), test_dual_lose_full_path PASS, сборка DONE, инжект выполнен.
+
+## [2026-06-12] VDAC2: кнопка MENU (HUD) — ДВА бага: дрейф CMD_SCALE по ВСЕЙ игре + перекрашенная запечённая кнопка
+**Симптом:** hover-спрайт MENU не совпадал с запечённой в верхней рамке кнопкой (~6px), под/вокруг ховера — «зелень».
+**Корень 1 (СИСТЕМНЫЙ, 4-е срабатывание усечённой инверсии):** ВСЕ scale(1.6)-эмиттеры геймплея/UI (Resident_EmitScale16, ZL_EmitScale16Matrix=LoadId+Frog_EmitUpscale16+SetMatrix, OVL_Scale16Cmds) шли через CMD_SCALE #0001999A → инверсия копроцессора A=159/256 = факт. ×1.6101 → весь контент дрейфовал до +6px у правого края. Рамка (рисуется этой матрицей) ставила запечённую кнопку на ~868 вместо честных 862.4 — отсюда несовпадение, которое НЕЛЬЗЯ починить подбором целочисленной позиции.
+**Фикс 1:** все эмиттеры переведены на ЗАПЕЧЁННЫЕ TRANSFORM-слова A=E=160/256 (24-байт LDIR-блоки, как boot); Frog_EmitUpscale16/FROG_UPSCALE удалены (мёртвые); трио LoadId+Scale+SetMatrix в killzone/рамках заменены одним CALL. Теперь ВЕСЬ рендер — ровно ×1.6, координаты ×8/5 совпадают с фактом.
+**Корень 2:** idle-кнопка, запечённая в frame_top, прокрашена ПАЛИТРОЙ РАМКИ (256 цветов под камень/золото): жёлтый текст MENU сквантовался в зелёный. Ховер-пилюля меньше idle → по краям торчала зелёная перекрашенная кнопка («зелень»).
+**Фикс 2:** DrawHudMenu рисует кнопку ВСЕГДА (cell 0/1/2 по состоянию) атласом с hud-палитрой ТОЧНО поверх запечённой; позиция — дробная вершина VERTEX2F (13798,77)=(862.4,4.8)px = точно место запечённой (539,3)×1.6 — сетки NEAREST рамки и спрайта совпадают попиксельно.
+**ПРАВИЛО (канон, окончательно):** CMD_SCALE с НЕцелым масштабом ЗАПРЕЩЁН везде — только запечённые BITMAP_TRANSFORM. Совмещение спрайта с контентом внутри масштабируемой картинки — только дробной вершиной (1/16 px), целочисленная позиция не совпадёт с сеткой ×1.6.
+**Проверено:** test_hud_menu_matrix_z80 PASS (TRANSFORM A=E=160, vertex 13798/77, CMD_SCALE в кадре отсутствует), сборка DONE, инжект выполнен.
+
+## [2026-06-12] VDAC2: звёздное поле L22 (space) 1024×768 — готово
+Поле генерилось в 640×480-пространстве: правые 384px и нижние 290px экрана без звёзд. Теперь: X = seed×4(+2) → 0..1022 (та же гранулярность относительно ширины), Y = seed×3 → 0..765 (вся высота; убран mod 240), скролл-wrap по 1024 = ОДИН AND #03 вместо цикла вычитаний (mod степени двойки; заодно ушёл скачок поля при переполнении FrameCounter — 1024 делит 65536 нацело, 640 не делил), размеры точек ×1.6 (19/29/45). Код стал короче (Main1 free 2087). Гейт уровня не тронут — звёзды ТОЛЬКО на L22 (последний борд), как и было. Сборка DONE, инжект выполнен.
+
+## [2026-06-12] VDAC2: ПРАВИЛО — скроллящийся тайл НЕ стыкуется под BILINEAR (чёрная полоса на небе)
+**Симптом:** после перехода на точные 160/256-матрицы на небе меню/level-select появилась тёмная вертикальная полоса, едущая со скроллом (= стык двух копий неба).
+**Корень:** у BILINEAR крайние ~1.5px окна ВСЕГДА полупрозрачны (фильтр смешивает крайние текселы с BORDER=прозрачным) → стык двух BORDER-копий неизбежно имеет полосу неполной альфы, сквозь которую светит чёрный clear. Сдвиги перекрытия лишь двигают полосу; NEAREST-подложка под швом тоже не убрала её до конца (рендерер юзера). Раньше полосы не было только потому, что кривая CMD_SCALE-матрица (×1.6101) не доводила сэмплинг до края текстуры.
+**Решение (юзер):** небо вернулось на NEAREST — у него внутри окна текселы 0..639 без border-примеси, стык глухой по построению; схема = 640-оригинал (две копии, wrap-offset −(W−1)), период скролла исходный.
+**ПРАВИЛО:** бесшовный скролл-тайл на FT812: либо NEAREST + butt-join копий, либо REPEAT (требует width=степень двойки), либо guard-колонки в ассете. BILINEAR+BORDER на стыке копий = всегда щель.
+**Сборка:** DONE, инжект выполнен.
+
+## [2026-06-12] VDAC2: сохранена опорная версия v069-2026-06-12-1024x768-allscreens-exact-matrix-reference
+Папка releases/v069-... (Source+Build+ini+Чат.txt+REFERENCE.txt, 40M) + рядом .spg.
+Состояние: ВСЕ экраны в 1024x768 (геймплей, меню, level-select, More Games, boot, LOADING);
+все 1.6-матрицы — запечённые TRANSFORM 160/256 (CMD_SCALE запрещён); переходы через чёрное;
+кнопка MENU из атласа + по отпусканию; небо NEAREST (BILINEAR-стык = щель); звёзды L22 на весь
+экран; внеэкранные шары отсеяны. Подтверждено юзером. TODO в REFERENCE.txt (лягушка native-122,
+Options, More Games контент).

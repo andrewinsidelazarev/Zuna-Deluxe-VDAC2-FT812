@@ -20,6 +20,9 @@ UpdateMouseState:           CALL GetMouseX
 
 .NegativeX                  LD HL, (PositionX)
                             NEG
+                            LD E, A                                             ; Zuma 1024x768: delta x1.5 (окно больше — шаг больше)
+                            SRL A
+                            ADD A, E
                             LD E, A
                             OR A
                             SBC HL, DE
@@ -31,6 +34,9 @@ UpdateMouseState:           CALL GetMouseX
 
 .PositiveX                  LD HL, (PositionX)
 
+                            LD E, A                                             ; Zuma 1024x768: delta x1.5
+                            SRL A
+                            ADD A, E
                             LD E, A
                             ADD HL, DE
 
@@ -62,6 +68,9 @@ UpdateMouseState:           CALL GetMouseX
 
 .NegativeY                  LD HL, (PositionY)
                             NEG
+                            LD E, A                                             ; Zuma 1024x768: delta x1.5
+                            SRL A
+                            ADD A, E
                             LD E, A
                             OR A
                             SBC HL, DE
@@ -73,6 +82,9 @@ UpdateMouseState:           CALL GetMouseX
 
 .PositiveY                  LD HL, (PositionY)
                             LD D, #00
+                            LD E, A                                             ; Zuma 1024x768: delta x1.5
+                            SRL A
+                            ADD A, E
                             LD E, A
                             ADD HL, DE
 

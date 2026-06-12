@@ -1,0 +1,42 @@
+v068-2026-06-11-1024x768-fullanim-reference
+============================================
+
+ОПОРНАЯ ВЕРСИЯ: порт на 1024x768@59Hz, полная анимация шаров на всех уровнях.
+Подтверждена юзером на эмуляторе (запуск, геймплей, тоннели, часы).
+
+Видеорежим: VM_1024_768_59Hz (PCLK 64 MHz), все слои x1.6 NEAREST
+(фон 400x300 -> x2.56). Трек масштабируется при упаковке в PAK
+(make_level_pack.scale_track_samples, x8/5) — физика/feel нетронуты.
+
+КЛЮЧЕВЫЕ ОТЛИЧИЯ ОТ v067:
+- Шары 51px (chain_matrix_lut: A,B,D,E x32/51, C/F без изменений);
+  killzone 141px; destroy 77px; пуля 51px (скорость/пороги x1.6).
+- Frog: позиции из level_runtime_table (DW x1.6), орбиты held=38/next=45;
+  тело/язык/тарелка native 122 (масштаб тела — TODO, см. Чат.txt).
+- Диалоги retry/pause/LEVEL DONE пропорционально: рамка (192,96)=(120,60)x1.6,
+  все внутренние EQU x1.6 = 1:1 оригинал.
+- HUD x1.6 (жизни/прогресс/MENU/счёт), DrawString: окно глифа ТОЧНО w*8/5
+  (шире нельзя — атлас-полоса), advance режим scale=3 (x8/5).
+- LOADING LEVEL X-X: в loader overlay #40 (loading_screen_ovl40.inc),
+  без троеточия, x1.6, гасится чёрным кадром после загрузки SFX.
+- Часы: ROM font 26 native, СВОЙ сброс матрицы (инвариант к фазе), Y=712
+  (2px над нижней рамкой), один CMD_TEXT (компактно).
+- ПОЛНАЯ АНИМАЦИЯ: гейтов нет. CMD-буфер кадра #4CB0..#5C00 = 3920 байт
+  (VDC_MAX_SLOTS 240->128, GAMELOG сдвинут на #4480..#4C8B, канарейка #4C8C).
+  Замер worst (dual+tunnel) = 2872б = 73% — test_cmd_buffer_budget_z80.py.
+  Предохранители по BufferPtr: >=#5800 шары без матриц, >=#5B00 скип шара.
+- Тоннель-маски: генератор x64/25 (400-простр -> 1024); ВАЖНО: шаг
+  make_top_mask_overlays добавлен в build_wc_img.cmd (раньше был только
+  в build.cmd — фиксы масок не доезжали до образа).
+- EnterGameplay: CurrentCodePage=#40 ДО UploadLoadingText (иначе
+  декомпрессор восстанавливал slot3=#41 под исполняемым #40-кодом — краш).
+
+Бюджеты: Main0 8364, Main1 14396 (free 1988), LoaderOvl 11811 (free 4573),
+page0 end=0x3FFE.
+
+Тесты: test_cmd_buffer_budget_z80 (A-E PASS), test_hud_menu_matrix_z80 (PASS),
+test_dual_chain_lose_absorb_z80 (PASS, kz-центр +70), полный harness PASS.
+
+Известные TODO: масштаб тела лягушки (нужна запечённая матрица A..F со
+сглаженным углом — cmd_scale в цепочке translate+rotate НЕ работает);
+space-звёзды (поле mod 640); меню/level-select сцены не масштабированы.
