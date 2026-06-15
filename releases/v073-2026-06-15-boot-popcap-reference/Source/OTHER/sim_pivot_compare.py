@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""sim_pivot_compare.py — show tongue rotation around 4 different pivots,
+WITHOUT overlay (так чтобы sprite tongue был полностью виден).
+"""
+import os, math
+from PIL import Image, ImageDraw, ImageFont
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
+TEMP_DIR = PROJECT_ROOT
+GFX = os.path.join(os.path.expanduser('~'), 'Desktop', 'Zuma Deluxe', 'graphics')
+
+sheet = Image.open(os.path.join(GFX, 'frog.png')).convert('RGBA')
+W = 122
+body = sheet.crop((0, 0, 162, 162)).resize((W, W), Image.LANCZOS)
+plate = sheet.crop((162, 162, 324, 324)).resize((W, W), Image.LANCZOS)
+
+tongue_full = sheet.crop((162, 0, 324, 162))
+alpha = tongue_full.split()[3]
+bbox = alpha.getbbox()
+PAD = 4
+x0 = max(0, bbox[0] - PAD); y0 = max(0, bbox[1] - PAD)
+x1 = min(162, bbox[2] + PAD); y1 = min(162, bbox[3] + PAD)
+TW, TH = 32, 80
+tongue_tight = tongue_full.crop((x0, y0, x1, y1)).resize((TW, TH), Image.LANCZOS)
+
+
+def render(canvas_w, frog_pos, cursor_angle, pivot, draw_overlay=False):
+    img = Image.new('RGBA', (canvas_w, canvas_w), (210, 210, 210, 255))
+    fx, fy = frog_pos
+    plate_pos = (fx - W//2, fy - W//2)
+    img.paste(plate, plate_pos, plate)
+    body_rotated = body.rotate(-(math.degrees(cursor_angle) + 90),
+                               resample=Image.BILINEAR, expand=False)
+    img.paste(body_rotated, plate_pos, body_rotated)
+
+    tongue_rotated = tongue_tight.rotate(-(math.degrees(cursor_angle) + 90),
+                                          resample=Image.BILINEAR,
+                                          center=pivot, expand=True)
+    rw, rh = tongue_rotated.size
+    # PIL expand=True: pivot lands at centre of bounding box.
+    tx = fx - rw // 2
+    ty = fy - rh // 2
+    img.paste(tongue_rotated, (int(tx), int(ty)), tongue_rotated)
+
+    draw = ImageDraw.Draw(img)
+    draw.ellipse([(fx-9, fy-9), (fx+9, fy+9)], outline=(255, 0, 0, 255), width=2)
+    cx = fx + 90 * math.cos(cursor_angle)
+    cy = fy + 90 * math.sin(cursor_angle)
+    draw.line([(fx, fy), (cx, cy)], fill=(0, 200, 0, 255), width=2)
+    return img
+
+
+def labeled(img, label):
+    out = Image.new('RGBA', (img.width, img.height + 36), (255, 255, 255, 255))
+    out.paste(img, (0, 36))
+    d = ImageDraw.Draw(out)
+    try: font = ImageFont.truetype("arial.ttf", 13)
+    except: font = ImageFont.load_default()
+    for i, line in enumerate(label.split('\n')):
+        d.text((4, 4 + i*16), line, fill=(0, 0, 0, 255), font=font)
+    return out
+
+
+CW = 220
+ang = 0.0   # cursor east
+
+cfg1 = labeled(render(CW, (CW//2, CW//2), ang, (16, 6)),  "pivot=(16,6) top of sprite\n(CURRENT asm — внутри pad)")
+cfg2 = labeled(render(CW, (CW//2, CW//2), ang, (16, 25)), "pivot=(16,25) base of\nactual tongue body")
+cfg3 = labeled(render(CW, (CW//2, CW//2), ang, (16, 40)), "pivot=(16,40)\nbbox centre (середина)")
+cfg4 = labeled(render(CW, (CW//2, CW//2), ang, (16, 50)), "pivot=(16,50)\nbelow centre")
+
+out = Image.new('RGBA', (CW * 4, CW + 36), (255, 255, 255, 255))
+out.paste(cfg1, (CW * 0, 0))
+out.paste(cfg2, (CW * 1, 0))
+out.paste(cfg3, (CW * 2, 0))
+out.paste(cfg4, (CW * 3, 0))
+out_path = os.path.join(TEMP_DIR, '_tongue_pivot_compare_no_overlay.png')
+out.save(out_path)
+print(f'Saved {out_path}')

@@ -1,0 +1,26 @@
+01: 01.wav len=103691 rate=22046 ch=1 bits=16 dur=4.703s flags=0x03 cvt=0x01
+02: EMPTY len=0 rate=44092 flags=0x00 cvt=0x01
+03: EMPTY len=0 rate=27990 flags=0x00 cvt=0x01
+04: 04.wav len=51845 rate=22046 ch=1 bits=16 dur=2.352s flags=0x03 cvt=0x01
+05: 05.wav len=51845 rate=22046 ch=1 bits=16 dur=2.352s flags=0x03 cvt=0x01
+06: 06.wav len=11352 rate=22046 ch=1 bits=16 dur=0.515s flags=0x03 cvt=0x01
+07: 07.wav len=17508 rate=22046 ch=1 bits=16 dur=0.794s flags=0x03 cvt=0x01
+08: 08.wav len=51864 rate=22046 ch=1 bits=16 dur=2.353s flags=0x03 cvt=0x01
+09: 09.wav len=51864 rate=22046 ch=1 bits=16 dur=2.353s flags=0x03 cvt=0x01
+10: 10.wav len=51860 rate=22046 ch=1 bits=16 dur=2.352s flags=0x03 cvt=0x01
+11: 11.wav len=51864 rate=22046 ch=1 bits=16 dur=2.353s flags=0x03 cvt=0x01
+12: 12.wav len=51864 rate=22046 ch=1 bits=16 dur=2.353s flags=0x03 cvt=0x01
+13: 13.wav len=51825 rate=22046 ch=1 bits=16 dur=2.351s flags=0x03 cvt=0x01
+14: 14.wav len=51892 rate=22046 ch=1 bits=16 dur=2.354s flags=0x03 cvt=0x01
+15: 15.wav len=27596 rate=22046 ch=1 bits=16 dur=1.252s flags=0x03 cvt=0x01
+16: 16.wav len=3130 rate=22046 ch=1 bits=16 dur=0.142s flags=0x03 cvt=0x01
+17: 17.wav len=38889 rate=22046 ch=1 bits=16 dur=1.764s flags=0x03 cvt=0x01
+18: 18.wav len=51864 rate=22046 ch=1 bits=16 dur=2.353s flags=0x03 cvt=0x01
+19: 19.wav len=38889 rate=22046 ch=1 bits=16 dur=1.764s flags=0x03 cvt=0x01
+20: 20.wav len=40136 rate=22046 ch=1 bits=16 dur=1.821s flags=0x03 cvt=0x01
+21: 21.wav len=25938 rate=22046 ch=1 bits=16 dur=1.177s flags=0x03 cvt=0x01
+22: 22.wav len=12973 rate=22046 ch=1 bits=16 dur=0.588s flags=0x03 cvt=0x01
+23: 23.wav len=25004 rate=22046 ch=1 bits=16 dur=1.134s flags=0x13 cvt=0x01 loop=12502-25004
+24: 24.wav len=29190 rate=22046 ch=1 bits=16 dur=1.324s flags=0x03 cvt=0x01
+25: 25.wav len=12974 rate=22046 ch=1 bits=16 dur=0.588s flags=0x03 cvt=0x01
+26: 26.wav len=31741 rate=22046 ch=1 bits=16 dur=1.440s flags=0x03 cvt=0x01

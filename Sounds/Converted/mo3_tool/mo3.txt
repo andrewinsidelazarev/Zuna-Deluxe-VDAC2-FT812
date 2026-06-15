@@ -1,0 +1,328 @@
+MO3 2.4
+Copyright (c) 2001-2020 Un4seen Developments Ltd. All rights reserved.
+
+Files that you should have found in the MO3 package
+===================================================
+Win32 version
+-------------
+MO3.TXT      This file
+MO3.EXE      MO3 encoder (GUI version)
+MO3ENC.EXE   MO3 encoder (console version)
+UNMO3.EXE    MO3 decoder
+BASS.DLL     BASS module (required by MO3.EXE)
+
+MacOSX version
+--------------
+MO3.TXT      This file
+MO3ENC       MO3 encoder
+UNMO3        MO3 decoder
+
+NOTE : Both Intel and PowerPC Macs are supported.
+
+Linux version
+-------------
+MO3.TXT      This file
+MO3ENC       MO3 encoder
+UNMO3        MO3 decoder
+
+
+What's the point?
+=================
+MO3 is a file format, encapsulating the features of several "MOD" formats
+(IT/XM/S3M/MTM/MOD/MPTM), but with one big difference: MP3 and OGG compressed
+samples. A lossless sample codec is also incorporated, and the whole file
+structure is compressed too.
+
+All this makes it possible to have great reductions in file sizes with
+practically identical sound quality. Infact, MO3 allows greater quality
+compositions because MP3/OGG encoding works best with 16-bit samples, so there
+is no reason to use low quality 8-bit samples anymore.
+
+
+Main features
+=============
+* MP3/OGG compression
+- any command-line MP3 or OGG encoder can be used with the MO3 encoder
+
+* Lossless compression
+- samples that don't compress well with MP3/OGG can still be reduced in size
+
+* Structure compression
+- all the non-sample data is also compressed
+
+* Sample specific config
+- the encoding sample/bit rates are individually adjustable for each sample
+
+* Text removal
+- message/instrument/sample texts can optionally be removed
+
+* Decompression
+- MO3 files can be decoded back to their original formats using UNMO3
+
+* Playable
+- MO3s can be played by XMPlay and software that uses the BASS library or UNMO3
+
+
+Encoders
+========
+The MO3 encoder uses an external MP3 or OGG encoder to compress the samples.
+The encoder can be in the same directory as the MO3 encoder, or somewhere in
+the path. Settings for OGGENC and LAME are provided, but any other command-line
+MP3/OGG encoder can also be used.
+
+NOTE: LAME is the only MP3 encoder supported by the Linux and OSX versions.
+
+Some samples do not "like" compression, so MO3 also provides a lossless
+compression that will on average reduce samples to around 50% of their size.
+The rest of the MOD structure is also compressed. This all means that you can
+greatly reduce the size of MOD musics without even using any MP3/OGG
+compression.
+
+NOTE: Some Linux distributions come with an old OGGENC version installed. The
+      latest OGGENC should be used for best results.
+
+
+A few tips when creating MO3s
+=============================
+* Use 16-bit samples. MP3/OGG does not have a particular bit-depth; the result
+  will be around the same size regardless of bit-depth. So you may as well take
+  advantage of the extra quality of 16-bit samples.
+* Finetune the encoder settings for each sample. To get the best quality to
+  size ratio, don't just use the compression level slider. All samples vary in
+  the amount that they can be compressed before noticeably losing quality.
+* Pay particular attention to looped samples. MP3 does not maintain the sample
+  shape exactly (some encoders more than others), so a loop that normally
+  sounds correct may produce a "click" in the MP3 version. OGG keeps the shape
+  very well, so is less likely to produce "clicks".
+* With OGG compression, using the same encoder settings for all of the samples
+  maximizes the possibility of OGG header sharing; they can share a single
+  header, reducing the file size.
+
+
+GUI (MO3) usage tips
+====================
+Shift-clicking on a sample rate or bit rate button will set it to the next
+lowest value (rather than next highest without pressing the shift key).
+
+Ctrl-clicking on a sample rate button will set it to "lossless".
+
+Shift-clicking on a "pcm" or "mp3" test playback button will play just the loop
+part of the sample.
+
+The sample comparison option ("?" button) allows you to see exactly what the
+encoded sample looks like compared to the original. The yellow "deviation" line
+shows clearly how closely the encoded sample matches the original; if it is
+flat, the samples are practically identical. While this can be useful to
+finetune settings, it's not the be all and end all; it's possible for a sample
+to sound good even if it does not look exactly like the original. The best test
+is always the listening test.
+
+A file can be opened via the command-line, eg. using the "Open With" Windows
+Explorer option, instead of having to use the file selector.
+
+
+Command-line (MO3ENC) usage tips
+================================
+The "-l" option gives a list of the sample encoders available for use. The
+easiest way to edit the list on Win32 is to use the GUI version, but it can
+also be edited in the registry: HKCU\Software\Un4seen Developments\MO3
+
+On Linux and OSX, the config is stored in the "~/.mo3enc" text file, so the
+encoder settings can be editted there.
+
+Before using an encoder it must be calibrated, using the "-c" option. The
+default "OGGEnc (VBR)" encoder is pre-calibrated, and the "lossless" codec does
+not require calibration. The encoder list will indicate if an encoder has not
+been calibrated.
+
+The encoder to use (including for calibration) is selected using the "-e"
+option.
+
+To encode a MOD file into a MO3 file, you can simply select the encoder and
+compression level ("-m" option), and give the filename. For optimal results
+though, the settings can be finetuned via a MOS (MO3 Settings) file. A MOS
+file, using the current option settings, is created by the "-f" option. You can
+then edit the MOS file in any text editor. To use the MOS settings, put the MOS
+file inplace of the MOD file in the command-line.
+
+
+Decoding MO3 files
+==================
+MO3 files can be converted back to their original formats using UNMO3. In the
+IT/XM formats some effects can be placed in either the effect or volume
+columns, but the MO3 format puts them all in a single "column", so when
+converting back to IT/XM some effects might not be in the same column as they
+were originally. All IT files are written as non-compressed v2.14 compatible IT
+files.
+
+
+Playing MO3 files
+=================
+MO3 files can be played by XMPlay, and any software that uses the BASS audio
+library (both are available at the MO3 website). Since its inception, there
+have been some additions to the MO3 format: OGG encoding, stereo samples, DMO
+effects, duplicate sample removal, and OGG header sharing. The minimum BASS and
+XMPlay versions required when using these features are as follows:
+
+                     BASS      XMPlay
+  "Standard" MO3      0.7       1.6
+  OGG encoding        1.3       2.0
+  Stereo samples      1.4       2.1
+  DMO effects         1.7       2.5
+  Duplicate removal   2.1       3.2
+  OGG header sharing  2.4       3.5
+
+MO3 files can also be used by other software with the help of UNMO3.
+
+
+Using MO3ENC in software
+========================
+The command-line encoder (MO3ENC) could be used by software (eg. trackers,
+custom front-ends) to add the ability to create MO3 files in the software. Any
+problems are indicated in the MO3ENC exit code, as follows:
+
+0 = All is OK; the encoding was completed successfully
+1 = No file was provided to encode
+2 = The file is not of a recognised format (or it could not be loaded)
+3 = The encoder number is invalid
+4 = The external MP3/OGG encoder could not be executed
+5 = The file was encoded succesfully but the output file couldn't be opened
+6 = Calibration could not be performed because BASS.DLL could not be loaded
+
+
+Using UNMO3 in software
+=======================
+UNMO3 may be used by software (eg. players/trackers) to decode MO3 files back
+to their original format, so that they can be handled by the software. To help,
+any problems are indicated in the UNMO3 exit code, as follows:
+
+0 = All is OK; the decoding was completed successfully
+1 = No file was provided to decode
+2 = The file is not a MO3 file (or it could not be loaded)
+3 = There was a problem decoding the MO3 file
+4 = The MO3 was decoded succesfully but the output file couldn't be opened
+
+UNMO3 is also available in library form on several platforms (including
+Windows/OSX/Linux/iOS/Android) from the MO3 website.
+
+
+Latest version
+==============
+The latest version of the MO3 software can always be found at the MO3 website:
+
+	www.un4seen.com
+
+
+Licence
+=======
+The MO3 software is free for non-commercial use.
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THIS SOFTWARE IS PROVIDED
+"AS IS", WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING
+BUT NOT LIMITED TO THE IMPLIED WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR
+A PARTICULAR PURPOSE. THE AUTHORS SHALL NOT BE HELD LIABLE FOR ANY DAMAGE THAT
+MAY RESULT FROM THE USE OF THIS SOFTWARE. YOU USE THIS SOFTWARE ENTIRELY AT
+YOUR OWN RISK.
+
+Usage of the MO3 software indicates that you agree to the above conditions.
+
+All trademarks and other registered names contained in the MO3 package are the
+property of their respective owners.
+
+
+History
+=======
+These are the major (and not so major) changes at each version stage. There are
+of course bug fixes and other little improvements made along the way too!
+
+2.4.2 - 18/6/2020
+-----------------
+* Support for OPL samples in S3M and MPTM files
+* Support for "pattern row hilight information" in IT files
+* Fix for stereo sample loop points in XM files
+* OSX: 64-bit support added, PowerPC support removed
+
+2.4.1.2 - 4/11/2016
+-------------------
+* UNMO3: Fix for S3M pattern parapointers bug introduced in 2.4.1
+* UNMO3: The OS's MP3 decoder is used on OSX
+
+2.4.1 - 26/1/2016
+-----------------
+* Support for MPTM (OpenMPT) files
+* Preservation of full MIDI config
+* Optional preservation of OpenMPT extensions
+* Out of range notes in IT files are retained
+* "--resample" option added to default LAME command-line to disable automatic resampling
+* UNMO3: Fix for instrument-less IT files
+
+2.4 - 25/4/2008
+---------------
+* OGG header sharing
+* IT/S3M instrument & sample filename retention
+* Accurate IT sample rates (could be slightly off previously)
+* MacOSX: Intel versions introduced
+* Win32: Settings moved to per-user registry branch
+
+2.2 - 19/2/2006
+---------------
+* 16000/22050/32000hz sample rates added for OGG encoding
+* Further slight size reductions for all formats
+* UNMO3: Support for MIDI macros in XM files
+* GUI: File opening via drag'n'drop and the command-line
+
+2.1 - 29/3/2005
+---------------
+* MacOSX version introduced
+* MP3 (LAME) support added to Linux version
+* LAME header removal (you must re-calibrate LAME!)
+* Duplicate sample removal
+* Further size reductions for S3M/MTM/MOD formats
+* Support for high-pass filter
+* Speed improvements in both encoding and decoding
+* UNMO3: Support for MTM decoding
+* UNMO3 now included in MO3 package, separate packages for each OS
+
+1.8 - 22/3/2003
+---------------
+* Support for DMO effects in IT/XM files
+* Support for extended filter range in IT files
+* GUI: Visual analysis of encoded samples
+* GUI: Number of samples displayed increased to 10
+* GUI: Exit confirmation dialog
+
+1.6 - 26/9/2002
+---------------
+* Command-line version
+* Improved compression of pattern data
+* Reduced MP3 encoded sample sizes - excess frames removed
+* Extra reduction for VBR MP3 samples - VBR headers removed
+* Support for encoder "quality" settings
+* OGGEnc and LAME (VBR) encoder command-lines now use "quality" settings
+* New MO3 settings file format - now easy to edit text
+* Support for comments in XM files
+* Support for Modplug/ADPCM compressed files
+* OGG support modules no longer required (they're built in BASS.DLL)
+* GUI: "Lossless" added to default encoder list
+* GUI: Sample usage counts include all songs in multi-song files
+* GUI: Test sample playback is at the average rate used in the MOD
+
+1.4 - 30/1/2002
+---------------
+* MO3 encoder now distributed separately from BASS
+* Improved MP3 loop preservation
+* Stereo sample suport in MO3 format
+* Detection of VBlank MODs
+* OGG modules updated to RC3
+* OGG 48khz sample rate removed (RC3 encoder doesn't like them)
+* "-k" parameter added to default LAME command-lines (retains more hi-freqs)
+* "-q 0" added to default LAME command-lines (highest quality in latest vers)
+
+
+Bug reports, Suggestions, Comments, Enquiries, etc
+==================================================
+If you have any of the aforementioned please check the MO3 forum at the
+website. If you can't find an answer there, you can also email:
+
+	mo3@un4seen.com
+

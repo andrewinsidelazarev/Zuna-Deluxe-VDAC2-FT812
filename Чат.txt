@@ -7077,3 +7077,222 @@ Options, More Games контент).
 
 ## [2026-06-12] VDAC2: переименование — releases/v069-2026-06-12-1024x768-refactor
 Опорная v069 переименована (была ...-allscreens-exact-matrix-reference): юзер выбрал имя «1024x768 рефактор». Содержимое без изменений.
+
+## [2026-06-12] VDAC2 ↔ VDC: ТОЧНАЯ механика подтяжки сегментов из референса Zuma HD (BallChain.c)
+**Источник:** Desktop/Zuma-Deluxe-HD-release-v010-ref/src/gameplay/objects/BallChain.c (BallChain_Update). Модель НЕ слотовая: у КАЖДОГО шара непрерывная pos (в сэмплах спирали, диаметр шара = 32 сэмпла) и СВОЯ скорость spd (сэмплов/кадр).
+**Константы:** BALL_ACC=0.05 (разгон хвоста к ballSpd уровня), BALL_DECC=0.4 (ускорение подтяжки), BALL_MAX_BACK_SPEED=−10, BALL_FRC=0.04 (трение), BALL_WEIGHT_RATIO=2.5 (отдача), PAD=32 точный, PAD_ROUGH=34 (гистерезис контакта).
+**Алгоритм подтяжки (обход от хвоста к голове):** у шара, за которым ЗАЗОР (нет контакта сзади):
+- если цвет ШАРА == цвету первого шара за зазором → spd −= 0.4/кадр (кламп −10), goBack=1. Весь передний сегмент следует за ним: каждый шар в контакте копирует spd соседа сзади (в том же кадре, т.к. обход от хвоста).
+- если цвета РАЗНЫЕ → подтяжки НЕТ: трение 0.04/кадр до полной остановки, сегмент СТОИТ и ждёт, пока напирающий хвост сам его догонит (контакт восстанавливает связку).
+**Удар при стыковке (goBack && контакт сзади):** ВСЕ шары заднего сегмента до первого его зазора получают spd = v_удара/2.5 (отдача хвоста НАЗАД!), тянувший шар spd=0, звук клика, матч-чек стыка (>=3 → взрыв + combo+1 шару за группой). Скорость удара до −10 → отдача до −4.
+**Почему в оригинале нет «висящих пол игры шаров»:** (1) одноцветные стыки схлопываются до 10 сэмпл/кадр (зазор 100 сэмплов ~ 22 кадра); (2) разноцветные сегменты догоняет напирающий хвост; (3) шары с pos<0 (утянутые за старт) УНИЧТОЖАЮТСЯ.
+**Наша реализация (VDC slot-модель) для сравнения:** gap = GAP_STOP-слоты; DoGapStep раз в 32 кадра удаляет ОДИН слот + offsets-компенсация с decay 1/кадр → эффективная подтяжка ~1 сэмпл/кадр БЕЗ разгона, БЕЗ условия цвета, БЕЗ отдачи. Оригинал быстрее в 4–10 раз на длинных зазорах.
+**Перенос на слот-модель (план):** переменная скорость подтяжки vp (1..10, +0.4/кадр с разгоном): за кадр убирать floor(vp/32) гэп-слотов + decay offsets со скоростью vp; подтяжка ТОЛЬКО при совпадении цветов на стыке (иначе сегмент ждёт хвост); при закрытии — отдача: offsets заднего сегмента −v/2.5 с decay, клик; head-шары pos<0 удалять.
+
+
+## [2026-06-12 22:10] VDAC2 → VDC: FT812 REG_INT_FLAGS clear-on-read — зависание всех переходов на реале
+**Контекст:** на реальном FT812 регистр REG_INT_FLAGS очищается САМИМ ЧТЕНИЕМ (datasheet FT81x), а запись-очистка в него — no-op. Эмулятор (Unreal/VDAC2-модель) ведёт себя наоборот: чтение не очищает, чистит запись. Итог: DrawBlackTransitionFrame потреблял ДВА события INT_SWAP (своё MenuSwapFrame + .wait_black), производя ОДНО → первый кадр новой сцены вис в .wait_int навечно. На эмуляторе — работало. Симптом: виснут ВСЕ переходы между экранами (выход из паузы в меню, главный→Gauntlet и т.д.), геймплей не виснет (там баланс событий 1:1). Фикс: в сценах только level-based ожидание REG_DLSWAP==0 (идемпотентное, тот же момент времени, что INT_SWAP) — как в hw-проверенном v067. Подтверждено юзером на железе.
+**Применимо ли в VDC:** напрямую нет (нет FT812), но правило обобщается: clear-on-read регистры нельзя поллить из двух мест; event-based ожидания между независимыми петлями заменять level-based.
+**Ссылки:** MenuMain.asm:MenuSwapFrame, shared_render.asm:DrawBlackTransitionFrame; аудит-воркфлоу wf_38a6ef9b-0a4.
+
+## [2026-06-12 22:10] VDAC2 → VDC: подтяжка цепи — четыре источника рывков в slot-модели (offsets+decay)
+**Контекст:** после реализации референсной подтяжки (PULL разгон 0.4→10 смп/кадр / CATCH-UP темпом цепи) юзер видел рывки. Найдено и исправлено ПЯТЬ дефектов квантованной модели «шаг −CELL базы + комп +CELL offset + декей»:
+1) Двойной ×2 темпа догона: speed_x100/5 в x10-единицах УЖЕ содержит глобальный ×2 (2 тика SpeedAdvance/кадр); лишний ADD HL,HL гнал догон вдвое быстрее цепи → кламп rear-comp → телепорты 32px.
+2) Кап компенсации в CELL срезал недотаявший остаток при разгоне (шаг приходит раньше конца декея) → микро-рывок каждый шаг. Фикс: кап 2×CELL (перенос остатка).
+3) Усечённый декей vp/10 терял до 0.9px/кадр против точного аккумулятора шагов → к слиянию хвост ~13px. Фикс: дробный накопитель декея (GapDecAcc, остаток 0..9) — приток/отток сходятся точно.
+4) После слияния/матча темп декея падал в базу при недотаявших компенсациях → финальная клетка ползла 1px/кадр («летит-замирает»). Фикс: GapTempo удерживается, пока живы положительные комп-офсеты (флаг GapPosLeft); матч сбрасывает vp/аккум, но НЕ темп.
+5) ApplyMatch3 мгновенно обнулял offsets матч-рана, пока шары/взрывы ещё рендерятся EXPLOSION_FRAMES кадров → прыжок взрыва до 32px. Фикс: обнуление перенесено в финализацию слот→маркер.
+БОНУС-ЛОВУШКА Z80: паттерн PUSH AF / XOR #80 / CP n / POP AF / JR C — СЛОМАН (POP AF восстанавливает флаги, затирая CP); с капом CELL давал случайно верный результат, с капом 2×CELL вскрылся. Диапазон сумм [0..96] позволяет простой беззнаковый CP.
+Также: спавн при догоне — каждый шаг догона съедает клетку хвостового сегмента, HSub-гейт выдачи отстаёт → цепь «рвётся» у жерла. Фикс: немедленный доспавн (TrySpawn_NoHsubGate) на каждом шаге CATCH-UP + спавн-гейт пропускает отрицательный offset хвоста (новый шар наследует offset = встаёт встык).
+**Применимо ли в VDC:** ДА, slot-модель общая (Slots/Offsets/декей). Проверить все пять пунктов + ловушку PUSH AF/POP AF по своему DoGapStep/AnimateChain.
+**Ссылки:** VDC.asm (VDC_AnimateChain декей-пролог, VDC_DoGapStep, VDC_GapJunctionUpdate/RearComp/MergeCheckRecoil, VDC_TrySpawn), test_gap_pull_z80.py (PASS: дельты головы [-9..0], ноль резидуала), vdc_visual_emulator.py (зеркало 1:1), Build/_probe_pull_trace.py (покадровая трасса).
+
+## [2026-06-12 22:26] VDAC2 → VDC: дополнение к подтяжке — рывки «зелёной фазы» + канон матриц в LUT
+**Контекст:** два дополнения после визуальной проверки юзером. (1) При полной шкале (спавн выключен) гэпы от взрывов хвостовых групп остаются НА КОНЦЕ цепи; freeze фронта на каждом шаге их уборки замораживал всю цепь непрерывно (шаги чаще 32 кадров) и отпускал рывком после последнего маркера. Фикс: если за гэпом нет живого заднего сегмента (ран до конца цепи) — ни freeze, ни rear-comp, ни доспавна: чистая уборка маркера, цепь катится без остановки (VDC_GapRearExists). В обычной игре конец цепи закрыт доспавном, поэтому проявлялось только в зелёной фазе. (2) Канон «только запечённые матрицы» мало соблюсти по форме — нужно и по АРИФМЕТИКЕ: в LUT-матрице лягушки аппроксимация cos·1.25 вместо cos·323/256 давала A=158/256 вместо канонных 160/256 → эффективный масштаб 1.6203 вместо 1.6 → спрайт 122px рисовался на 197.7px при окне 195 → тарелка обрезана справа/снизу на ~2.7px. Фикс: точное |A|+(|A|·67>>8) (323=256+67), при cos=127 ровно 160.
+**Применимо ли в VDC:** (1) — да, та же slot-модель: проверить уборку концевых маркеров при выключенном спавне. (2) — нет FT812, но правило «канонические константы прогонять через точную арифметику, не шорткаты» универсально.
+**Ссылки:** VDC.asm (VDC_GapRearExists, .dgs_stop_catchup/.dgs_casc_catchup), Frog.asm (Frog_Mul323Sh8), test_gap_pull_z80.py сценарий D (freeze=False на концевых маркерах), Build/_probe_mul323.py.
+
+## [2026-06-12 22:53] VDAC2 → VDC: поправка к rear-comp догона — компенсировать ДО КОНЦА цепи
+**Контекст:** прошлая запись (22:10, п. о доспавне) описывала rear-comp «до первого гэп-маркера». Это НЕВЕРНО при нескольких одновременных дырах: индексный сдвиг удаления телепортит t КАЖДОГО слота за стыком (+CELL), а ранний выход компенсации на первом маркере оставлял сегменты за вторым гэпом с голым телепортом +32/шаг. В обычной игре дыра почти всегда одна (спавн зашивает хвост) — не видно; в «зелёной фазе» (шкала полна, спавн выключен) дыр несколько → «цепочка рывками». Фикс: off[j] -= CELL для ВСЕХ j от стыка до конца цепи (маркеры включительно — их offsets не рендерятся); «задний сегмент есть» = хоть один живой шар за стыком (скан мимо маркеров), иначе чистая уборка без freeze. Тест: инвариант плавности ВСЕХ шаров (дельта/кадр в [-12..+3]) на мультигэп-цепи — PASS.
+**Применимо ли в VDC:** да — если в вашем DoGapStep-эквиваленте компенсация заднего сегмента останавливается на первом маркере, проверьте сценарий «несколько дыр без спавна».
+**Ссылки:** VDC.asm (VDC_GapRearComp до конца цепи, VDC_GapRearExists скан), test_gap_pull_z80.py сценарий E, vdc_visual_emulator.py зеркало.
+
+## [2026-06-12 23:40] VDAC2 → VDC: аудит звука + озвучка Win/Lose по оригиналу (HD-ремейк ненадёжен)
+**Контекст:** перепроверка карты звуков по трём источникам (HD-исходники / наш порт / Wiki-карта). Выводы: (1) Wiki-карта НЕТОЧНА — пример: взрыв матч-3 это НЕ "ballsdestroyed как вариация + chime отдельно", а ОБА одновременно: ballsdestroyed{N по комбо 0..4} + chime1 с питчем 2×combo (наш порт уже так делал, BallChain.c:454-476). (2) HD-ремейк v010 УПРОСТИЛ звук концовок и для аутентичности НЕ эталон: при достижении черепа — тишина, всасывание — тишина; earthquake/warning1/MUS_NEAR_HOLE объявлены, но 0 call-sites. В ОРИГИНАЛе есть. (3) Наш порт местами уже ближе к оригиналу чем HD: chain1 (chain≥5) и choral1 (шкала ZUMA) у нас есть, HD не использует.
+**Сделано (озвучка по оригиналу, 6 точек):** earthquake при входе в absorb (.ck_trigger); warning1-сирена при приближении к черепу (KzFrame>=7, один раз/заход, сброс флага при отъезде .ck_closed); SND_POP с растущим питчем (+1 полутон/шар, кламп +24) на каждый всосанный шар (.ua_move_once после RemoveSlotAt); chant14 при потере жизни; chant8 при game over (.ua_set_dlg); chant2 по окончании win-аутро (.win_show_done). Все через GS_PlaySfx/Note — no-op при GS_Present=0. Тесты lose-пути (dual_lose_full_path, dual_chain_lose_absorb) и pull — PASS. Игровая музыка в уровне (MUS_GAME/WIN/GAME_OVER) — отложена юзером (дорого: трек+order switch).
+**Применимо ли в VDC:** да — карта событий универсальна. Особенно: матч-3 = destroyed{combo}+chime{pitch} вместе; lose-секвенция (earthquake/сирена/sucking pop с питчем) — брать из ОРИГИНАЛА, не из HD-ремейка.
+**Ссылки:** Sounds/Zuma Sounds VERIFIED.md (выверенная карта + таблица расхождений), память sfx-audit; main.asm (VDC_CheckKillzone .ck_trigger/.ck_set_frame/.ck_closed, VDC_UpdateAbsorb .ua_move_once/.ua_set_dlg, VDC_UpdateWin .win_show_done), VDC.asm (VDC_AbsorbPopNote/VDC_WarnPlayed).
+
+## [2026-06-13 15:30] VDAC2 → VDC: General Sound preload-таблица — ловушка «звук молчит»
+**Контекст:** добавил Win/Lose-звуки в код (вызовы GS_PlaySfx верные, сборка ок), но на реале НЕ слышны. Причина НЕ в коде: GS_PlaySfx играет сэмпл, только если он ПРЕДЗАГРУЖЕН в RAM General Sound. Список предзагрузки — PRELOAD_IDS в make_sound_pack.py → генерит GS_SfxPreloadTable → грузит GS_LoadSfxPackWithTable (по одному, #38 Load FX, handle в GS_SfxHandles[id]). НЕ предзагруженные → handle=#FF → GS_PlaySfx молча выходит. Мои 6 звуков (earthquake/warning1/pop/chant2/8/14) не были в PRELOAD_IDS. Фикс: добавил их. GS 1МБ, 25 звуков = 353КБ (11025Hz 8-бит моно), запас 687КБ — partial-fail нет.
+**Правило:** добавил CALL GS_PlaySfx с новым SND_X — ОБЯЗАТЕЛЬНО внеси X в preload-список (иначе тишина без ошибки). У вас аналог — проверьте, что все используемые сэмплы реально загружены в GS, а не только объявлены.
+
+## [2026-06-13] VDAC2: preload-сдвиг +36 байт НЕ может вешать win — изоляция layout vs chant2
+**Контекст:** разбирал гипотезу «win-аутро зависло после пересборки с PRELOAD_IDS 19→25 (sound_pak_size.inc +36 байт)». Вывод: layout-сдвиг от preload ФИЗИЧЕСКИ не достаёт до win-кода.
+**Карта (zuma.sym, main.asm:4485-4521):** `GS_SfxPreloadTable` живёт в `ts-dos.asm` → loader-overlay slot3 **page #40** (LoaderOvl #C000, size 0x2E51, end 0xEE51, **запас 4527 байт** до #10000). Win-код — в Core/Main0 slot1 **page 5** (VDC_UpdateWin=#6032, VDC_WinOutro*=#60xx-#61xx, GS_PlaySfx=#6B35; запас до #C000 = 16930). VDC_WinSnapAllChains=#C57B в gameplay-overlay **page #04**. Три РАЗНЫЕ физ-страницы, никогда не co-resident. +36 байт двигает только код ПОСЛЕ таблицы ВНУТРИ page #40 (RawPak/sd_zc — путь загрузки уровня, не win-render). Ни переполнения слота, ни перехода границы #C000/#8000, ни сдвига фикс-адреса. Таблица читается динамически (LD B,GS_SFX_PRELOAD_COUNT; per-entry ADD HL,6) — 25 как 19.
+**chant2 (main.asm:3580-3581):** вставлен между `CP DLG_WIN_DONE/RET NC` и `LD A,DLG_WIN_DONE` — идемпотентно (гард выше), регистро-безопасно (GS_PlaySfx PUSH/POP AF/BC/DE/HL; IX/IY в .win_show_done не живы), таймаут-ограничен (GS_SendCommand/DataResident с GS_WAIT_TIMEOUT, CF=0 при таймауте — не виснет даже при мёртвом GS). НЕ может вешать.
+**Вывод:** обе подозреваемые правки безопасны; preload-рост — намеренный companion-фикс из той же сессии 15:30 (чтобы win/lose звуки СЛЫШАЛИСЬ). «Зависание» если и есть — то предсуществующий дефект самого win-аутро (эмиттер не доходит до #FFFF / частица бессмертна / снимок головы #FFFF), который надо ловить трассой GameState/WinOutroActive/WinEmitPos1 по кадрам, а не искать в layout.
+**Ссылки:** Build/zuma.sym, main.asm (VDC_UpdateWin .win_show_done, VDC_WinOutroInit/Update/Done/EmitStep), VDC.asm (VDC_WinSnapAllChains/SnapshotWinChain), loader_resident.asm:318 (GS_PlaySfx), sound_pak_size.inc, profile_dual_chain_perf.py.
+**Ссылки:** make_sound_pack.py PRELOAD_IDS, ts-dos.asm GS_LoadSfxPackWithTable/GS_LoadOneSfxFromPak, loader_resident.asm GS_PlaySfx (.done при handle=#FF).
+
+## [OBSOLETE: вывод НЕВЕРЕН — доспавн НЕ ломал win, восстановлен; см. 16:40] [2026-06-13 16:10] VDAC2 → VDC: (ОШИБКА) обвинил доспавн в CATCH-UP
+**Контекст:** ошибочно обвинил доспавн `.dgs_backfill` на основе пробы с gaugeFull=0. Но при ПОБЕДЕ шкала полна (gaugeFull=1), а VDC_TrySpawn_NoHsubGate первым делом проверяет GaugeFull → при win доспавн no-op, win НЕ ломает. Проба нерепрезентативна (gaugeFull=0 = обычная игра, где доспавн НУЖЕН для хвоста). Удаление доспавна сломало хвост. ВЫВОД ОТМЕНЁН.
+
+## [2026-06-13 16:40] VDAC2 → VDC: win-state работает; доспавн восстановлен; урок про gaugeFull-гейт
+**Контекст:** доспавн `.dgs_backfill` ВОССТАНОВЛЕН как было. После восстановления + пересборки юзер подтвердил: Win State работает, хвост работает, звук слышен. Транзиентный «win не работал» в промежуточном билде точно не локализован (вероятно несогласованная сборка или старый образ в эмуляторе при тесте). Текущий код = рабочая конфигурация: доспавн на месте, chant2, звуки в preload.
+**Урок:** доспавн при win БЕЗОПАСЕН — TrySpawn_NoHsubGate гейтится GaugeFull (полная шкала = путь к WIN → no-op, цепь штатно пустеет). Win-сценарии тестировать ТОЛЬКО с gaugeFull=1. НЕ удалять доспавн.
+**Ссылки:** VDC.asm (.dgs_backfill восстановлен; гейт GaugeFull в VDC_TrySpawn_NoHsubGate).
+
+## [OBSOLETE: no-GS empty-loop rejected; см. 19:35] [2026-06-13 17:30] VDAC2 → VDC: анимация бут-логотипа была привязана к длительности GS-загрузки
+**Контекст:** при GSType=NONE (GS отключён) анимация логотипа ZX Evolution на экране загрузки ОТСУТСТВОВАЛА полностью (с GS — работала). Причина (подтверждена покадровой трассой в харнессе): кадры анимации продвигаются тиками DrawLoadingScreen ТОЛЬКО пока BootGsLabelEnabled<2; для прохода 0→10 нужно ~63 тика. Единственный массовый источник таких тиков — стриминг аудио-пака в GS (GS_StreamAudioCacheToDevice, десятки-сотни тиков). Без GS этот этап мгновенный (GS_Detect → CF=0 → RET, 0 тиков), а к моменту LoadMainPack (где тиков много) BootGsLabelEnabled уже =2 → DrawLoadingScreen скипает анимацию (.skip_ts_anim). OVL_BootTsFadeOutWait .postLoop кадры НЕ крутит (держит frame=0, дренит delay). Итог: без GS кадр застревал на 0 и исчезал.
+**Фикс:** в OVL_BootTsFadeOutWait (ts-dos.asm) ПЕРЕД .postLoop добавлен явный цикл .animLoop: крутить BootLoadingTickSafe пока BootAnimFrame<BOOT_TS_ANIM_FRAMES-1. Выполняется при gslabel<2 (анимация рисуется). С GS frame уже на максимуме → цикл выходит на 1-й проверке (BootAnimDelay не трогаем → fade-тайминг GS-пути идентичен). Без GS — докручивает 0→10.
+**Урок для VDC:** анимации/прогресс на бут-экране НЕ привязывать к длительности опционального этапа (загрузка в звуковую карту и т.п.) — иначе при отсутствии устройства анимация пропадает. Гонять анимацию явным циклом независимо от наличия железа.
+**Ссылки:** ts-dos.asm:OVL_BootTsFadeOutWait (.animLoop), loader_resident.asm DrawLoadingScreen:657 (gslabel-гейт)/BootAnimAdvance:909, Build/_probe_boot_anim.py.
+
+## [2026-06-13 19:35] VDAC2 → VDC: no-GS boot-анимации должны идти по progress range, без пустых циклов
+**Контекст:** уточнение после попытки чинить отсутствие ZX Evolution/авторов при GSType=NONE. Пустые циклы для докрутки анимации запрещены: без GS нет длинной аудио-фазы, поэтому обе анимации нужно показывать только на реальных тиках загрузки. Фикс: no-GS ветка `BootAnimAdvance` теперь вычисляет фазу из `BootProgressPx` во время `LoadMainPack`: диапазон `95..192` отдан ZX Evolution, `192..255` — авторам. Пропорция грубая, не 100% копия GS-пути, но сохраняет видимость обеих фаз без искусственного ожидания. GS-путь оставлен старым tick/delay-based.
+**Применимо ли в VDC:** да как общий loader-паттерн: если опциональный этап отсутствует, не вставлять wait-loop ради UI; переразложить визуальные фазы по оставшимся реальным progress/tick событиям.
+**Ссылки:** `loader_resident.asm:BootAnimAdvanceNoGs`, `ts-dos.asm:OVL_GS_LoadGameplaySoundsMaybe`, `build_wc_img.cmd` PASS.
+
+## [2026-06-13 19:45] VDAC2 → VDC: алгоритм отладки no-GS boot-анимации
+**Контекст:** подтверждено на образе: вариант без GS теперь показывает и ZX Evolution, и authors во время движения progress bar. Как был найден фикс:
+1) Из чата и кода восстановлена state machine: `BootProgressReset` рисует экран, `GS_InitAndStartMenuMusic` при отсутствии GS быстро выходит, `GS_LoadGameplaySoundsMaybe` включает `BootGsLabelEnabled=1`, затем `LoadMainPack` даёт основные реальные redraw-тиги (`BootLoadingTick` каждые 8 секторов и `BootProgressInc` раз на main-pack page).
+2) Root-cause старого отсутствия анимации: в GS-пути кадры набирались длинной аудио-фазой (`GS_CacheAudioPakToRam`/`GS_StreamAudioCacheToDevice`), а в no-GS пути этой фазы нет. Если пытаться воспроизвести GS timing через `.postLoop/.fadeLoop`, получались пустые циклы, которые юзер справедливо запретил: UI не должен ждать ради анимации.
+3) Ключевой вывод: no-GS timing должен быть не временем и не delay-counter, а функцией уже существующего загрузочного прогресса. Тогда медленный/быстрый носитель не ломает порядок фаз: новый tick загрузки → новый кадр/состояние.
+4) Практический split выбран грубо, не 100%: после `BootProgressSetA(95)` весь `LoadMainPack` идёт `95..255`. Диапазон `95..192` назначен ZX Evolution (`frame=(progress-95)/9`, clamp 0..10), `192..255` назначен authors (`frame=1+(progress-192)/16`, clamp 1..4). Это сохраняет обе видимые фазы и примерно похожую пропорцию GS-пути без холостого ожидания.
+5) `OVL_GS_LoadGameplaySoundsMaybe` изменён так, что при `GS_Present=0` он НЕ зовёт `OVL_BootTsFadeOutWait`, а просто возвращается, оставляя `BootGsLabelEnabled=1`; дальше no-GS ветка `BootAnimAdvance` сама переключит `1→2` по `BootProgressPx`.
+**Проверка:** `build_wc_img.cmd` PASS, `sjasmplus` 0 errors, memory-map checks PASS, host `wc.img` обновлён. Юзер подтвердил визуально: «бинго».
+**Урок:** при исчезновении опциональной длинной фазы (GS/network/device/etc.) не эмулировать её пустыми wait-loop. Надо привязать декоративную/информативную анимацию к реальным progress events оставшегося pipeline.
+
+## [2026-06-13 19:55] VDAC2 → VDC: Baseline v070 сохранён — boot no-GS progress + GS ветка проверяется
+**Контекст:** сохранена текущая рабочая точка после фикса no-GS boot-анимаций и включения `GSType=BASS` в host `Unreal.ini` для проверки GS-ветки. Состав baseline соответствует свежим опорам: `Build`, `Source`, `build.cmd`, `build_wc_img.cmd`, `spgbld.ini`, `spgbld_boot.ini`, `spgbld_vdac2.ini`, `Чат.txt`; отдельный SPG лежит рядом.
+**Папка:** `releases/v070-2026-06-13-boot-nogs-progress-gs-baseline/`
+**Артефакт:** `releases/v070-2026-06-13-boot-nogs-progress-gs-baseline.spg`
+**SHA256:** `zuma_vdac2.spg` = `1E70B04164060C639656126E08EB75F9BD0BA8DA40A156FDBC497D48E073690B`; `ZUMAMAIN.PAK` = `DDA64FFE46B1BB117BDC402C54471F0C3DAF8CEBD03D2287615939BC2D528C21`; `ZUMALVL.PAK` = `47172AACA2EAAD274F457BB68FB5B41EEF03C9C05D54FE467C63635A78895A35`; `ZUMAAUD.PAK` = `72EF97514A816962D725193DC27C3232373505C859362784C469A8CF057FB017`; `ZUMASND.PAK` = `8393DB5BB8EC2FDA98C970A3303C43BDEF86A5CA5B4CF09FF09F8FC0C53409DA`.
+**Проверка перед сохранением:** `build_wc_img.cmd` PASS, `sjasmplus` 0 errors, memory-map checks PASS, host `wc.img` обновлён. Пользователь визуально подтвердил no-GS ветку.
+
+## [2026-06-13 20:31] VDAC2 → VDC: Adventure/Gauntlet rank handoff + Space только через 21-4
+**Контекст:** зафиксировано правило прогрессии сложности: после 21-1/21-2/21-3 следующий уровень = 1-2/1-3/1-4 соответственно; после 21-4 следующий уровень = board 22 Space как WIN-state. Space недоступен прямым выбором в level-select и не достижим обычной кнопкой Next: level-select показывает только boards 1..21, при входе clamp'ит старое `CurrentLevel=21` обратно на 21-й board, а `Next` на 21-м выключен так же, как `Back` на 1-м (нет hover/click/Right-перехода).
+**Применимо ли в VDC:** да, если есть отдельный выбор board/rank: финальный Space/bonus-board должен быть только переходом после 21-4, а UI выбора должен иметь endpoint guard на 21.
+**Ссылки:** `Source/ASM/main.asm` (`LoadNextLevelWithLoading`, `LEVEL_SELECT_COUNT`, `SPACE_LEVEL_INDEX`), `Source/ASM/LevelSelect.asm` (`LevelSelectClampCurrent`, `LevelSelectIsLastSelectableLevel`, `LevelSelectApplyLevelClick`), `Source/ASM/ts-dos.asm` (`OVL_ResolveCurrentModeSelection` синхронизирует `CurrentDifficulty` для Adventure), `Source/OTHER/test_adventure_gauntlet_chains.py`, `Source/OTHER/test_win_transition_z80.py`. Проверка: `build_wc_img.cmd` PASS; `test_adventure_gauntlet_chains.py` PASS; `test_win_transition_z80.py` PASS; `check_host_wc_img.py` hash_match=True.
+
+## [2026-06-14 00:40] VDAC2: v071 — native grey fonts/pause/level-select endpoint, затем откат после 64-ball эксперимента
+**Контекст:** рабочая опора v071 сохранена после правок UI: пауза получила новые равномерные координаты кнопок/надписей, `Next` на 21-м уровне в level-select заблокирован как `Back` на 1-м, серые служебные шрифты пересчитаны под 1024×768 без runtime-апскейла 1.6. Пользователь подтвердил: пауза работает, next на 21 заблокирован корректно.
+**Baseline:** `releases/v071-2026-06-13-native-grey-fonts-baseline/` + отдельные артефакты рядом.
+**SHA256 v071:** `zuma_vdac2.spg`=`5E66397D8D2EEC154E26D6349D2488AACBA0F20EEC44AF63B81F216DC5DFE030`; `ZUMAMAIN.PAK`=`2CB63E5BF66FF2D6E9403DA01E5C845C76A31102CC8DCE8734D5347216764FC1`; `ZUMALVL.PAK`=`47172AACA2EAAD274F457BB68FB5B41EEF03C9C05D54FE467C63635A78895A35`; `ZUMAAUD.PAK`=`72EF97514A816962D725193DC27C3232373505C859362784C469A8CF057FB017`; `ZUMASND.PAK`=`8393DB5BB8EC2FDA98C970A3303C43BDEF86A5CA5B4CF09FF09F8FC0C53409DA`.
+**Эксперимент:** пробовали вариант для цепи: до 64 шаров — полное аппаратное вращение без группировки, больше 64 — старая самая точная группировка; обсуждался 256-entry BRAD LUT, чтобы не перегрузить команды. На железе/эмуляторе вариант “не выгребает” → эксперимент отменён, возвращаемся к v071.
+**Откат:** `Source`, `Graphics`, `Build` и root-конфиги восстановлены из `releases/v071-...`; удалён `Graphics/Converted/chain_matrix_lut_full.bin`; маркеры эксперимента (`BALL_MATRIX_LUT_PAGE`, `chain_matrix_lut_full`, `ZL_BALL_FULL_ROTATE_LIMIT`, `ZL_TmpLastTangentValid`, `AND #F8`) в коде/конфигах отсутствуют. Текущий `MainLoop.asm` снова использует `chain_matrix_lut.bin`, пороги/квантование baseline (`CP 70`, `AND #E0`, `AND #F0`).
+**Важно:** обычный `build.cmd` после отката проходит, но заново собранный `Build/zuma_vdac2.spg` получил другой SHA, чем сохранённый baseline. Для точного отката в `Build/` были скопированы именно сохранённые v071-артефакты, после чего все пять файлов совпали с baseline по SHA. Host `wc.img` обновлён напрямую через `inject_zuma_to_wc_img.py`, без `build_wc_img.cmd`, чтобы не пересобрать `.spg` заново.
+**Проверка после отката:** `check_host_wc_img.py` hash_match=True для `ZUMA_VD2.SPG`, `ZUMAMAIN.PAK`, `ZUMALVL.PAK`, `ZUMAAUD.PAK`, `ZUMASND.PAK`; `check_memory_map.py` PASS (`Main1_Size=14822`, free=1562; `UiOvl_Size=13086`, free=3298; `LoaderOvl_Size=11890`, free=4494); `test_adventure_gauntlet_chains.py` PASS.
+**TODO:** записано в `TODO.md`: Win/Lose state — в финальном меню не выключать спрайт лягушки.
+
+## [2026-06-14 22:15] VDAC2: Lose стартует только после settle всех цепей
+**Контекст:** добавлен предохранитель перед входом в `VDC_STATE_ABSORB`: `VDC_CheckKillzone` теперь вызывает `VDC_LoseStartReady` и не запускает Lose, пока активная цепь и, на dual-уровнях, вторая цепь не завершили match-3/cascade work. Busy-состояния: `ChainFreezeCnt != 0`, `GapJunction != 0`, `GapPosLeft != 0`, любой `Slots[i] >= VDC_NUM_COLORS` (GAP/CASCADE marker), любой `ExplodeFrame[i] != 0`, любой pending `Shot2[i] != 0` или ненулевой `Offsets[i]`. Для второй цепи используется штатный парный `VDC_SwapChains`, поэтому логика одна для chain1/chain2.
+**Причина:** прежний `.ck_trigger` сразу ставил global `GameState=ABSORB`, если голова достигла kill-zone. Это могло обрезать незавершённое соединение сегментов или destroy-анимацию: PLAY update прекращался, а цепь переходила в lose-absorb раньше, чем GAP-маркеры/ExplodeFrame/offsets/Shot2 успевали финализироваться.
+**Проверка:** `build_wc_img.cmd` PASS; `check_host_wc_img.py` hash_match=True; `test_lose_waits_chain_settle_z80.py` PASS; `test_dual_chain_lose_absorb_z80.py` PASS; `test_dual_lose_full_path_z80.py` PASS; `test_win_transition_z80.py` PASS; `test_match3_marker_z80.py` PASS; `test_match3_insert_halfcell_z80.py` PASS; `test_cascade_requires_gap_bridge_z80.py` PASS; `test_gap_pull_z80.py` PASS; `test_adventure_gauntlet_chains.py` PASS; `test_dual_chain_fastfill.py` PASS; `check_memory_map.py` PASS. `test_cmd_buffer_budget_z80.py` не завершился за 6 минут без вывода (не использовался как blocking).
+**Ссылки:** `Source/ASM/main.asm` (`VDC_CheckKillzone .ck_trigger`), `Source/ASM/VDC.asm` (`VDC_LoseStartReady`, `VDC_LoseChainBusy`), `Source/OTHER/test_lose_waits_chain_settle_z80.py`, обновлённый `Source/OTHER/test_cascade_requires_gap_bridge_z80.py`.
+
+## [2026-06-14 23:16] VDAC2: Lose settle-hold перенесён на шаг до kill-zone
+**Контекст:** уточнение поведения: если Lose ещё заблокирован незавершённым соединением цепей или match-3 анимацией, цепь больше не доезжает до самой kill-zone и не ждёт уже внутри неё. `VDC_CheckKillzone` при `rem=1` проверяет `VDC_LoseStartReady`; если busy, вызывает `VDC_LoseHoldBeforeKillzone`, который ставит голову на `KzEndSub-1` (или предыдущий track-cell при `KzEndSub=0`) и удерживает движение через новый per-chain `VDC_LoseHoldCnt`.
+**Причина:** пауза должна визуально происходить за один sample до kill-zone, а не на trigger-точке. `VDC_LoseHoldCnt` отделён от `ChainFreezeCnt`, чтобы readiness-check не принимал сам hold за незавершённый cascade/freeze и не создавал самоблокировку.
+**Проверка:** `build_wc_img.cmd` PASS; `check_host_wc_img.py` hash_match=True; `test_lose_waits_chain_settle_z80.py` PASS (busy-cases держат `hsub=KzEndSub-1`, ready-cases стартуют absorb); `test_dual_chain_lose_absorb_z80.py` PASS; `test_dual_lose_full_path_z80.py` PASS; `test_win_transition_z80.py` PASS; `test_match3_marker_z80.py` PASS; `test_match3_insert_halfcell_z80.py` PASS; `test_cascade_requires_gap_bridge_z80.py` PASS; `test_gap_pull_z80.py` PASS; `test_adventure_gauntlet_chains.py` PASS; `test_dual_chain_fastfill.py` PASS; `check_memory_map.py` PASS.
+**Ссылки:** `Source/ASM/main.asm` (`VDC_CheckKillzone` rem=1 hold path and `.ck_trigger`), `Source/ASM/VDC.asm` (`VDC_LoseHoldBeforeKillzone`, `VDC_LoseHoldCnt`, `VDC_MoveChain` hold check), `Source/OTHER/test_lose_waits_chain_settle_z80.py`.
+
+## [2026-06-14 23:44] VDAC2: Lose hold сдвинут ещё на один sample раньше
+**Контекст:** визуальная проверка показала, что `KzEndSub-1` всё ещё выглядит как остановка на kill-zone. Hold-позиция изменена на `remaining_samples=2`: для обычного `KzEndSub=31` это `HSub=29`, для краёв `KzEndSub=1/0` координата переносится на предыдущую track-cell с `HSub=31/30`.
+**Причина:** пользовательское требование — пауза Lose должна быть видимо до kill-zone, не на её границе.
+**Проверка:** `build_wc_img.cmd` PASS; `check_host_wc_img.py` hash_match=True; `test_lose_waits_chain_settle_z80.py` PASS (busy-cases держат `HSub=29`, edge-cases `KzEndSub=1/0` держат предыдущую cell); `test_dual_chain_lose_absorb_z80.py` PASS; `test_dual_lose_full_path_z80.py` PASS; `test_win_transition_z80.py` PASS; `test_match3_marker_z80.py` PASS; `test_match3_insert_halfcell_z80.py` PASS; `test_cascade_requires_gap_bridge_z80.py` PASS; `test_gap_pull_z80.py` PASS; `test_adventure_gauntlet_chains.py` PASS; `test_dual_chain_fastfill.py` PASS; `check_memory_map.py` PASS.
+**Ссылки:** `Source/ASM/VDC.asm` (`VDC_LoseHoldBeforeKillzone`, `VDC_LoseHoldCnt`), `Source/OTHER/test_lose_waits_chain_settle_z80.py`.
+
+## [2026-06-14 23:56] VDAC2: проверен порог открытия kill-zone skull
+**Контекст:** после сдвига Lose-hold проверен сам порог анимации черепа: `VDC_CheckKillzone` считает `remaining_samples = (TrackNumSlots-HSA)*32 + KzEndSub-HSub`. Череп остаётся закрытым при `rem>=65`, начинает открываться ровно при `rem=64`, открыт в диапазоне `rem=1..64`, а absorb-trigger происходит при `rem<=0`.
+**Проверка:** добавлен и прогнан `Source/OTHER/test_killzone_open_distance_z80.py`: перебор всех `KzEndSub=0..31` и `rem=-2..96` PASS. Граничные точки подтверждены: `rem=65 -> KzFrame=1`, `rem=64/63 -> KzFrame=2`, `rem=2/1 -> KzFrame=9`, `rem=0 -> GameState=ABSORB, KzFrame=11`.
+**Примечание:** исправлен устаревший комментарий в `Source/ASM/main.asm`: текущая формула opening даёт кадры `2..9`, не `2..10`; поведение не менялось.
+
+## [2026-06-15 00:17] VDAC2: Win/Lose dialog больше не прячет frog, RAM_G проверен
+**Контекст:** выполнен TODO: в финальном меню Lose/Win frog composition больше не выключается. В `ZL_DrawFrogLayer` оставлен старый guard только для pause-dialog (`DialogState=3`, где шары ещё могут быть на экране и dialog-frame lazy upload/top-mask path важен). Для Lose retry/gameover (`1/2`) и Level Done / win fade (`5/6`) код падает в `.draw_frog`: к этому моменту цепи пустые, поэтому рвать шаровые слои не должно.
+**RAM_G:** правка не добавляет новых RAM_G ассетов. `audit_ramg_full.py` PASS: `dialog_state` и `win_state` доходят ровно до `#100000`, без выхода за 1 МБ и без живых перекрытий. Ключевые диапазоны: `FROG_ARGB4 #030000..#050000`, `DIALOG_FRAME #0AC000..#0CC000`, `WINEXP_ATLAS #050000..#064000` поверх `BALLS_ARGB4` только в win-state после очистки шаров.
+**Проверка:** `build_wc_img.cmd` PASS; `check_host_wc_img.py` hash_match=True; `check_memory_map.py` PASS (`Main1_Size=14988`, free=1396); `audit_ramg_full.py` PASS; `test_tunnel_pause_dialog_skip.py` PASS; `test_win_transition_z80.py` PASS; `test_dual_chain_lose_absorb_z80.py` PASS; `test_dual_lose_full_path_z80.py` PASS; `test_lose_waits_chain_settle_z80.py` PASS; `test_killzone_open_distance_z80.py` PASS; `test_adventure_gauntlet_chains.py` PASS.
+**Ссылки:** `Source/ASM/MainLoop.asm` (`ZL_DrawFrogLayer`), `Source/OTHER/test_tunnel_pause_dialog_skip.py`, `TODO.md`.
+[2026-06-15] Бюджет Z80: игровой процесс с двумя цепочками
+
+CPU: 14 MHz
+Целевой кадр FT812: примерно 57.25 Hz
+Бюджет Z80 на один кадр: примерно 244 541 t-states
+
+Основной измеренный сценарий:
+- Уровень: L05 / CurrentLevel=4
+- Цепочки: синтетически видимые 120+120 шаров
+- HSA=119, обе цепочки активны
+
+Таблица отсортирована по убыванию бюджета Z80:
+
+| Место | Участок | Z80 t-states | Время @14MHz | % кадра 57.25Hz |
+|---:|---|---:|---:|---:|
+| 1 | ZL_DrawFrame | 775 652 | 55.40 ms | 317.2% |
+| 2 | VDC_UpdateAllChains | 646 615 | 46.19 ms | 264.4% |
+| 3 | Frog_Update | 42 517 | 3.04 ms | 17.4% |
+| 4 | Input_Scan | 11 083 | 0.79 ms | 4.5% |
+| 5 | DrawDebugClock | 2 220 | 0.16 ms | 0.9% |
+| 6 | ZL_AimUpdate | 807 | 0.06 ms | 0.3% |
+| 7 | VDC_CheckInvariants | 415 | 0.03 ms | 0.2% |
+| 8 | ZL_SmoothMouse | 278 | 0.02 ms | 0.1% |
+| 9 | EscToMenu | 83 | 0.006 ms | 0.03% |
+| 10 | Bullet_CheckCollisionAllChains | 73 | 0.005 ms | 0.03% |
+| 11 | Bullet_Update | 53 | 0.004 ms | 0.02% |
+| 12 | GS_UpdateSfxMuteMaybe | 10 | 0.001 ms | 0.004% |
+
+Сумма измеренных участков: 1 479 806 t-states = примерно 105.7 ms = примерно 605% одного кадра 57.25Hz.
+Это примерно 6 CPU-кадров на один целевой кадр в случае полностью видимых 120+120 шаров.
+
+Контрольный измеренный сценарий:
+- Реальный прогретый L05 после 420 игровых кадров
+- Длины цепочек: 14+47 шаров
+
+| Место | Участок | Z80 t-states | Время @14MHz | % кадра 57.25Hz |
+|---:|---|---:|---:|---:|
+| 1 | ZL_DrawFrame | 263 219 | 18.80 ms | 107.6% |
+| 2 | VDC_UpdateAllChains | 96 033 | 6.86 ms | 39.3% |
+| 3 | Input_Scan | 11 083 | 0.79 ms | 4.5% |
+| 4 | Frog_Update | 9 525 | 0.68 ms | 3.9% |
+| 5 | VDC_CheckInvariants | 4 339 | 0.31 ms | 1.8% |
+| 6 | DrawDebugClock | 2 220 | 0.16 ms | 0.9% |
+| 7 | ZL_AimUpdate | 807 | 0.06 ms | 0.3% |
+| 8 | ZL_SmoothMouse | 278 | 0.02 ms | 0.1% |
+| 9 | EscToMenu | 83 | 0.006 ms | 0.03% |
+| 10 | Bullet_CheckCollisionAllChains | 73 | 0.005 ms | 0.03% |
+| 11 | Bullet_Update | 53 | 0.004 ms | 0.02% |
+| 12 | GS_UpdateSfxMuteMaybe | 10 | 0.001 ms | 0.004% |
+
+Сумма контрольного сценария: 387 723 t-states = примерно 27.69 ms = примерно 158.6% одного кадра 57.25Hz.
+
+Вывод:
+Для стабильного gameplay это плохо. Основная нагрузка - ZL_DrawFrame и VDC_UpdateAllChains; остальное мало влияет. Реальный прогретый уровень с двумя цепочками уже выходит за бюджет одного кадра, а полностью видимый случай 120+120 сильно превышает бюджет. Оптимизацию нужно начинать с рендера цепочек и стоимости обновления двух цепочек.
+
+Примечание по точности измерения:
+Это номинальные t-states инструкций Z80 при 14 MHz. Python harness не моделирует попадания/промахи аппаратного cache TS-Config, wait states памяти, contention, prefetch и задержки DMA/SPI. Реальная инициализация включает SYS_ZCLK14 | SYS_CACHEEN, но числа профайлера не являются симуляцией аппаратного cache timing.
+
+[2026-06-15] Память сессии / завершение
+
+Текущая опорная версия сохранена с исходниками:
+- releases/v073-2026-06-15-boot-popcap-reference/
+- Рядом отдельно сохранены артефакты: .spg, .zumaaud.pak, .zumalvl.pak, .zumamain.pak, .zumasnd.pak.
+
+Состояние загрузчика:
+- Исходник фона: Graphics/Load Screen/loading_canvas_hdref_source_640x480_visual_center_1_logo_l4.raw
+- Исходник четкого логотипа PopCap: Graphics/Logo/popoldlogohd.png
+- Спрайт PopCap: нативный 110x110 ARGB4, сжат zlib для FT812.
+- Финальная позиция PopCap: BOOT_POPCAP_X=890, BOOT_POPCAP_Y=644.
+- Важная правка: FT.Coprocessor.Vertex2f принимает X в BC и Y в DE; DrawBootPopCapLogo теперь использует BC/DE.
+- build_wc_img.cmd прошел с 0 ошибками ассемблера и обновил host wc.img.
+
+Примечание по бюджету Z80:
+- Сохраненные таблицы бюджета Z80 являются номинальными t-states инструкций Z80 при 14 MHz.
+- Python harness не моделирует попадания/промахи аппаратного cache TS-Config, wait states памяти, contention, prefetch и задержки DMA/SPI.
+- Реальная инициализация включает SYS_ZCLK14 | SYS_CACHEEN, но числа профайлера не являются симуляцией аппаратного cache timing.
+- Практический вывод остается прежним: в gameplay с двумя цепочками основные горячие места - ZL_DrawFrame и VDC_UpdateAllChains.
+
+Сессия завершена по просьбе пользователя.
+
+
+
