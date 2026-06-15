@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build 400x300 FT_ARGB4 tunnel top-cover tiles from the HD reference image-top PNGs."""
+"""Build 400x300 FT_ARGB4 tunnel top-cover tiles from local top-cover PNGs."""
 from __future__ import annotations
 
 from collections import deque
@@ -11,7 +11,7 @@ from PIL import Image, ImageChops
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
-REF = Path.home() / "Desktop" / "Zuma-Deluxe-HD-release-v010-ref" / "content" / "levels"
+REF = ROOT / "Graphics" / "levels" / "TopMasks"
 OUT = ROOT / "Graphics" / "levels" / "Converted" / "top_masks"
 ASM_OUT = ROOT / "Source" / "ASM" / "top_mask_overlay_meta.inc"
 SPGBLD_OUT = ROOT / "Source" / "ASM" / "top_mask_spgbld_blocks.inc"

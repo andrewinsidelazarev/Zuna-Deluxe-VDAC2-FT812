@@ -6,7 +6,7 @@ its native 48 px size (drawn 1:1 on FT812 — NO hardware upscale, which was the
 ugly part before). Кириллица/титулы используют отдельный 30px nativealien (see
 make_font_native.py); этот шрифт их не трогает.
 
-Source: HD-ref nativealien48.png + .txt (charlist + widths + rects).
+Source: Graphics/fonts/nativealien48.png + .txt (charlist + widths + rects).
 Output:
   Graphics/Converted/font_level48_atlas.bin   — ARGB4 LE bitmap (compact)
   Graphics/Converted/font_level48_atlas_pNN_zx7.bin — 16K chunks, ZX7
@@ -20,13 +20,13 @@ import numpy as np
 from PIL import Image
 
 ROOT = Path(r'C:\Users\Администратор\Desktop\Zuma Deluxe VDAC2')
-HD = Path(r'C:\Users\Администратор\Desktop\Zuma-Deluxe-HD-release-v010-ref\content\fonts')
 OUT_BIN = ROOT / 'Graphics' / 'Converted' / 'font_level48_atlas.bin'
 OUT_INC = ROOT / 'Source' / 'ASM' / 'font_level48_meta.inc'
 
 FONT_NAME = 'nativealien48'
-PNG_PATH = HD / f'{FONT_NAME}.png'
-TXT_PATH = HD / f'{FONT_NAME}.txt'
+FONT_DIR = ROOT / 'Graphics' / 'fonts'
+PNG_PATH = FONT_DIR / f'{FONT_NAME}.png'
+TXT_PATH = FONT_DIR / f'{FONT_NAME}.txt'
 
 # Native render height — drawn 1:1 (no FT812 cmd_scale), so this IS the on-screen
 # glyph height. 48 = the font's design size.

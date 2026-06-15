@@ -13,7 +13,7 @@ from PIL import Image
 
 
 ROOT = Path.home() / 'Desktop' / 'Zuma Deluxe VDAC2'
-HD = Path.home() / 'Desktop' / 'Zuma-Deluxe-HD-ref' / 'content' / 'fonts'
+FONT_DIR = ROOT / 'Graphics' / 'fonts'
 OUT_BIN = ROOT / 'Graphics' / 'Converted' / 'font_cancun10_stats_atlas.bin'
 OUT_INC = ROOT / 'Source' / 'ASM' / 'font_cancun10_stats_meta.inc'
 
@@ -59,9 +59,9 @@ def rgba_to_argb4_le_bytes(arr: np.ndarray) -> bytes:
 
 
 def main():
-    src = Image.open(HD / f'{FONT_NAME}.png').convert('RGBA')
+    src = Image.open(FONT_DIR / f'{FONT_NAME}.png').convert('RGBA')
     src_h = src.size[1]
-    meta = parse_font_txt(HD / f'{FONT_NAME}.txt')
+    meta = parse_font_txt(FONT_DIR / f'{FONT_NAME}.txt')
     char_index = {c: i for i, c in enumerate(meta['chars'])}
     rects = meta['rects']
     widths = meta['widths']

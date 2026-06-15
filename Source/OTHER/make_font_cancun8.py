@@ -11,7 +11,7 @@ import numpy as np
 from PIL import Image
 
 ROOT = Path(r'C:\Users\Администратор\Desktop\Zuma Deluxe VDAC2')
-HD = Path(r'C:\Users\Администратор\Desktop\Zuma-Deluxe-HD-ref\content\fonts')
+FONT_DIR = ROOT / 'Graphics' / 'fonts'
 OUT_BIN = ROOT / 'Graphics' / 'Converted' / 'font_cancun8_atlas.bin'
 OUT_INC = ROOT / 'Source' / 'ASM' / 'font_cancun8_meta.inc'
 
@@ -66,11 +66,11 @@ def rgba_to_argb4_le_bytes(arr):
 
 
 def main():
-    src = Image.open(HD / f'{FONT_NAME}.png').convert('RGBA')
+    src = Image.open(FONT_DIR / f'{FONT_NAME}.png').convert('RGBA')
     print(f'source: {src.size}')
     src_h = src.size[1]
 
-    meta = parse_font_txt(HD / f'{FONT_NAME}.txt')
+    meta = parse_font_txt(FONT_DIR / f'{FONT_NAME}.txt')
     chars = meta['chars']; widths = meta['widths']
     rects = meta['rects']; offsets = meta['offsets']
     char_index = {c: i for i, c in enumerate(chars)}

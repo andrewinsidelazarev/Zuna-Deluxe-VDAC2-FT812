@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate native alien font atlas + asm metadata tables.
 
-Source: HD-ref nativealien48.png + .txt (charlist + widths + rects).
+Source: Graphics/fonts/nativealien48.png + .txt (charlist + widths + rects).
 Output:
   Graphics/Converted/font_native_atlas.bin   — ARGB4 LE bitmap (compact, only used chars)
   Source/ASM/font_native_meta.inc            — asm constants + LUT tables
@@ -16,13 +16,13 @@ import numpy as np
 from PIL import Image
 
 ROOT = Path(r'C:\Users\Администратор\Desktop\Zuma Deluxe VDAC2')
-HD = Path(r'C:\Users\Администратор\Desktop\Zuma-Deluxe-HD-ref\content\fonts')
 OUT_BIN = ROOT / 'Graphics' / 'Converted' / 'font_native_atlas.bin'
 OUT_INC = ROOT / 'Source' / 'ASM' / 'font_native_meta.inc'
 
 FONT_NAME = 'nativealien48'
-PNG_PATH = HD / f'{FONT_NAME}.png'
-TXT_PATH = HD / f'{FONT_NAME}.txt'
+FONT_DIR = ROOT / 'Graphics' / 'fonts'
+PNG_PATH = FONT_DIR / f'{FONT_NAME}.png'
+TXT_PATH = FONT_DIR / f'{FONT_NAME}.txt'
 
 # Target render height. HD-ref uses nativealien48 for level titles, but the
 # FT812 dialog cannot afford a 48 px full charset atlas in RAM_G.

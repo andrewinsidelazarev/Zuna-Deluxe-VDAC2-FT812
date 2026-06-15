@@ -13,7 +13,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(r'C:\Users\Администратор\Desktop\Zuma Deluxe VDAC2')
-FONT_PATH = Path(r'C:\Users\Администратор\Desktop\Zuma-Deluxe-HD-ref\content\fonts\ttf\Cancun Regular.ttf')
+FONT_PATH = ROOT / 'Graphics' / 'fonts' / 'ttf' / 'Cancun Regular.ttf'
 OUT = ROOT / 'Graphics' / 'Converted'
 OUT.mkdir(parents=True, exist_ok=True)
 

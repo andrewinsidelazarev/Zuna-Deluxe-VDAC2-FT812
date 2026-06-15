@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Render strings in nativealien48 font → ARGB4 bitmap for FT812.
 
-Font format (HD project content/fonts/nativealien48.{png,txt}):
+Font format (Graphics/fonts/nativealien48.{png,txt}):
   CharList N : N лиц characters (A..Z, a..z, 0..9, !$%...)
   WidthList N : per-char advance width
   RectList N  : per-char rect in PNG = x y w h
@@ -27,8 +27,8 @@ from PIL import Image
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
-FONT_PNG = ROOT / "_fonts" / "nativealien48.png"
-FONT_TXT = ROOT / "_fonts" / "nativealien48.txt"
+FONT_PNG = ROOT / "Graphics" / "fonts" / "nativealien48.png"
+FONT_TXT = ROOT / "Graphics" / "fonts" / "nativealien48.txt"
 
 # Render-time scale (90 px native → ~48 px target). 1 = native, 0.5 = half-size.
 DEFAULT_SCALE = 0.5

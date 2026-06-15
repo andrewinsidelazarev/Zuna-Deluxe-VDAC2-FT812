@@ -17,13 +17,13 @@ import numpy as np
 from PIL import Image
 
 ROOT = Path(r'C:\Users\Администратор\Desktop\Zuma Deluxe VDAC2')
-HD = Path(r'C:\Users\Администратор\Desktop\Zuma-Deluxe-HD-release-v010-ref\content\fonts')
 OUT_BIN = ROOT / 'Graphics' / 'Converted' / 'loading_text.bin'
 OUT_INC = ROOT / 'Source' / 'ASM' / 'loading_text_meta.inc'
 
 FONT_NAME = 'nativealien48'
-PNG_PATH = HD / f'{FONT_NAME}.png'
-TXT_PATH = HD / f'{FONT_NAME}.txt'
+FONT_DIR = ROOT / 'Graphics' / 'fonts'
+PNG_PATH = FONT_DIR / f'{FONT_NAME}.png'
+TXT_PATH = FONT_DIR / f'{FONT_NAME}.txt'
 
 TARGET_H = 48
 PIECES = [

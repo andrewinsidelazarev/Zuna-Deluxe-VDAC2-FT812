@@ -29,6 +29,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 SRC = ROOT / 'Graphics' / 'Original' / 'sprites'
 OUT = ROOT / 'Graphics' / 'Converted'
+FONT_DIR = ROOT / 'Graphics' / 'fonts'
 OUT.mkdir(parents=True, exist_ok=True)
 
 LIFE_FROG_SIZE = 20
@@ -221,8 +222,8 @@ def make_ok_button_wide_green(w: int, h: int) -> Image.Image:
                            outline=(78, 235, 82, 220), width=1)
     draw.line((18, 9, w - 20, 9), fill=(125, 255, 112, 150), width=1)
 
-    font_path = Path(r'C:\Windows\Fonts\impact.ttf')
-    font = ImageFont.truetype(str(font_path), 16) if font_path.exists() else ImageFont.load_default()
+    font_path = FONT_DIR / 'ttf' / 'impact.ttf'
+    font = ImageFont.truetype(str(font_path), 16)
     text = 'OK'
     box = draw.textbbox((0, 0), text, font=font, stroke_width=2)
     tw = box[2] - box[0]
