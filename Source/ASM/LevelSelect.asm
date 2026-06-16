@@ -2,8 +2,8 @@
                 define _ZUMA_LEVEL_SELECT_
 
 ; ============================================================================
-; FT812 level-select room. The generated asset profile reuses the main-menu
-; RAM_G span: the rooms never need to stay resident at the same time.
+; FT812 level-select room. Сгенерированный asset profile переиспользует main-menu
+; диапазон RAM_G: эти сцены никогда не должны быть resident одновременно.
 ; ============================================================================
 
                 include "level_select_assets.inc"
@@ -69,14 +69,14 @@ LoadLevelSelectAssets:
                 LD   DE, LS_UI_PAL_RAMG & #FFFF
                 CALL FT.WriteMem
                 SetPage2 6
-                SetPage3 UI_OVL_PAGE                    ; this code runs on the UI overlay (#41); restore it, not #04
+                SetPage3 UI_OVL_PAGE                    ; код работает в UI overlay (#41); restore не #04
                 RET
 
 LevelSelectClampCurrent:
                 LD   A, (CurrentLevel)
                 CP   LEVEL_SELECT_COUNT
                 RET  C
-                LD   A, LEVEL_SELECT_COUNT - 1          ; board 22 is WIN-only, never selectable
+                LD   A, LEVEL_SELECT_COUNT - 1          ; board 22 только WIN, недоступна для выбора
                 LD   (CurrentLevel), A
                 RET
 
@@ -357,7 +357,7 @@ LevelSelectBuildFrame:
                 FT_ClearColorRGB32 0x000000
                 FT_ClearAll
                 CALL LevelSelectDrawSky
-                CALL DrawLevelSelectPreview              ; render machinery is now resident (shared_render.asm) — no page swap needed
+                CALL DrawLevelSelectPreview              ; render machinery теперь resident (shared_render.asm), page swap не нужен
                 CALL LevelSelectDrawBackground
                 CALL LevelSelectDrawBadges
                 CALL LevelSelectDrawButtons
@@ -498,9 +498,9 @@ LevelSelectFrogMarkerLUT:
                 INCBIN "Graphics/Converted/preview_frog_matrix_lut.bin"
 
 LevelSelectSkyPos:              DEFW 0                 ; позиция неба в 1/16 px (субпиксельный скролл)
-; LevelSelectPreviewFrogAngle -> hoisted to loader_resident.asm (resident Core):
-; the resident preview renderer reads/writes it while the gameplay overlay (#04)
-; is mapped, so it can't live on this UI overlay page (#41).
+; LevelSelectPreviewFrogAngle вынесен в loader_resident.asm (resident Core):
+; resident preview renderer читает/пишет его, пока gameplay overlay (#04) mapped,
+; поэтому байт не может жить на этой UI overlay page (#41).
 LevelSelectLmbNow:              DEFB 0
 LevelSelectLmbPrev:             DEFB 0
 LevelSelectMainMenuClick:       DEFB 0

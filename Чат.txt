@@ -7295,4 +7295,9 @@ CPU: 14 MHz
 Сессия завершена по просьбе пользователя.
 
 
+## [2026-06-16 17:20] VDAC2: сохранена опорная версия v074 — More Games + мышь
+**Контекст:** текущая версия сохранена как `releases/v074-2026-06-16-more-games-mouse-reference/` с исходниками и артефактами. В релизе: исправлен повторный вход в экран More Games; исправлен выход из More Games по ЛКМ; убран low-pass фильтр курсора мыши (возможны баги/нюансы в эмуляторах); чувствительность перемещения мыши увеличена в 1.5 раза через `delta * 3 / 2`.
+**Сохранено:** `Source/`, `Docs/TSLib/Include/Input/Kempston/Mouse/UpdateMouseState.asm`, `REFERENCE.txt`, `.spg`, `ZUMAMAIN.PAK`, `ZUMALVL.PAK`, `ZUMAAUD.PAK`, `ZUMASND.PAK`.
+**SHA256:** `zuma_vdac2.spg`=`EFCBF046FA6DDBAE95F8F94BF825BE452C85E7F0121C1B013EAAF102EF6B1FA7`; `ZUMAMAIN.PAK`=`F42D94201473D034B5439F0D9F4BE5FD9DAC2B084F7A54CA89382E1AE4CE1945`; `ZUMALVL.PAK`=`47172AACA2EAAD274F457BB68FB5B41EEF03C9C05D54FE467C63635A78895A35`; `ZUMAAUD.PAK`=`72EF97514A816962D725193DC27C3232373505C859362784C469A8CF057FB017`; `ZUMASND.PAK`=`8393DB5BB8EC2FDA98C970A3303C43BDEF86A5CA5B4CF09FF09F8FC0C53409DA`.
+**Проверка:** `build_wc_img.cmd` PASS, `sjasmplus` 0 errors, memory-map checks PASS, host `wc.img` обновлён in-place.
 

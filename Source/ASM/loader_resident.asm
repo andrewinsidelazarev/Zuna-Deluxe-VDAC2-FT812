@@ -1,41 +1,41 @@
-; loader_resident.asm — the parts of the PAK loader that MUST stay resident in
-; Core (slot 1), because they are reached while the loader overlay page is NOT
-; mapped:
-;   * VDC_ReadSampleAtHL — called per-frame from VDC_SlotPos (Main1) during play;
+; loader_resident.asm — части PAK-loader, которые обязаны оставаться resident
+; в Core (slot 1), потому что вызываются, когда loader overlay page НЕ mapped:
+;   * VDC_ReadSampleAtHL — вызывается каждый frame из VDC_SlotPos (Main1) в PLAY;
 ;   * adventure cross-load vars (FadeAlpha / CurrentDifficulty / CurrentLevel),
-;     read by gameplay/menu/level-select code at any time;
-;   * the overlay trampolines — the named entry points callers use; each maps the
-;     loader page into slot 3, calls the real OVL_* routine, then restores #04.
+;     читаются gameplay/menu/level-select кодом в любой момент;
+;   * overlay trampolines — именованные entry points для callers; каждый мапит
+;     loader page в slot 3, вызывает реальный OVL_* routine и восстанавливает #04.
 ;
-; The bulk of the loader (sd_zc + RawPak_* + ZiFi_* + OVL_LoadGameplay... +
-; OVL_LoadLevelSelectPreviewAssets) lives in ts-dos.asm, assembled into its own
-; SLOT 3 / PAGE #40 overlay region (see main.asm). It is dormant outside loads —
-; "load a level, then sleep" — so it no longer costs resident Core space.
+; Основной loader (sd_zc + RawPak_* + ZiFi_* + OVL_LoadGameplay... +
+; OVL_LoadLevelSelectPreviewAssets) живёт в ts-dos.asm и собирается в собственный
+; SLOT 3 / PAGE #40 overlay region (см. main.asm). Вне загрузок он спит по схеме
+; «загрузить уровень и уснуть», поэтому не расходует resident Core space.
 
-LOADER_OVL_PAGE    EQU #40            ; SPG page holding the loader overlay (mapped into slot 3 during loads)
+LOADER_OVL_PAGE    EQU #40            ; SPG page с loader overlay; mapped в slot 3 во время загрузок
 GS_PORT_DATA       EQU #00B3
 GS_PORT_CMD        EQU #00BB
 GS_CMD_PLAY_MODULE EQU #31
 GS_CMD_STOP_MODULE EQU #32
 GS_CMD_PLAY_FX     EQU #98
-GS_SFX_NOTE        EQU 53            ; 11025 Hz payload at GS C-2-ish base (#30) needs about +5 semitones.
+GS_SFX_NOTE        EQU 53            ; 11025 Hz payload на GS C-2-ish base (#30) требует примерно +5 semitones.
 GS_WAIT_TIMEOUT    EQU #FFFF
-                                      ; UI_OVL_PAGE (#41) is defined globally in main.asm (needed before
-                                      ; module Core by the Fade* transitions); referenced here for the trampoline.
+                                      ; UI_OVL_PAGE (#41) глобально определён в main.asm (нужен Fade*
+                                      ; transition до module Core); здесь используется trampoline.
 
-; Track chunkB page: tracks longer than one 16K page (>2730 samples) are split on
-; a sample boundary. The active track pages are resident variables because the
-; two-curve boards reuse the same reader for the second path.
+; Track chunkB page: треки длиннее одной 16K page (>2730 samples) режутся по
+; sample boundary. Active track pages — resident переменные, потому что
+; двухкривые boards переиспользуют тот же reader для второго path.
 TRACK_PAGE2        EQU #0F
 TRACK_SPLIT_SAMPLE EQU 2730        ; (16384-2)/6, first sample stored in TRACK_PAGE2
 
 ; ----------------------------------------------------------------------------
-; VDC_ReadSampleAtHL — read track sample [HL] -> BC=X, DE=Y; set VDC_LastT,
-; VDC_LastTangent and VDC_LastTrackFlags; CF=0. Core-resident (called as a tail-jump from VDC_SlotPos
-; in Main1, which is nearly full). Handles the 2-page track split: samples below
-; TRACK_SPLIT_SAMPLE sit on VDC_ActiveTrackPage1 at #8000+2+t*6; samples at/above
-; live on VDC_ActiveTrackPage2 at #8000+(t-split)*6 (chunkB has no count header).
-; Leaves slot 2 mapped to VDC_ActiveTrackPage1. Clobbers AF, HL.
+; VDC_ReadSampleAtHL — читает track sample [HL] -> BC=X, DE=Y; выставляет
+; VDC_LastT, VDC_LastTangent и VDC_LastTrackFlags; CF=0. Core-resident tail-jump
+; из VDC_SlotPos в почти заполненном Main1. Обрабатывает split на 2 page:
+; samples ниже TRACK_SPLIT_SAMPLE лежат в VDC_ActiveTrackPage1 по #8000+2+t*6;
+; samples от split и выше — в VDC_ActiveTrackPage2 по #8000+(t-split)*6
+; (у chunkB нет count header). На выходе slot 2 снова VDC_ActiveTrackPage1.
+; Клобает AF, HL.
 ; ----------------------------------------------------------------------------
 VDC_ReadSampleAtHL:
                 LD   (VDC_LastT), HL                   ; expose t
@@ -60,9 +60,9 @@ VDC_ReadSampleAtHL:
                 LD   (VDC_LastTangent), A : INC HL
                 LD   A, (HL)
                 LD   (VDC_LastTrackFlags), A
-                PUSH BC : PUSH DE                      ; save Y, X across page restore
+                PUSH BC : PUSH DE                      ; сохранить Y, X через page restore
                 LD   A, (VDC_ActiveTrackPage1)
-                SetPage2_A                             ; restore active track page for callers
+                SetPage2_A                             ; restore active track page для callers
                 POP  DE : POP  BC                      ; DE = X, BC = Y
                 JR   .rearr
 .p1:            ; --- page1 (#06, already mapped): addr = #8000 + 2 + t*6 ---
@@ -87,9 +87,9 @@ VDC_ReadSampleAtHL:
                 AND  A                                 ; CF = 0
                 RET
 
-; Adventure state vars (CurrentLevel etc) previously lived in TSLib region
-; #1937 area where TSLib activity corrupted them. Resident in Core so gameplay,
-; menu and level-select code reach them while the loader overlay is unmapped.
+; Adventure state vars (CurrentLevel etc) раньше лежали в TSLib region #1937,
+; где их портил activity TSLib. Теперь resident в Core, чтобы gameplay/menu/
+; level-select код видел их даже при unmapped loader overlay.
 FadeAlpha:         DEFB 0
 CurrentDifficulty: DEFB 0
 CurrentLevel:      DEFB 0
@@ -99,13 +99,12 @@ AdventurePos:      DEFB 0
 VDC_ActiveTrackPage1: DEFB TRACK_L01_PAGE
 VDC_ActiveTrackPage2: DEFB TRACK_PAGE2
 
-; --- Hoisted gameplay/UI state (originally in VDC.asm / Frog.asm) -----------
-; Moved to resident Core so the resident transition + HUD/dialog/absorb/win
-; logic in main.asm reaches them while slot 3 holds a DIFFERENT scene overlay
-; (UI page vs gameplay page) — and so FadeLevelSelectToGameplay can reset the
-; score BEFORE the gameplay page is mapped. Names unchanged (module Core) → all
-; existing references (qualified Core.X and in-module X) resolve untouched.
-; VDC_Init still initialises these by name. See typed-launching-sunset plan.
+; --- Hoisted gameplay/UI state (из VDC.asm / Frog.asm) -----------------------
+; Перенесено в resident Core: transition + HUD/dialog/absorb/win logic из main.asm
+; должны видеть эти байты, пока slot 3 держит другой scene overlay (UI page или
+; gameplay page). Так FadeLevelSelectToGameplay может сбросить score ДО mapping
+; gameplay page. Имена не менялись (module Core), поэтому Core.X и локальные X
+; resolve как раньше. VDC_Init по-прежнему инициализирует их по именам.
 VDC_GameState:       DEFB 0   ; 0=play,1=absorb,2=gameover,3=intro,4=preview,5=closing
 VDC_HSub:            DEFB 0   ; head sub-position (absorb physics, resident UpdateAbsorbState)
 VDC_SlotsLen:        DEFB 0   ; chain length (win/absorb logic in resident)
@@ -118,17 +117,17 @@ VDC_HudMenuState:    DEFB 0   ; 0=inactive,1=hover,2=pressed (HUD MENU button)
 VDC_HudPointerBlock: DEFB 0   ; pointer over HUD button: suppress frog fire edge
 VDC_GaugeScore:      DEFW 0   ; Zuma bar score this level (win condition in resident)
 VDC_GaugeFull:       DEFB 0   ; 0=yellow filling, 1=green full
-; 24-bit cumulative adventure score (3-byte little-endian, max 16,777,215). Was
-; DEFW (16-bit) which overflowed past 65535 — but adventure totals reach hundreds
-; of thousands and the +1-life-per-50000 mechanic needs cumulative beyond 16 bits.
-; NextLifeScore is the next 50000 threshold; Score_Add24 grants a life and advances
-; it by 50000 each time the score crosses it. Both reset by Score_Reset.
-VDC_PlayerScore:     DB 0,0,0 ; cumulative adventure score (HUD draw + bonus in resident)
-NextLifeScore:       DB #50,#C3,#00 ; next extra-life threshold = 50000 (0x00C350 LE)
-VDC_GameSeconds:     DEFW 0   ; elapsed gameplay seconds (HUD clock in resident)
-Frog_BallColor:      DEFB 0   ; current loaded ball color (refiltered on level change, resident)
-Frog_NextBallColor:  DEFB 0   ; next ball color
-; VDC invariant diagnostics for F12 dumps. First failure is latched until VDC_Init:
+; 24-bit cumulative adventure score (3-byte little-endian, max 16,777,215). DEFW
+; переполнялся после 65535, а adventure total уходит в сотни тысяч и механика
+; +1-life-per-50000 требует накопительный счёт шире 16 bit. NextLifeScore —
+; следующий threshold 50000; Score_Add24 выдаёт жизнь и двигает его на 50000
+; при каждом пересечении. Оба сбрасываются Score_Reset.
+VDC_PlayerScore:     DB 0,0,0 ; накопительный adventure score (HUD draw + bonus в resident)
+NextLifeScore:       DB #50,#C3,#00 ; следующий extra-life threshold = 50000 (0x00C350 LE)
+VDC_GameSeconds:     DEFW 0   ; прошедшие gameplay seconds (HUD clock в resident)
+Frog_BallColor:      DEFB 0   ; текущий loaded ball color (refiltered при смене level, resident)
+Frog_NextBallColor:  DEFB 0   ; следующий ball color
+; VDC invariant diagnostics для F12 dumps. Первая ошибка latch до VDC_Init:
 ;   code 1: SlotsLen > VDC_MAX_SLOTS
 ;   code 2: HSA > TrackNumSlots
 ;   code 3: Slots[i] is neither color nor GAP marker
@@ -141,10 +140,10 @@ VDC_AssertLen:       DEFB 0
 VDC_AssertHSA:       DEFB 0
 VDC_AssertValue:     DEFB 0
 VDC_AssertFrame:     DEFW 0
-; LevelSelectPreviewFrogAngle: written/read by the resident preview-frog renderer
-; (LevelSelectPreviewSlot0). The renderer maps the gameplay overlay (#04) for the
-; frog/DL emit code; this one byte must stay reachable across that swap, so it is
-; resident rather than on the UI overlay (#41) where LevelSelect.asm used to keep it.
+; LevelSelectPreviewFrogAngle: пишет/читает resident preview-frog renderer
+; (LevelSelectPreviewSlot0). Renderer мапит gameplay overlay (#04) ради frog/DL
+; emit code; этот байт должен оставаться доступным через swap, поэтому он resident,
+; а не в UI overlay (#41), где раньше держал его LevelSelect.asm.
 LevelSelectPreviewFrogAngle: DEFB 64
 
 ; ----------------------------------------------------------------------------
@@ -174,9 +173,9 @@ VDC_WinEmitPos2:   DEFW #FFFF           ; chain2
 VDC_WinEmitSpawn2: DEFW 0
 VDC_WinPrtcl:      DEFS WIN_PRTCL_MAX * 5  ; на частицу: X(w),Y(w),f2(b); f2=255 мёртвая
 
-; Loader diagnostics — RESIDENT so an F12 dump (which captures slot 1 = Core, not
-; the loader overlay page) shows how far a load got. The overlay loader writes
-; them while slot 1 is mapped. Read these in a dump to bisect a failed load:
+; Loader diagnostics — RESIDENT, чтобы F12 dump (captured slot 1 = Core, а не
+; loader overlay page) показывал, до какого шага дошла загрузка. Overlay loader
+; пишет сюда, пока slot 1 mapped. В dump эти байты помогают бисектить failed load:
 ;   ZiFi_GpDbgStep : 0=not started, 1=Init, 2=PakOpen, 3=PakReadToc,
 ;                    #34=bg SD done, #35=track SD done, 6=success;
 ;                    #FF=Init err, #FE=PakOpen err, #FD=PakReadToc err.
@@ -184,7 +183,7 @@ VDC_WinPrtcl:      DEFS WIN_PRTCL_MAX * 5  ; на частицу: X(w),Y(w),f2(b
 ;                    #20 entry, #21 BPB read OK, #22 BPB valid, #26 search start,
 ;                    #25 PAK found; #A1 BPB CMD17 err, #A2 bps!=512, #A3 spc=0,
 ;                    #A6 PAK not found anywhere, #A7 run-table overflow.
-;   ZiFi_DbgGamesFound : directories visited during the recursive search.
+;   ZiFi_DbgGamesFound : сколько directories посещено при recursive search.
 ZiFi_GpDbgStep:     DEFB 0
 ZiFi_GpDbgBgOff:    DEFW 0
 ZiFi_GpDbgBgSize:   DEFW 0
@@ -196,30 +195,30 @@ ZiFi_DbgPakSizeL:   DEFW 0
 ZiFi_DbgPakSizeH:   DEFW 0
 
 ; ----------------------------------------------------------------------------
-; Overlay trampolines (resident). Each maps LOADER_OVL_PAGE into slot 3, calls
-; the real OVL_* routine in the overlay, then restores PAGE3=#04. Done under DI
-; so an interrupt never sees slot 3 holding the loader page. CF (load result) is
-; preserved across SetPage3 (it only touches HL) and the final EI.
+; Overlay trampolines (resident). Каждый мапит LOADER_OVL_PAGE в slot 3, вызывает
+; реальный OVL_* routine в overlay и восстанавливает PAGE3=#04. Выполняется под DI,
+; чтобы interrupt не увидел slot 3 с loader page. CF (load result) сохраняется через
+; SetPage3 (трогает только HL) и финальный EI.
 ; ----------------------------------------------------------------------------
 LoadGameplayLevelSpecificFromPack:
                 DI
                 SetPage3 LOADER_OVL_PAGE
                 CALL OVL_LoadGameplayLevelSpecificFromPack
-                DI                                     ; overlay (ZiFi_Done) re-enabled IRQs; re-disable to restore slot 3 atomically
+                DI                                     ; overlay (ZiFi_Done) включил IRQ; снова DI для атомарного restore slot 3
                 SetPage3 #04
                 EI
                 RET
 
-; Called only from level-select (LevelSelect.asm + LevelSelectApplyLevelClick),
-; which runs on the UI overlay (#41) — so restore #41, not #04, else the scene
-; code vanishes from slot 3 on return. (The gameplay trampoline above is only
-; reached from gameplay, so it correctly restores #04.)
+; Вызывается только из level-select (LevelSelect.asm + LevelSelectApplyLevelClick),
+; который работает на UI overlay (#41), поэтому restore #41, а не #04; иначе scene
+; code пропадает из slot 3 при возврате. Gameplay trampoline выше вызывается только
+; из gameplay и корректно восстанавливает #04.
 LoadLevelSelectPreviewAssets:
                 DI
                 SetPage3 LOADER_OVL_PAGE
                 CALL OVL_LoadLevelSelectPreviewAssets
                 DI
-                SetPage3 UI_OVL_PAGE                    ; restore UI overlay (level-select), not #04
+                SetPage3 UI_OVL_PAGE                    ; restore UI overlay (level-select), не #04
                 EI
                 RET
 
@@ -246,9 +245,9 @@ GS_LoadGameplaySoundsMaybe:
                 LD   A, 1
                 CALL OVL_GS_LoadGameplaySoundsMaybe
                 DI
-                ; Keep loader overlay mapped while the SFX authors row is latched.
-                ; The next boot step is BootProgressSetA/LoadMainPack, and both
-                ; loading-screen redraws call OVL_DrawBootSfxAuthors.
+                ; Оставить loader overlay mapped, пока строка SFX authors уже latch.
+                ; Следующий boot step — BootProgressSetA/LoadMainPack; оба redraw
+                ; loading-screen вызывают OVL_DrawBootSfxAuthors.
                 EI
                 RET
 
@@ -345,7 +344,7 @@ GS_PlaySfxCommon:
                 JR   NC, .done
                 LD   A, (GS_SfxRequestId)
                 CP   SND_FIREBALL1
-                JR   Z, .done                         ; fireball is a short transient; do not double-trigger it
+                JR   Z, .done                         ; fireball короткий transient: не дублировать trigger
                 LD   A, 2
                 CALL GS_PlaySfxHandleOnChannel
                 JR   NC, .done
@@ -357,8 +356,8 @@ GS_PlaySfxCommon:
                 POP  AF
                 RET
 
-; Play preloaded SFX with explicit GS note.
-; In: A = sound id, C = note.
+; Воспроизвести preloaded SFX с явной GS note.
+; Вход: A = sound id, C = note.
 GS_PlaySfxNote:
                 PUSH AF
                 PUSH BC
@@ -449,10 +448,10 @@ GS_SfxRequestId:    DEFB 0
 GS_SfxRequestNote:  DEFB 0
 GS_SfxHandles:      DEFS GS_SOUND_COUNT
 
-; LevelsMapLoaded — 0 until the PAK has been located + its sector run-table built
-; once this session (set in RawPak_OpenRoot when the recursive search succeeds).
-; Used to show "LOADING LEVELS..." only on the first (slow) menu->level-select
-; transition; later transitions reuse the cached map and are near-instant.
+; LevelsMapLoaded — 0, пока PAK не найден и его sector run-table не собрана
+; один раз за session (ставится в RawPak_OpenRoot при успешном recursive search).
+; Нужен, чтобы показать "LOADING LEVELS..." только на первом медленном переходе
+; menu->level-select; поздние transitions используют cached map и почти мгновенны.
 LevelsMapLoaded:   DEFB 0
 
 ; --- Quit HOBETA loader, Этап 1: проба BOOT.$C. Результаты резидентны (slot1/Core),
@@ -486,16 +485,16 @@ QuitStub_Image:
                 ENT
 QuitStub_Len   EQU $ - QuitStub_Image
 
-; DrawLoadingScreen — boot-only ARGB4 loading artwork in FT RAM_G.
-; UploadBootLoadingAssets loads the background, progress-bar sprite and TS anim
-; atlas before BootProgressReset. Main/menu/game RAM_G uploads may overwrite
-; those addresses after boot.
-LOADING_BAR_W EQU 255                         ; logical progress units, scaled to sprite width
-BOOT_TS_ANIM_START_DELAY EQU 8                ; DrawLoadingScreen ticks before frame 0 starts advancing
-BOOT_TS_ANIM_FRAME_DELAY EQU 5                ; extra DrawLoadingScreen ticks to hold each ZX Evolution frame
-BOOT_TS_POST_GS_DELAY EQU 24                  ; ordinary ZX ticks after GS music starts, before fade-out
-BOOT_TS_FADE_OUT_DELAY EQU 15                 ; hardware fade-out ticks before SFX authors row
-BOOT_SFX_AUTHORS_FRAME_DELAY EQU 90           ; extra DrawLoadingScreen ticks to hold each SFX authors reveal frame
+; DrawLoadingScreen — boot-only ARGB4 loading artwork в FT RAM_G.
+; UploadBootLoadingAssets загружает background, progress-bar sprite и TS anim atlas
+; до BootProgressReset. Main/menu/game RAM_G uploads могут перезаписать эти адреса
+; после boot.
+LOADING_BAR_W EQU 255                         ; logical progress units, scaled до ширины sprite
+BOOT_TS_ANIM_START_DELAY EQU 8                ; ticks DrawLoadingScreen до старта frame 0
+BOOT_TS_ANIM_FRAME_DELAY EQU 5                ; extra ticks DrawLoadingScreen для удержания ZX Evolution frame
+BOOT_TS_POST_GS_DELAY EQU 24                  ; обычные ZX ticks после старта GS music, перед fade-out
+BOOT_TS_FADE_OUT_DELAY EQU 15                 ; hardware fade-out ticks перед SFX authors row
+BOOT_SFX_AUTHORS_FRAME_DELAY EQU 90           ; extra ticks DrawLoadingScreen для удержания SFX authors reveal frame
 BOOT_NOGS_MAIN_START EQU 95                   ; без GS анимации живут только на реальных тиках LoadMainPack
 BOOT_NOGS_AUTHORS_AT EQU 192                  ; грубо 55:35 от GS music/SFX фаз, переложено на 95..255
 BOOT_NOGS_ZX_FRAME_STEP EQU 9                 ; (192-95)/10 ~= 9.7 progress units per ZX frame
@@ -603,8 +602,8 @@ BootFtBegin:
                 JR   .wait
 .go:            LD   A, 2
                 LD   (BootBusOwner), A
-                ; Shared SPI (#77/#57): release every device and clock the idle
-                ; bus before FT macros assert FT CS. This mirrors sd_csh.
+                ; Shared SPI (#77/#57): снять все device и проклокать idle bus
+                ; перед тем, как FT macros поднимут FT CS. То же поведение, что sd_csh.
                 LD   A, #03
                 LD   BC, #0077
                 OUT  (C), A
@@ -614,8 +613,8 @@ BootFtBegin:
                 RET
 
 BootFtEnd:
-                ; Leave the shared SPI bus deselected and clock idle once so the
-                ; next sd_csl starts from a clean boundary.
+                ; Оставить shared SPI bus deselected и один раз проклокать idle,
+                ; чтобы следующий sd_csl стартовал с чистой границы.
                 LD   A, #03
                 LD   BC, #0077
                 OUT  (C), A
@@ -768,7 +767,7 @@ DrawBootDxtBackground:
                 FT_BitmapLayout FT_RGB565, BOOT_LOADING_BG_COLOR_STRIDE, BOOT_LOADING_BG_COLOR_H
                 FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, BOOT_LOADING_BG_W * 8 / 5, BOOT_LOADING_BG_H * 8 / 5
 
-                ; L4 mask stores per-pixel blend alpha at full 640x480 resolution.
+                ; L4 mask хранит per-pixel blend alpha в полном 640x480 resolution.
                 ; Гибрид (выбор юзера по boot_bg_1024_hybrid): маска BILINEAR — мягкие
                 ; переходы блендинга; цвета остаются NEAREST — блоки c0/c1 не смазываются.
                 FT_BitmapHandle BOOT_LOADING_BG_MASK_HANDLE
@@ -777,7 +776,7 @@ DrawBootDxtBackground:
                 FT_BitmapSize   FT_BILINEAR, FT_BORDER, FT_BORDER, BOOT_LOADING_BG_W * 8 / 5, BOOT_LOADING_BG_H * 8 / 5
 
                 FT_Begin FT_BITMAPS
-                ; Pass 1: L4 mask -> dst alpha only.
+                ; Pass 1: L4 mask -> только dst alpha.
                 FT_ColorMask 0, 0, 0, 1
                 FT_BlendFunc FT_ONE, FT_ZERO
                 FT_ColorA 255

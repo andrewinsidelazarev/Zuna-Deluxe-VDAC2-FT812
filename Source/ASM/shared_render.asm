@@ -1,13 +1,11 @@
-; shared_render.asm — DL-matrix + frog-render machinery, HOISTED RESIDENT.
+; shared_render.asm — DL-matrix + frog-render machinery, resident Core.
 ;
-; These routines/tables/vars are used by BOTH gameplay (overlay #04) AND the
-; level-select preview render (overlay #41). After the main1_play overlay split
-; they MUST be resident (slot 1, always mapped) so either scene can call them
-; without paging gymnastics. Moved verbatim from VDC.asm/Frog.asm/MainLoop.asm;
-; names unchanged (module Core) so all existing references resolve untouched.
-; (User decision 2026-05-27: keep render machinery global, split the rest.)
+; Эти routines/tables/vars используются gameplay overlay #04 и preview render
+; в level-select overlay #41. После split main1_play они должны быть resident
+; в slot 1, чтобы обе сцены вызывали их без paging gymnastics. Имена сохранены
+; в module Core, поэтому существующие ссылки остаются валидными.
 
-; ===================== moved from VDC.asm =====================
+; ===================== VDC helpers =====================
 VDC_DivHLbyA:
                 LD   C, A
                 XOR  A
@@ -30,7 +28,7 @@ VDC_DivHLbyA:
 ; (8 mod 6 = 2 → дубли 6→0 и 7→1). Mul/shift даёт ≤1.4% bias.
 ; ============================================================================
 
-; ===================== moved from Frog.asm =====================
+; ===================== Frog helpers =====================
 Frog_ComputeAngle:
                   ; dx = SmoothX - PosStartX
                   LD   HL, (ZL_SmoothX)
@@ -46,7 +44,7 @@ Frog_ComputeAngle:
                   INC  HL
 .dx_pos:          ; Clamp |dx| до 255 (если H≠0 значит |dx|>255 → насыщать).  Без clamp
                   ; truncate (LD C, L) даёт 0x39=57 для dx=313=0x139, swap-логика
-                  ; сходит с ума → frog дёргается у краёв экрана.  (Кредит: Gemini.)
+                  ; сходит с ума → frog дёргается у краёв экрана.
                   LD   A, H
                   OR   A
                   JR   Z, .dx_clamped
@@ -204,7 +202,7 @@ Frog_Angle:        DEFB 0
 Frog_PosStartX:    DEFW FROG_DEFAULT_X
 Frog_PosStartY:    DEFW FROG_DEFAULT_Y
 
-; ===================== moved from MainLoop.asm =====================
+; ===================== MainLoop helpers =====================
 ZL_EmitLoadId:  LD   DE, FT_CMD_LOADIDENTITY & #FFFF
                 LD   BC, FT_CMD_LOADIDENTITY >> 16
                 JP   FT.Coprocessor.Command_BCDE
@@ -308,7 +306,7 @@ ZL_FT_CMD_Write_DMA:
                 OR   C
                 RET  Z
 
-                ; Convert byte count to word count for DMA registers.
+                ; Перевести byte count в word count для DMA registers.
                 SRL  B
                 RR   C
                 LD   A, B
@@ -317,7 +315,7 @@ ZL_FT_CMD_Write_DMA:
                 LD   (ZL_CmdDmaWordsLo), A              ; trailing words
 
                 FT_ON
-                ; FT812 SPI memory-write header: 1,0,address[21:0], then payload.
+                ; FT812 SPI memory-write header: 1,0,address[21:0], затем payload.
                 LD   A, ((FT_REG_CMDB_WRITE >> 16) & #FF) | #80
                 OUT  (SPI_DATA), A
                 LD   A, (FT_REG_CMDB_WRITE >> 8) & #FF
@@ -325,7 +323,7 @@ ZL_FT_CMD_Write_DMA:
                 LD   A, FT_REG_CMDB_WRITE & #FF
                 OUT  (SPI_DATA), A
 
-                ; DMA source = CMD buffer in Core page #05.
+                ; DMA source = CMD buffer в Core page #05.
                 LD   A, LOW ZL_CMD_DMA_ADDR
                 LD   BC, DMASADDRL
                 OUT  (C), A
@@ -336,7 +334,7 @@ ZL_FT_CMD_Write_DMA:
                 LD   BC, DMASADDRX
                 OUT  (C), A
 
-                ; Full 512-byte chunks: DMALEN=255 words, DMANUM=chunks-1.
+                ; Полные 512-byte chunks: DMALEN=255 words, DMANUM=chunks-1.
                 LD   A, (ZL_CmdDmaWordsHi)
                 OR   A
                 JR   Z, .tail
@@ -378,8 +376,8 @@ ZL_CmdDmaWordsHi: DEFB 0
 ZL_CmdDmaWordsLo: DEFB 0
 
 ; ----------------------------------------------------------------------------
-; ZL_AimUpdate — detect mouse motion (с threshold для подавления Hyper-V Kempston
-; jitter) + keyboard arrows меняют Frog_Angle напрямую.
+; ZL_AimUpdate — детектирует mouse motion (с threshold для подавления Hyper-V
+; Kempston jitter), а keyboard arrows меняют Frog_Angle напрямую.
 ;
 ; Архитектура (1:1 с VDC коллеги): Frog_Angle = primary state (8-bit BRAD wraps
 ; → 360° автоматом). Если мышь двинулась — set ZL_MouseMoved=1, иначе =0.
@@ -387,7 +385,7 @@ ZL_CmdDmaWordsLo: DEFB 0
 ; угол от клавиш сохраняется. Combine, не mode-toggle: клавиши применяются
 ; КАЖДЫЙ кадр (до atan2-проверки), мышь wins при движении.
 ;
-; Threshold ZL_MOTION_THR = 1 px: отсекает только полный «zero motion» когда мышь
+; Threshold ZL_MOTION_THR = 1 px: отсекает только полный «zero motion», когда мышь
 ; физически не движется (защищает клавиатурный режим от ложных takeover при
 ; idle mouse). Sub-pixel Hyper-V jitter подавляется EMA-фильтром в ZL_SmoothMouse,
 ; не deadzone'ом — иначе медленный aim (1-2 px/frame) теряется.

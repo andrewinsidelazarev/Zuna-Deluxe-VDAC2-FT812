@@ -148,7 +148,7 @@ Input_FireKey:  LD   A, (Input_KSpace) : OR A : RET NZ      ; Space
 ; Input_Fire — полный огонь: Input_FireKey + ЛКМ. Для сцен без отдельного
 ; hit-test'а (напр. выход из More Games — любой ввод = огонь). NZ = нажато.
 Input_Fire:     CALL Input_FireKey : RET NZ                 ; Space|Enter|Kempston
-                ; fall through to Input_MouseLMB
+                ; дальше сразу Input_MouseLMB
 
 ; Input_MouseLMB -> NZ = ЛКМ нажата, Z = отпущена.
 ; На текущем VDAC2/Kempston mouse линия кнопки приходит инверсно к TSLib-комменту.

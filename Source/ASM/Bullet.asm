@@ -1,12 +1,15 @@
 ; ============================================================================
 ; Bullet.asm — летящий шар (одиночный выстрел из лягушки).
 ;
-; State: Active flag + позиция (X,Y signed 16-bit) + velocity (VX,VY signed 8-bit)
-; + color (0..5).  Spawn в start-fire (Frog_HandleMouse / Frog_FireKeyboard).
-; Update каждый кадр (X += VX, Y += VY).  Out-of-screen → deactivate.
-; Render — handle 0 chain atlas, тот же что ball-now/next-ball/chain.
+; Состояние: Active flag, позиция X/Y (signed 16-bit), velocity VX/VY
+; (signed 8-bit), цвет 0..5. Spawn вызывается из start-fire
+; (Frog_HandleMouse / Frog_FireKeyboard).
+; Update каждый кадр двигает X/Y; выход за экран отключает пулю.
+; Render использует handle 0 chain atlas, тот же, что ball-now/next-ball/chain.
 ;
-; Этап 1 (текущий): только полёт + render. Без collision/insert в chain.
+; Текущая логика: полёт, проверка попадания по обеим цепям, hemisphere-target
+; и вставка через VDC_InsertAt. Пули в tunnel-track не попадают, но учитываются
+; для gap-bonus-трекинга.
 ; ============================================================================
 
 ; 1024×768 порт: пуля летит в 1024-пространстве (трек/шары ×1.6). Скорость,
@@ -16,11 +19,11 @@ BULLET_SPRITE_HALF  EQU 26                            ; round(51/2) — цент
 BULLET_DRAW         EQU 51                            ; экранный размер = round(32×8/5)
 BULLET_DRAW_SCALE   EQU #00019800                     ; 51/32 в f16.16 (cmd_scale: 32px atlas → 51px screen)
 BULLET_HIT_THR      EQU 35                            ; 22×1.6 bbox prefilter: |dx|<THR && |dy|<THR.
-BULLET_HIT_MANHATTAN_THR EQU 54                       ; 34×1.6 reject far bbox corners.
-                                                      ; D=32: 30/46 was too magnetic on curved chain and
-                                                      ; could pick a ball several slots before the aimed one.
-                                                      ; 22/34 keeps a small touch margin without early capture.
-BULLET_TRACKF_TUNNEL EQU #01                          ; track flags bit0: hidden/tunnel, not shootable.
+BULLET_HIT_MANHATTAN_THR EQU 54                       ; 34×1.6 отсекает дальние углы bbox.
+                                                      ; Порог 30/46 был слишком магнитным на кривой цепи:
+                                                      ; иногда выбирался шар за несколько слотов до прицела.
+                                                      ; 22/34 оставляет небольшой запас без раннего захвата.
+BULLET_TRACKF_TUNNEL EQU #01                          ; bit0 track flags: hidden/tunnel, недоступен для выстрела.
 
 
 ; ----------------------------------------------------------------------------
@@ -34,8 +37,8 @@ Bullet_Init:        XOR  A
 
 ; ----------------------------------------------------------------------------
 ; Bullet_Spawn — вызывается из Frog start-fire (LMB или SPACE).
-; Berёт цвет из Frog_BallColor (= уже промотировано из NextBallColor),
-; angle из Frog_Angle, spawn position из Frog_PosStartX/Y (центр лягушки).
+; Берёт цвет из Frog_BallColor, angle из Frog_Angle и стартовую позицию
+; Frog_PosStartX/Y (центр лягушки).
 ; Velocity = BULLET_SPEED * (cos(angle), sin(angle)) / 128.
 ; ----------------------------------------------------------------------------
 Bullet_Spawn:       LD   A, (VDC_DialogState)
@@ -52,7 +55,7 @@ Bullet_Spawn:       LD   A, (VDC_DialogState)
 .bs_block:          SCF
                     RET
 .bs_free:
-                    RET  NZ                           ; уже в полёте — single bullet MVP
+                    RET  NZ                           ; уже в полёте — разрешена только одна пуля
                     LD   A, 1
                     LD   (Bullet_Active), A
                     XOR  A
@@ -65,7 +68,7 @@ Bullet_Spawn:       LD   A, (VDC_DialogState)
                     LD   HL, (Frog_PosStartY)
                     LD   (Bullet_Y), HL
 
-                    CALL LogShotFired                 ; SHOT_FIRED event
+                    CALL LogShotFired                 ; событие SHOT_FIRED
                     LD   A, SND_FIREBALL1
                     CALL GS_PlaySfx
 
@@ -94,7 +97,7 @@ Bullet_Spawn:       LD   A, (VDC_DialogState)
 
 
 ; ----------------------------------------------------------------------------
-; Bullet_Update — X += VX, Y += VY каждый кадр. Deactivate если за экран.
+; Bullet_Update — X += VX, Y += VY каждый кадр. Деактивация при выходе за экран.
 ; ----------------------------------------------------------------------------
 Bullet_Update:      LD   A, (VDC_DialogState)
                     CP   3
@@ -108,7 +111,7 @@ Bullet_Update:      LD   A, (VDC_DialogState)
                     LD   DE, (Bullet_X)
                     ADD  HL, DE
                     LD   (Bullet_X), HL
-                    ; out-of-screen X check (signed)
+                    ; signed-проверка выхода X за экран
                     BIT  7, H
                     JR   NZ, .deactivate              ; X < 0
                     LD   DE, 1024
@@ -129,15 +132,15 @@ Bullet_Update:      LD   A, (VDC_DialogState)
                     RET  C                            ; Y < 768 → ОК
 .deactivate:        XOR  A
                     LD   (Bullet_Active), A
-                    CALL VDC_BreakShotStats           ; miss/offscreen: no destroy, no gap bonus
+                    CALL VDC_BreakShotStats           ; промах/вылет: нет destroy и gap bonus
                     XOR  A
                     LD   (Bullet_TunnelSeen), A
                     RET
 
 
 ; ----------------------------------------------------------------------------
-; Bullet_CheckCollision — итерация по chain slots.  Находит ближайший шар
-; (min Manhattan dist) среди тех, что попали в bbox BULLET_HIT_THR.
+; Bullet_CheckCollision — итерация по chain slots. Находит ближайший шар
+; (min Manhattan distance) среди тех, что попали в bbox BULLET_HIT_THR.
 ; Если найден → VDC_InsertAt(target_idx, color), Active=0.
 ; ----------------------------------------------------------------------------
 Bullet_CheckCollisionAllChains:
@@ -161,11 +164,10 @@ Bullet_CheckCollision:
                     LD   A, (VDC_SlotsLen)
                     OR   A
                     RET  Z
-                    LD   B, A                          ; B = loop count = SlotsLen (BUG fix 2026-05-16
-                                                       ; from Codex: было LD B, A после LD A,255 → B=255,
-                                                       ; loop сканировал stale slots за SlotsLen)
+                    LD   B, A                          ; B = SlotsLen; нельзя брать B после загрузки 255,
+                                                       ; иначе loop уйдёт в stale slots за концом цепи.
 
-                    ; init best-hit scratch
+                    ; Инициализация scratch для ближайшего попадания.
                     LD   A, 255
                     LD   (Bullet_TmpHit), A
                     LD   (Bullet_TmpDistP), A
@@ -186,19 +188,19 @@ Bullet_CheckCollision:
                     AND  BULLET_TRACKF_TUNNEL
                     LD   (Bullet_TmpTunnel), A
 
-                    ; bbox check: |Bullet_X - X| < THR
+                    ; bbox-проверка: |Bullet_X - X| < THR
                     LD   HL, (Bullet_X)
                     AND  A
                     SBC  HL, BC
                     CALL Bullet_AbsHL
                     LD   A, H
                     OR   A
-                    JR   NZ, .bcc_skip                 ; |dx| > 255 → too far
+                    JR   NZ, .bcc_skip                 ; |dx| > 255 → слишком далеко
                     LD   A, L
                     CP   BULLET_HIT_THR
-                    JR   NC, .bcc_skip                 ; |dx| ≥ thr → too far
+                    JR   NC, .bcc_skip                 ; |dx| ≥ thr → слишком далеко
 
-                    ; bbox check: |Bullet_Y - Y| < THR
+                    ; bbox-проверка: |Bullet_Y - Y| < THR
                     LD   HL, (Bullet_Y)
                     AND  A
                     SBC  HL, DE
@@ -215,55 +217,55 @@ Bullet_CheckCollision:
                     JR   Z, .bcc_not_tunnel
                     LD   A, 1
                     LD   (Bullet_TunnelSeen), A
-                    JR   .bcc_skip                     ; balls inside tunnel cannot be hit
+                    JR   .bcc_skip                     ; шар внутри tunnel нельзя сбить
 .bcc_not_tunnel:
-                    ; BBOX HIT — calculate Manhattan distance and update best
-                    PUSH BC                            ; [1] save X
-                    PUSH DE                            ; [2] save Y
+                    ; BBOX HIT: считаем Manhattan distance и обновляем лучший hit.
+                    PUSH BC                            ; [1] сохранить X
+                    PUSH DE                            ; [2] сохранить Y
                     CALL Bullet_ManhattanToBC_DE       ; A = distance
-                    POP  DE                            ; [2] restore Y
-                    POP  BC                            ; [1] restore X
+                    POP  DE                            ; [2] восстановить Y
+                    POP  BC                            ; [1] восстановить X
                     CP   BULLET_HIT_MANHATTAN_THR
-                    JR   NC, .bcc_skip                 ; diagonal bbox corner -> visually too far
+                    JR   NC, .bcc_skip                 ; диагональный угол bbox визуально слишком далёк
                     
                     LD   HL, Bullet_TmpDistP
                     CP   (HL)
-                    JR   NC, .bcc_skip                 ; dist >= best_dist → skip
+                    JR   NC, .bcc_skip                 ; dist >= best_dist → пропустить
                     
-                    ; NEW BEST
-                    LD   (HL), A                       ; update best_dist
-                    ; Get current i (C) from stack (it was PUSHed at .bcc_loop)
+                    ; Новый лучший кандидат.
+                    LD   (HL), A                       ; обновить best_dist
+                    ; Текущий i (C) берётся со стека: он был PUSHed в .bcc_loop.
                     LD   HL, 0
                     ADD  HL, SP
                     LD   A, (HL)                       ; A = C (low byte of outer PUSH BC)
-                    LD   (Bullet_TmpHit), A            ; update best_idx
+                    LD   (Bullet_TmpHit), A            ; обновить best_idx
 
 .bcc_skip:          POP  BC
                     INC  C
                     DEC  B
                     JP   NZ, .bcc_loop
 
-                    ; Finalize: if Bullet_TmpHit != 255 → perform insert
+                    ; Финализация: Bullet_TmpHit != 255 → выполнить insert.
                     LD   A, (Bullet_TmpHit)
                     CP   255
-                    JP   Z, VDC_UpdateBulletGapTracking  ; no hit → check gap proximity
+                    JP   Z, VDC_UpdateBulletGapTracking  ; нет hit → проверить близость gap
 
                     CALL LogBboxHit                    ; in: A=best_hit_idx (preserved)
                     LD   A, SND_BALLCLICK2
                     CALL GS_PlaySfx
                     LD   A, (Bullet_TmpHit)
 
-                    LD   (Bullet_TmpHit), A            ; ensure it's there
+                    LD   (Bullet_TmpHit), A            ; сохранить hit для hemisphere-target
                     CALL Bullet_HemisphereTarget       ; A = target_idx
                     CALL LogHemi                       ; in: A=target_idx (preserved)
 
-                    LD   C, A                          ; save target
+                    LD   C, A                          ; сохранить target
                     LD   A, (Bullet_Color)
                     LD   B, A
                     LD   A, C
-                    CALL VDC_InsertAt                 ; A=1 if this shot destroyed balls
+                    CALL VDC_InsertAt                 ; A=1, если выстрел сразу уничтожил шары
                     OR   A
-                    CALL NZ, VDC_AwardGapBonus        ; gap bonus only for through-gap destroy
+                    CALL NZ, VDC_AwardGapBonus        ; gap bonus только за through-gap destroy
                     XOR  A
                     LD   (Bullet_Active), A
                     RET
@@ -276,11 +278,11 @@ Bullet_CheckCollision:
 ; ----------------------------------------------------------------------------
 Bullet_HemisphereTarget:
                     LD   (Bullet_TmpHit), A
-                    ; default target = hit
-                    ; --- find prev non-gap (k < hit) ---
+                    ; target по умолчанию = hit
+                    ; Поиск предыдущего non-gap (k < hit).
                     LD   A, 255
                     LD   (Bullet_TmpDistP), A
-                    LD   (Bullet_TmpDistN), A          ; default next_dist = 255
+                    LD   (Bullet_TmpDistN), A          ; next_dist по умолчанию = 255
 
                     LD   A, (Bullet_TmpHit)
                     OR   A
@@ -312,7 +314,7 @@ Bullet_HemisphereTarget:
                     CALL Bullet_ManhattanToBC_DE       ; A = |bx-X|+|by-Y| (clamped 255)
                     LD   (Bullet_TmpDistP), A
 .ht_skip_prev:
-                    ; --- find next non-gap (k > hit) ---
+                    ; Поиск следующего non-gap (k > hit).
                     LD   A, (Bullet_TmpHit)
                     INC  A
                     LD   (Bullet_TmpScan), A
@@ -365,14 +367,14 @@ Bullet_HemisphereTarget:
                     LD   A, (Bullet_TmpDistN)
                     CP   255
                     JR   NZ, .ht_final_compare
-                    ; нет next (hit=len-1) → считаем dist(bullet, hit) как "next_dist"
+                    ; нет next (hit=len-1) → считаем dist(bullet, hit) как next_dist
                     LD   A, (Bullet_TmpHit)
                     CALL VDC_SlotPos
                     CALL Bullet_ManhattanToBC_DE
                     LD   (Bullet_TmpDistN), A
 
 .ht_final_compare:
-                    ; if dist_next < dist_prev → target = hit + 1, else hit
+                    ; если dist_next < dist_prev → target = hit + 1, иначе hit
                     LD   A, (Bullet_TmpDistN)
                     LD   B, A
                     LD   A, (Bullet_TmpDistP)
@@ -384,10 +386,10 @@ Bullet_HemisphereTarget:
 
 
 ; ----------------------------------------------------------------------------
-; Bullet_ManhattanToBC_DE — A = |Bullet_X - BC| + |Bullet_Y - DE| clamped 255.
+; Bullet_ManhattanToBC_DE — A = |Bullet_X - BC| + |Bullet_Y - DE|, clamped 255.
 ; ----------------------------------------------------------------------------
 Bullet_ManhattanToBC_DE:
-                    PUSH DE                            ; save Y
+                    PUSH DE                            ; сохранить Y
                     LD   HL, (Bullet_X)
                     AND  A
                     SBC  HL, BC
@@ -397,7 +399,7 @@ Bullet_ManhattanToBC_DE:
                     JR   Z, .mh_dx_ok
                     LD   L, 255
 .mh_dx_ok:          LD   B, L                          ; B = |dx| clamped
-                    POP  DE                            ; restore Y
+                    POP  DE                            ; восстановить Y
                     LD   HL, (Bullet_Y)
                     AND  A
                     SBC  HL, DE
@@ -437,14 +439,14 @@ Bullet_SignExtendA_HL:
 
 
 ; ----------------------------------------------------------------------------
-; Bullet_Draw — render bullet sprite в DL.  handle 0 chain atlas.
-; Cell = Bullet_Color * 16 (без spin — один кадр).  Matrix должна быть identity.
+; Bullet_Draw — вывод sprite пули в DL. handle 0 chain atlas.
+; Cell = Bullet_Color * 16 (без spin — один кадр). Matrix должна быть identity.
 ; ----------------------------------------------------------------------------
 Bullet_Draw:        LD   A, (Bullet_Active)
                     OR   A
                     RET  Z
 
-                    ; Fix 2026-05-14 (Codex подход A): гарантируем identity matrix
+                    ; Гарантируем identity matrix
                     ; перед draw — иначе если matrix унаследована от tongue/body
                     ; rotation, bullet sprite рисуется в неправильном месте экрана.
                     ; 1024×768: scale 32px atlas → 51px screen (cmd_scale 51/32),
@@ -455,7 +457,7 @@ Bullet_Draw:        LD   A, (Bullet_Active)
                     FT_CMD_BUF BULLET_DRAW_SCALE
                     CALL ZL_EmitSetMatrix
 
-                    ; PALETTED4444 dual handle (color<4 → handle 0, color>=4 → handle 9).
+                    ; PALETTED4444 dual handle: color<4 → handle 0, color>=4 → handle 9.
                     if BALLS_ARGB4_ENABLED
                     XOR  A
                     else
@@ -473,7 +475,7 @@ Bullet_Draw:        LD   A, (Bullet_Active)
                     FT_BitmapLayout FT_PALETTED4444, 32, 32
                     endif
                     FT_BitmapSize   FT_BILINEAR, FT_BORDER, FT_BORDER, BULLET_DRAW, BULLET_DRAW
-                    LD   A, (Bullet_Color)                ; re-read (macros clobber B/C/D/E)
+                    LD   A, (Bullet_Color)                ; перечитать: макросы портят B/C/D/E
                     if BALLS_ARGB4_ENABLED
                     ADD  A, A : ADD A, A : ADD A, A : ADD A, A             ; *16 = local cell
                     else
@@ -497,7 +499,7 @@ Bullet_Draw:        LD   A, (Bullet_Active)
                     ADD  HL, HL : ADD HL, HL
                     EX   DE, HL
                     CALL FT.Coprocessor.Vertex2f
-                    ; reset matrix → identity (мы оставили scale-матрицу выше)
+                    ; Сброс matrix → identity после scale-матрицы.
                     CALL ZL_EmitLoadId
                     JP   ZL_EmitSetMatrix
 
@@ -509,9 +511,9 @@ Bullet_Y:           DEFW 0
 Bullet_VX:          DEFB 0
 Bullet_VY:          DEFB 0
 Bullet_Color:       DEFB 0
-Bullet_TunnelSeen:  DEFB 0                            ; bullet passed near an inTunnel ball during this flight
-Bullet_TmpTunnel:   DEFB 0                            ; current scanned slot has TRACKF_TUNNEL
-Bullet_TmpHit:      DEFB 0                            ; hemisphere scratch
+Bullet_TunnelSeen:  DEFB 0                            ; bullet прошёл рядом с tunnel-шаром за текущий полёт
+Bullet_TmpTunnel:   DEFB 0                            ; текущий scanned slot имеет TRACKF_TUNNEL
+Bullet_TmpHit:      DEFB 0                            ; scratch для hemisphere-target
 Bullet_TmpScan:     DEFB 0
 Bullet_TmpDistP:    DEFB 0
 Bullet_TmpDistN:    DEFB 0

@@ -2,8 +2,8 @@
                 define _ZUMA_MENU_MAIN_
 
 ; ============================================================================
-; Main FT812 menu scene. RAM_G contents are a menu-only profile and are replaced
-; by LoadGameplayAssets when Adventure is clicked.
+; Главная FT812 menu scene. RAM_G здесь — menu-only profile; при клике Adventure
+; он полностью заменяется через LoadGameplayAssets.
 ; ============================================================================
 
 MENU_FG_RAMG        EQU #000000
@@ -82,9 +82,9 @@ MENU_QUIT_N_RAMG    EQU #09F410
 MENU_QUIT_H_RAMG    EQU #0A3628
 MENU_QUIT_P_RAMG    EQU #0A7840
 
-; HD menu hit-tests ignore the ornament border around each button. Keeping the
-; dead border also prevents overlapping Options/More/Quit sprite rects from
-; pressing several buttons at one pointer position.
+; HD menu hit-tests игнорируют ornamental border вокруг кнопок. Мёртвая кайма
+; также не даёт пересекающимся Options/More/Quit sprite rects нажимать несколько
+; кнопок одной pointer position.
 MENU_BUTTON_HIT_BORDER EQU 11
 
 MENU_SKY_PAL_RAMG   EQU #0ABA60
@@ -184,7 +184,7 @@ FadeMenuToAdventure:
                 JP   Core.EnterGameplayForCurrentLevel
 
 LoadMainMenuAssets:
-                ; SafeInflatePage2 keeps PAGE3 on main1_play while streaming source via PAGE2.
+                ; SafeInflatePage2 держит PAGE3 на main1_play, пока source стримится через PAGE2.
                 LD   B, MenuInflateAssetsCount
                 LD   HL, MenuInflateAssets
                 CALL MenuInflateAssetsFromTable
@@ -204,7 +204,7 @@ LoadMainMenuAssets:
                 LD   DE, MENU_UI_PAL_RAMG & #FFFF
                 CALL FT.WriteMem
                 SetPage2 6
-                SetPage3 UI_OVL_PAGE                    ; this code runs on the UI overlay (#41); restore it, not #04
+                SetPage3 UI_OVL_PAGE                    ; код работает на UI overlay (#41); restore его, не #04
                 RET
 
                 macro MenuInflateAsset Destination?, Page?, Size?
@@ -215,8 +215,8 @@ LoadMainMenuAssets:
                 DEFW (Size?) & #FFFF
                 endm
 
-; In: B = table entries, HL = entries. Every current menu stream is <64K and
-; starts at source offset #0000, so the table keeps only RAM_G dest/page/size.
+; Вход: B = table entries, HL = entries. Все текущие menu stream <64K и начинаются
+; с source offset #0000, поэтому table хранит только RAM_G dest/page/size.
 MenuInflateAssetsFromTable:
 .next:          PUSH BC
                 LD   E, (HL)
@@ -235,14 +235,14 @@ MenuInflateAssetsFromTable:
                 INC  HL
                 PUSH HL
                 DI
-                SetPage3 UI_OVL_PAGE                    ; keep slot 3 on the UI overlay code page (#41) across inflate
+                SetPage3 UI_OVL_PAGE                    ; держать slot 3 на UI overlay code page (#41) во время inflate
                 LD   HL, 0
                 EXX
                 LD   B, 1
                 EXX
                 LD   A, (MenuInflateDestHi)
                 CALL SafeInflatePage2
-                SetPage3 UI_OVL_PAGE                    ; restore UI overlay code page (this routine runs on #41)
+                SetPage3 UI_OVL_PAGE                    ; restore UI overlay code page (routine работает на #41)
                 EI
                 POP  HL
                 POP  BC

@@ -1,13 +1,11 @@
-; Level-select thumbnail marker loader/draw helpers.
-; Kept in always-visible slot 0 because main1_play is at the 16K page limit.
+; Helpers загрузки/рисования thumbnail marker для level-select.
+; Хранятся в always-visible slot 0, потому что main1_play близок к лимиту 16K.
 
 LoadLevelSelectPreviewMarkers:
                 DI
-                SetPage3 UI_OVL_PAGE                   ; keep the level-select (UI) page mapped: SafeInflatePage2
-                                                       ; streams via PAGE2 and leaves PAGE3 untouched, so the old
-                                                       ; `SetPage3 #04` (from the legacy FT.Coprocessor.Inflate path
-                                                       ; that DID use slot 3) is vestigial. Mapping the gameplay page
-                                                       ; here is unnecessary and inconsistent post-split.
+                SetPage3 UI_OVL_PAGE                   ; держать level-select UI page mapped:
+                                                       ; SafeInflatePage2 стримит через PAGE2 и не трогает PAGE3.
+                                                       ; Мапить gameplay page здесь после split не нужно.
                 LD   HL, 0
                 EXX
                 LD   B, 1
@@ -30,16 +28,16 @@ LoadLevelSelectPreviewMarkers:
                 LD   A, (LS_PREVIEW_KZ_RAMG >> 16) & #FF
                 LD   DE, LS_PREVIEW_KZ_RAMG & #FFFF
                 CALL SafeInflatePage2
-                SetPage3 #41                            ; = UI_OVL_PAGE: restore level-select overlay (called from LevelSelect)
+                SetPage3 #41                            ; = UI_OVL_PAGE: restore level-select overlay
                 EI
                 RET
 
 LevelSelectDrawPreviewMarkers:
-                ; Reuses gameplay frog/DL emit code + Frog_SinTable (gameplay overlay #04).
-                ; The caller (LevelSelectBuildFrame) maps #04 around the WHOLE
-                ; DrawLevelSelectPreview->markers->title chain, so NO SetPage3 here —
-                ; doing it here would restore #41 mid-chain and crash DrawLevelSelectTitle.
-                ; LevelSelectPreviewFrogAngle is hoisted resident.
+                ; Переиспользует gameplay frog/DL emit code + Frog_SinTable
+                ; из gameplay overlay #04. Caller LevelSelectBuildFrame мапит #04
+                ; вокруг всей цепочки DrawLevelSelectPreview→markers→title, поэтому
+                ; SetPage3 здесь запрещён: он вернёт #41 посреди цепочки и сломает
+                ; DrawLevelSelectTitle. LevelSelectPreviewFrogAngle resident.
                 CALL LevelSelectUpdatePreviewMarkerXY
                 CALL LevelSelectUpdatePreviewFrogAngle
                 ; 1024×768: kz-маркер ×1.6 (#04 замаплен вокруг превью-цепочки)
@@ -126,7 +124,7 @@ LevelSelectPreviewCalcX:
                 RET
 
 LevelSelectPreviewCalcY:
-                LD   DE, 56                            ; center-crop Y offset, 1024-вход (35×1.6)
+                LD   DE, 56                            ; center-crop Y offset для 1024-входа (35×1.6)
                 AND  A
                 SBC  HL, DE
                 JR   NC, .y_nonneg
@@ -138,7 +136,7 @@ LevelSelectPreviewCalcY:
 
 LevelSelectPreviewScale:
                 LD   D, H
-                LD   E, L                              ; coord
+                LD   E, L                              ; координата
                 ADD  HL, HL                            ; *2
                 ADD  HL, HL                            ; *4
                 ADD  HL, HL                            ; *8

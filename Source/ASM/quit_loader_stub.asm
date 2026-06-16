@@ -230,7 +230,7 @@ qsd_csl:        PUSH BC : PUSH AF
                 LD   BC, QS_SD_CONF : LD A, QS_SD_CS1 : OUT (C), A
                 LD   BC, QS_SD_DATA : LD A, #FF : OUT (C), A
                 POP  AF : POP BC
-                ; fall into qsd_wait
+                ; дальше сразу qsd_wait
 qsd_wait:       PUSH BC : PUSH DE : PUSH AF
                 LD   BC, QS_SD_DATA : LD DE, 0
 .qw:            IN   A, (C) : INC A : JR Z, .qwd

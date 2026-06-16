@@ -1,0 +1,29 @@
+v074-2026-06-16-more-games-mouse-reference
+
+Release contents:
+1. Fixed repeated entry into the More Games screen.
+2. Fixed leaving the More Games screen by LMB.
+3. Removed the mouse cursor low-pass filter; emulator-specific cursor bugs are possible.
+4. Increased mouse movement sensitivity by 1.5x (delta * 3 / 2).
+
+Saved source snapshot:
+- Source/
+- Docs/TSLib/Include/Input/Kempston/Mouse/UpdateMouseState.asm
+
+Build artifacts:
+- v074-2026-06-16-more-games-mouse-reference.spg
+  SHA256 EFCBF046FA6DDBAE95F8F94BF825BE452C85E7F0121C1B013EAAF102EF6B1FA7
+- v074-2026-06-16-more-games-mouse-reference.zumamain.pak
+  SHA256 F42D94201473D034B5439F0D9F4BE5FD9DAC2B084F7A54CA89382E1AE4CE1945
+- v074-2026-06-16-more-games-mouse-reference.zumalvl.pak
+  SHA256 47172AACA2EAAD274F457BB68FB5B41EEF03C9C05D54FE467C63635A78895A35
+- v074-2026-06-16-more-games-mouse-reference.zumaaud.pak
+  SHA256 72EF97514A816962D725193DC27C3232373505C859362784C469A8CF057FB017
+- v074-2026-06-16-more-games-mouse-reference.zumasnd.pak
+  SHA256 8393DB5BB8EC2FDA98C970A3303C43BDEF86A5CA5B4CF09FF09F8FC0C53409DA
+
+Verification:
+- build_wc_img.cmd PASS
+- sjasmplus: 0 errors
+- memory-map checks PASS
+- host wc.img updated in-place

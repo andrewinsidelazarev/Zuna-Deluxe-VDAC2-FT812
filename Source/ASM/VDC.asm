@@ -11,9 +11,9 @@
 ;   - LastRenderPos НЕ хранится: при t<0 рендер skip. Trade-off: при cascade
 ;     rollback шары на спавне на 1-2 кадра становятся невидимыми. Можно добавить
 ;     потом как опциональный массив.
-;   - Match-3 has a visual explosion phase. Slots keep their color while
-;     VDC_ExplodeFrame > 0; after the timer expires the saved GAP marker is
-;     committed and normal VDC gap closing continues.
+;   - У match-3 есть visual explosion phase. Slots сохраняют color, пока
+;     VDC_ExplodeFrame > 0; после таймера сохраняется GAP marker, затем
+;     продолжается обычное VDC gap closing.
 ;
 ; API:
 ;   VDC_Init       — обнулить все массивы, Slots[] = GAP_STOP, RNG seed.
@@ -59,12 +59,12 @@ VDC_PULL_ACCEL_X10     EQU 4                              ; BALL_DECC = 0.4
 VDC_PULL_MAX_X10       EQU 100                            ; BALL_MAX_BACK_SPEED = 10
 VDC_PULL_BASE_X10      EQU 10                             ; старт = 1 сэмпл/кадр
 VDC_GAP_ACCUM_STEP     EQU VDC_CELL_SIZE * 10             ; аккум ×10 на один слот
-VDC_DM3_OFFSET_GAP_MAX EQU (VDC_CELL_SIZE / 2) + 2        ; allow fresh insert half-cell overlap, still block full gap
-VDC_BALLS_TARGET       EQU VDC_MAX_SLOTS                 ; legacy/debug only. Runtime spawn gate is
+VDC_DM3_OFFSET_GAP_MAX EQU (VDC_CELL_SIZE / 2) + 2        ; разрешить fresh insert half-cell overlap, но блокировать full gap
+VDC_BALLS_TARGET       EQU VDC_MAX_SLOTS                 ; debug ceiling; runtime spawn gate =
                                                           ; VDC_GaugeFull (level target score) + GameOver.
 VDC_KZ_FRAMES          EQU 12
 VDC_EXPLOSION_FRAMES   EQU 15
-VDC_DUAL_LOSE_MENU_DELAY EQU 12                          ; post-empty frames before dual lose dialog
+VDC_DUAL_LOSE_MENU_DELAY EQU 12                          ; post-empty frames перед dual lose dialog
 
 ; VDC_GameState values
 VDC_STATE_PLAY     EQU 0                                  ; обычный gameplay
@@ -73,9 +73,9 @@ VDC_STATE_GAMEOVER EQU 2                                  ; GAME OVER screen
 VDC_STATE_INTRO    EQU 3                                  ; level intro (LEVEL 1-1 + dispname)
 VDC_STATE_PREVIEW  EQU 4                                  ; sparkle wave вдоль track перед спавном
 VDC_STATE_CLOSING  EQU 5                                  ; череп закрывается (frame 11→1)
-VDC_STATE_WIN      EQU 6                                  ; level clear: sparkles, bonus, next level
+VDC_STATE_WIN      EQU 6                                  ; level clear: sparkles, bonus, следующий level
 VDC_INTRO_TICKS    EQU 240                                ; ~4 сек @ 60Hz
-; VDC_DialogState values for the win flow (после win-анимации):
+; VDC_DialogState values для win flow (после win-анимации):
 DLG_WIN_DONE       EQU 5                                  ; «LEVEL DONE» диалог, ждём OK
 DLG_WIN_FADE       EQU 6                                  ; OK нажат → fade-out в чёрное, потом AdvanceToNextLevel
 VDC_WIN_FADE_STEP  EQU 16                                 ; FadeAlpha += step/кадр (255/16 ≈ 16 кадров ≈ 0.2с)
@@ -149,7 +149,7 @@ VDC_Init:
                 LD   (VDC_WinEmitPos2),        HL
                 XOR  A
                 LD   (VDC_WinOutroActive),     A
-                ; Gauge bar reset (BUG fix 2026-05-26): без этого GaugeScore/Full
+                ; Gauge bar reset: без этого GaugeScore/Full
                 ; тащились с прошлого уровня через Win→AdvanceToNextLevel→VDC_Init,
                 ; и новый уровень стартовал с полным баром → спавн сразу отсекался.
                 LD   (VDC_GaugeFull),          A      ; A=0
@@ -166,11 +166,11 @@ VDC_Init:
                 LD   (VDC_AssertFrame + 1),    A
                 LD   (VDC_RollingActive),      A
                 LD   (VDC_SfxStopTimer),       A
-                ; Per-level/difficulty ball-color count from the settings table
+                ; Per-level/difficulty ball-color count из settings table
                 ; (поле colors +4). Раньше цвет всегда катился 0..5 (фикс. NUM=6) —
                 ; ранние уровни должны иметь 4. CurrentLevel/Difficulty уже выставлены.
                 CALL VDC_LoadLevelSettings            ; per-level colors/speed/start + accum reset (Core)
-                LD   A, 11                            ; KzFrame=11 (skull mouth wide open) during intro/preview
+                LD   A, 11                            ; KzFrame=11 (skull mouth wide open) во время intro/preview
                 LD   (VDC_KzFrame),            A
                 ; --- Intro state (3) → Preview (4) → Closing (5) → Play (0) ---
                 ; INTRO: LEVEL 1-1 + SPIRAL OF DOOM с fade-out
@@ -210,9 +210,7 @@ VDC_Init:
                 ; Запомнить TRACK_NUM_SLOTS (= NumSamples / CELL_SIZE - 1) —
                 ; используется как cap для HSA. NumSamples лежит в TrackData word.
                 LD   HL, (TrackData)                  ; HL = NumSamples
-                LD   A, VDC_CELL_SIZE                 ; A = divisor (BUG fix 2026-05-14:
-                                                       ; раньше отсутствовал и был лишний `ADD HL,HL`
-                                                       ; → деление на 0 → TrackNumSlots = #FFFE).
+                LD   A, VDC_CELL_SIZE                 ; A = divisor; без него TrackNumSlots ломается.
                 CALL VDC_DivHLbyA                     ; HL = NumSamples / CELL_SIZE
                 LD   (VDC_TrackNumSlots), HL
                 OR   A
@@ -261,7 +259,7 @@ VDC_Init:
                 XOR  L
                 LD   L, A
                 LD   (VDC_LfsrSeed), HL
-                ; --- DEBUG snapshot (для F12-dump диагностики) ---
+                ; Snapshot для F12-dump диагностики.
                 ; #4C88..#4C8E: RAW значения трёх entropy-источников (сдвиг −#380
                 ; вместе с GAMELOG: RAM освобождена под CMD-буфер, 1024-порт).
                 CALL ReadRTCSeconds
@@ -312,8 +310,8 @@ VDC_InitSecondChainMaybe:
                 ; что и одиночные. Делить его /2 нельзя: обе цепочки имеют собственный
                 ; VDC_BallsSpawned и должны независимо пройти полную быструю фазу.
 
-                ; Clone the freshly reset chain state into the second backing
-                ; store, then replace only TrackNumSlots from track page #0F.
+                ; Скопировать freshly reset chain state во второй backing store,
+                ; затем заменить только TrackNumSlots из track page #0F.
                 LD   HL, (VDC_pSlots)
                 LD   DE, VDC2_Slots
                 LD   BC, VDC_MAX_SLOTS * 5
@@ -458,7 +456,6 @@ ReadRTCSeconds:
                 OUT  (C), A                            ; reg 0 = seconds
                 LD   BC, #BFF7
                 IN   A, (C)                            ; A = BCD seconds
-                LD   (#500E), A                        ; DEBUG: raw byte
                 PUSH AF
                 LD   BC, #EFF7
                 XOR  A
@@ -521,7 +518,7 @@ VDC_Update:
                 CP   3
                 JR   C, .upd_not_pause       ; <3 (none/retry/gameover) → normal path
                 ; >=3: pause (3) or pause fade-out (4) — freeze gameplay, refresh
-                ; the RTC baseline so the paused/fading seconds are not counted.
+                ; RTC baseline, чтобы paused/fading seconds не считались.
                 CALL ReadRTCSeconds
                 LD   (VDC_RtcLastSecond), A
                 XOR  A
@@ -693,7 +690,7 @@ VDC_UpdateAbsorbOrRush:
                 JR   Z, .uar_no_hit
                 LD   A, (VDC_HSub)
                 CP   C
-                JR   C, .uar_hit                      ; armed skull; HSub wrapped through the kill-zone
+                JR   C, .uar_hit                      ; armed skull; HSub wrapped через kill-zone
 .uar_no_hit:
                 POP  BC
                 DJNZ .uar_loop
@@ -739,12 +736,12 @@ VDC_DualAbsorbWaitOther:
                 LD   A, (VDC_HasSecondChain)
                 OR   A
                 RET  Z
-                LD   A, (VDC2_SlotsLen)                ; inactive chain after VDC_SwapChains
+                LD   A, (VDC2_SlotsLen)                ; inactive chain после VDC_SwapChains
                 OR   A
                 RET  Z
-                ; Current chain is empty, but the other one is still being
-                ; absorbed. Keep global ABSORB; final dialog/lives are handled
-                ; by the last chain that reaches zero.
+                ; Current chain уже пуста, но другая ещё absorbed. Держим global
+                ; ABSORB; final dialog/lives обрабатывает последняя chain, дошедшая
+                ; до нуля.
                 LD   A, VDC_STATE_ABSORB
                 LD   (VDC_GameState), A
                 XOR  A
@@ -778,10 +775,10 @@ VDC_DualLoseDelayMaybe:
                 RET
 
 ; ----------------------------------------------------------------------------
-; VDC_LoseStartReady — CF=0 when Lose/ABSORB may start.
-; Lose must not cut off pending match-3/cascade work: all chain elements must be
-; connected and every destroy animation must have committed.  On dual levels the
-; inactive chain is checked by temporarily swapping through the normal chain API.
+; VDC_LoseStartReady — CF=0, когда Lose/ABSORB можно запускать.
+; Lose не должен обрывать pending match-3/cascade work: все chain elements должны
+; быть connected, а каждая destroy animation — committed. На dual levels inactive
+; chain проверяется временным swap через normal chain API.
 ; ----------------------------------------------------------------------------
 VDC_LoseStartReady:
                 CALL VDC_LoseChainBusy
@@ -803,9 +800,9 @@ VDC_LoseStartReady:
                 SCF
                 RET
 
-; Hold the active chain two samples before its kill-zone. This is separate
-; from ChainFreezeCnt: freeze is part of cascade settle and is intentionally
-; checked by VDC_LoseStartReady, while this hold only prevents entering KZ early.
+; Удержать активную цепь за два sample до kill-zone. Это отдельно от ChainFreezeCnt:
+; freeze относится к cascade settle и намеренно проверяется VDC_LoseStartReady,
+; а этот hold только не даёт войти в KZ раньше времени.
 VDC_LoseHoldBeforeKillzone:
                 LD   HL, (VDC_TrackNumSlots)
                 LD   A, L
@@ -832,8 +829,8 @@ VDC_LoseHoldBeforeKillzone:
                 SCF
                 RET
 
-; CF=1 while current active chain still has gaps, pending destroy frames,
-; unsettled offsets, pending Shot2 checks, or a freeze that is part of closure.
+; CF=1, пока current active chain ещё имеет gaps, pending destroy frames,
+; unsettled offsets, pending Shot2 checks или freeze как часть closure.
 VDC_LoseChainBusy:
                 LD   A, (VDC_SlotsLen)
                 OR   A
@@ -977,9 +974,9 @@ VDC_UpdateSfxStopTimer:
                 JP   GS_PlaySfx
 
 ; ============================================================================
-; VDC_UpdateRtcElapsed — real-time game clock from RTC seconds.
-;   Adds delta seconds with 0..59 wrap. Called only during PLAY; pause refreshes
-;   VDC_RtcLastSecond without accumulating, so pause time is not counted.
+; VDC_UpdateRtcElapsed — real-time game clock по RTC seconds.
+;   Добавляет delta seconds с 0..59 wrap. Вызывается только во время PLAY; pause
+;   обновляет VDC_RtcLastSecond без накопления, поэтому pause time не считается.
 ; ============================================================================
 VDC_UpdateRtcElapsed:
                 ; ТОЛЬКО RTC. Если sec не поменялся — RET, ничего не добавляем.
@@ -1005,7 +1002,7 @@ VDC_UpdateRtcElapsed:
                 RET
 
 ; ============================================================================
-; VDC_SlotT — для A=i считает t = (HSA-i)*64 + HSub + sext(offsets[i]).
+; VDC_SlotT — для A=i считает t = (HSA-i)*32 + HSub + sext(offsets[i]).
 ; Out: HL = signed 16-bit t.  AF/DE clobber.
 ; ============================================================================
 VDC_SlotT:
@@ -1018,13 +1015,13 @@ VDC_SlotT:
                 ; чтобы VDC_SlotPos через `BIT 7, H` сделал SCF/RET (skip render +
                 ; skip bullet collision). Раньше тут был `XOR A` → clamp 0 →
                 ; шар рисовался у спавна и зацеплялся коллизией («застрявший шар»
-                ; после match-3/cascade с HsaDec). Codex 2026-05-14 diagnose, Claude fix.
+                ; после match-3/cascade с HsaDec).
                 LD   HL, #8000
                 RET
 .delta_ok:
                 LD   H, 0 : LD L, A                    ; HL = delta
-                ; VDC_CELL_SIZE=32: avoid generic ZL_Mul16x8 in the hot
-                ; VDC_SlotPos path. This is hit once per rendered/collided ball.
+                ; VDC_CELL_SIZE=32: избегаем generic ZL_Mul16x8 в hot path
+                ; VDC_SlotPos. Выполняется один раз на rendered/collided ball.
                 ADD  HL, HL
                 ADD  HL, HL
                 ADD  HL, HL
@@ -1095,10 +1092,10 @@ VDC_SlotPosAllowGap:
                 JR   C, .t_in
                 LD   HL, (TrackData)
                 DEC  HL
-.t_in:          ; HL = t (clamped). Read the sample via a Core-resident helper
-                ; (2-page track split lives there) so this hot path stays tiny —
-                ; Main1/slot3 is nearly full. Core is always mapped in slot 1, so
-                ; the tail-call resolves at runtime. Helper: out BC=X, DE=Y, CF=0,
+.t_in:          ; HL = t (clamped). Читать sample через Core-resident helper:
+                ; там живёт 2-page track split, а этот hot path остаётся маленьким —
+                ; Main1/slot3 почти заполнен. Core всегда mapped в slot 1, поэтому
+                ; tail-call resolves at runtime. Helper: out BC=X, DE=Y, CF=0,
                 ; sets VDC_LastT / VDC_LastTangent.
                 JP   VDC_ReadSampleAtHL
 
@@ -1164,7 +1161,7 @@ VDC_TrySpawn_NoHsubGate:
                 BIT  0, A                              ; odd/even ≈ 50/50 for NUM=6
                 JR   Z, .spawn_single_random           ; 50% single random ball
                 ; cluster path — reroll color until != предыдущий cluster.
-                ; (VDC_SpawnClusterColor) = previous color (or sentinel #FF на init).
+                ; (VDC_SpawnClusterColor) = previous color (или sentinel #FF на init).
 .cluster_color_reroll:
                 CALL VDC_RandomColor                   ; chain color candidate
                 LD   HL, VDC_SpawnClusterColor
@@ -1174,7 +1171,7 @@ VDC_TrySpawn_NoHsubGate:
                 CALL VDC_RandomClusterLength           ; A = total length 1..NUM-1
                                                        ; (NB: ZL_Mul16x8 clobs B/C —
                                                        ; читаем color из памяти ниже)
-                DEC  A                                 ; current spawn is first ball
+                DEC  A                                 ; current spawn — первый ball
                 LD   (VDC_SpawnClusterRem), A
                 JR   .spawn_color_ready
 .spawn_single_random:
@@ -1189,7 +1186,7 @@ VDC_TrySpawn_NoHsubGate:
                 XOR  A
                 LD   (VDC_SpawnClusterRem), A
 .spawn_color_ready:
-                LD   A, (VDC_SpawnClusterColor)        ; re-read color from memory
+                LD   A, (VDC_SpawnClusterColor)        ; перечитать color из memory
                                                        ; (B клобан RandomColor/Mul16x8)
                 LD   B, A
                 ; B = chosen color. Не режем 3+ одинаковых на spawn: в оригинальной
@@ -1239,11 +1236,9 @@ VDC_TrySpawn_NoHsubGate:
                 INC  (HL)
                 LD   HL, VDC_BallsSpawned
                 INC  (HL)
-                JR   NZ, .spawn_dbg_count
-                DEC  (HL)                              ; saturate at 255; never wrap into fast phase
-.spawn_dbg_count:
-                LD   HL, VDC_DbgSpawnCnt               ; debug 2026-05-16: source-of-truth source
-                INC  (HL)
+                JR   NZ, .spawn_done
+                DEC  (HL)                              ; saturate at 255; не wrap в fast phase
+.spawn_done:
                 RET                                    ; single-shot per tick (= Python коллеги).
                                                        ; Множественный spawn даёт instant chain growth = дёрганость.
 
@@ -1902,8 +1897,8 @@ VDC_ApplyMatch3:
                 CALL LogMatch3                          ; диагностика: ctx=color, d1=lb, d2=rb, d3=count, d4=TmpInsIdx
                 POP  BC
                 PUSH BC
-                ; HD-ref BallChain.c uses combo to select ballsdestroyed1..5,
-                ; then overlays chime1 with pitch 0,+2,+4,+6,+8.
+                ; HD-ref BallChain.c использует combo для выбора ballsdestroyed1..5,
+                ; затем overlay chime1 с pitch 0,+2,+4,+6,+8.
                 LD   A, (VDC_TmpMC_Color)
                 LD   HL, VDC_StatPrevMatchColor
                 CP   (HL)
@@ -1912,7 +1907,7 @@ VDC_ApplyMatch3:
                 JR   .m3_sfx_combo_ready
 .m3_sfx_same_color:
                 LD   A, (VDC_StatCombos)
-                INC  A                                  ; combo after this match
+                INC  A                                  ; combo после этого match
 .m3_sfx_combo_ready:
                 LD   C, A                               ; C = unclamped combo
                 CP   4
@@ -1961,7 +1956,7 @@ VDC_ApplyMatch3:
                 CP   (HL)
                 JR   Z, .m3_combo_inc
                 ; Разный color → combo = 0
-                LD   (HL), A                            ; save current color
+                LD   (HL), A                            ; сохранить current color
                 XOR  A
                 LD   (VDC_StatCombos), A
                 JR   .m3_combo_done
@@ -2017,12 +2012,12 @@ VDC_ApplyMatch3:
                 DJNZ .m3_gauge_combo
 .m3_gauge_add:
                 PUSH HL
-                CALL Score_Add24                       ; HL=delta; 24-bit score += HL + extra-life (was 16-bit add)
+                CALL Score_Add24                       ; HL=delta; 24-bit score += HL + extra-life
                 POP  HL
                 LD   DE, (VDC_GaugeScore)
                 ADD  HL, DE
                 LD   (VDC_GaugeScore), HL
-                CALL GetCurrentTargetScore             ; DE = per-level target (BUG fix: clobbers HL!)
+                CALL GetCurrentTargetScore             ; DE = per-level target; clobbers HL
                 LD   HL, (VDC_GaugeScore)               ; reload GaugeScore — CALL above trashed HL
                 AND  A
                 SBC  HL, DE                             ; GaugeScore - target; CF=1 if still below
@@ -2036,7 +2031,7 @@ VDC_ApplyMatch3:
                 LD   A, 1
                 LD   (VDC_GaugeFull), A
 .m3_gauge_not_full:
-                POP  BC                                ; restore B = marker (GAP_STOP/CASCADE)
+                POP  BC                                ; восстановить B = marker (GAP_STOP/CASCADE)
 
                 ; ExplodeFrame[lb..rb] = 1, ExplodeMarker[lb..rb] = B.
                 ; Slots stay as colors until VDC_AnimateChain finalizes them.
@@ -2096,7 +2091,7 @@ VDC_ApplyMatch3:
                 LD   (VDC_GapDecAcc), A
                 LD   A, VDC_PULL_BASE_X10
                 LD   (VDC_GapPullVp), A
-                ; Freeze until the first DoGapStep. Explosion finalizes after
+                ; Freeze до первого DoGapStep. Explosion завершается после
                 ; VDC_EXPLOSION_FRAMES; если разморозить на 15-м кадре, пока gap
                 ; ещё открыт, head-сегмент уедет вперёд через дыру.
                 LD   A, VDC_CELL_SIZE
@@ -2645,7 +2640,7 @@ VDC_ScanForNewMatch:
                 LD   A, (VDC_SlotsLen)
                 OR   A
                 RET  Z
-                LD   E, A                              ; save len; XOR below must not turn DJNZ into 256 iterations
+                LD   E, A                              ; сохранить len; XOR ниже не должен превратить DJNZ в 256 iterations
                 XOR  A
                 LD   (VDC_ScanGapBusy), A
                 ; Если в цепочке ещё есть GAP/CASCADE markers, нельзя сканировать
@@ -2814,19 +2809,6 @@ VDC_InsertAt:
                 LD   A, (VDC_SlotsLen)
                 CP   VDC_MAX_SLOTS
                 RET  NC
-
-                ; --- Debug 2026-05-16: считать tail vs mid insertions ---
-                LD   A, (VDC_TmpInsIdx)
-                LD   B, A
-                LD   A, (VDC_SlotsLen)
-                CP   B
-                JR   NZ, .ia_dbg_mid                   ; TmpInsIdx < SlotsLen → mid
-                LD   HL, VDC_DbgInsTail
-                INC  (HL)
-                JR   .ia_dbg_done
-.ia_dbg_mid:    LD   HL, VDC_DbgInsMid
-                INC  (HL)
-.ia_dbg_done:
 
                 ; --- compute new_offset ---
                 ; head_off, tail_off:
@@ -3137,7 +3119,6 @@ VDC_ShiftRight_Common:
 ;   Clobbers BC.
 ; Bit-by-bit алгоритм. ~80 t-states, ~16 байт кода.
 ; ============================================================================
-; [VDC_DivHLbyA -> moved to shared_render.asm (resident; shared by gameplay #04 + level-select #41)]
 VDC_RandomColor:
                 ; Mul-then-shift: A = ((L XOR H) * NUM_COLORS) >> 8 = 0..NUM-1.
                 ; Старый AND 7 + reject имел LFSR-bias для poly 0xB400: (L XOR H) & 7
@@ -3163,7 +3144,7 @@ VDC_RandomColor:
 
 ; ============================================================================
 ; VDC_RandomClusterLength — random length 1..(VDC_NUM_COLORS-1).
-; Uses rejection of 0 from VDC_RandomColor. For current NUM=6 this is 1..5.
+; Использует rejection of 0 из VDC_RandomColor. Для текущего NUM=6 это 1..5.
 ; ============================================================================
 VDC_RandomClusterLength:
 .rcl_loop:      CALL VDC_RandomColor
@@ -3246,8 +3227,8 @@ VDC_UpdateBulletGapTracking:
                 RET
 
 ; ============================================================================
-; VDC_AwardGapBonus — successful shot destroyed balls after passing through
-; a visible GAP slot. Miss/offscreen shots never award this bonus.
+; VDC_AwardGapBonus — successful shot уничтожил balls после прохода через visible
+; GAP slot. Miss/offscreen shots никогда не дают этот bonus.
 ; Реализация вынесена в main0: main1_play сейчас почти заполнен.
 ; ============================================================================
 VDC_GAP_HIT_THR    EQU 24                              ; ~ball radius
@@ -3257,7 +3238,7 @@ VDC_AwardGapBonus:
                 JP   VDC_AwardGapBonusSlot0
 
 ; ============================================================================
-; VDC_BreakShotStats — shot ended without destroying balls. This breaks chain
+; VDC_BreakShotStats — shot завершился без уничтожения balls. Это breaks chain
 ; and consecutive gap-shot streak, but does not award gap points.
 ; ============================================================================
 VDC_BreakShotStats:
@@ -3421,7 +3402,7 @@ VDC_ChainLocalStart:
 VDC_HSA:           DEFB 0
 ; VDC_HSub, VDC_SlotsLen -> hoisted to loader_resident.asm (resident Core)
 VDC_ChainFreezeCnt:DEFB 0
-VDC_LoseHoldCnt:   DEFB 0                  ; per-chain pause two samples before KZ while settle finishes
+VDC_LoseHoldCnt:   DEFB 0                  ; per-chain pause за два samples до KZ, пока settle завершается
 VDC_GapPullVp:     DEFB VDC_PULL_BASE_X10  ; скорость подтяжки ×10 (per-chain, в swap-блоке)
 VDC_GapAccum:      DEFW 0                  ; аккумулятор подтяжки ×10 (порог 320 = слот)
 VDC_GapJunction:   DEFB 0                  ; 0=нет гэпов / 1=PULL / 2=CATCH-UP
@@ -3442,22 +3423,22 @@ VDC_WarnPlayed:    DEFB 0   ; 1 = сирена SND_WARNING1 уже сыгран�
 VDC_IntroTick:     DEFB 0   ; intro countdown (frames until state→PREVIEW)
 VDC_PreviewTick:   DEFB 0   ; preview countdown (frames until state→CLOSING)
 VDC_KzCloseTick:   DEFB 0   ; closing countdown (skull 11→1 animation)
-VDC_WinTick:       DEFB 0   ; win-state countdown before next level load
+VDC_WinTick:       DEFB 0   ; win-state countdown перед загрузкой next level
 VDC_KzEndSub:      DEFB 0
 ; VDC_KzFrame, VDC_HeadAbsorbAlpha, VDC_Lives, VDC_DialogState, VDC_PrevMouseL,
-; VDC_HudMenuState, VDC_HudPointerBlock -> hoisted to loader_resident.asm
-VDC_LevelColors:  DEFB VDC_NUM_COLORS ; per-level ball-color count (set from settings table in VDC_Init; default 6)
-VDC_LevelSpeed:   DEFB 50              ; per-level chain speed_x100 (set in VDC_Init); normal-phase advance = speed/100 MoveChain/frame
-VDC_LevelStart:   DEFB VDC_LEVEL_START_BALLS ; per-level lead-in ball count (fast-fill threshold)
-VDC_SpeedAccum:   DEFB 0               ; sub-frame speed accumulator for VDC_LevelSpeed
-VDC_RollingActive: DEFB 0              ; 1 while SND_ROLLING should be stopped on fast->normal
+; VDC_HudMenuState и VDC_HudPointerBlock находятся в loader_resident.asm.
+VDC_LevelColors:  DEFB VDC_NUM_COLORS ; per-level ball-color count, set из settings table в VDC_Init; default 6
+VDC_LevelSpeed:   DEFB 50              ; per-level chain speed_x100; normal-phase advance = speed/100 MoveChain/frame
+VDC_LevelStart:   DEFB VDC_LEVEL_START_BALLS ; per-level lead-in ball count, fast-fill threshold
+VDC_SpeedAccum:   DEFB 0               ; sub-frame speed accumulator для VDC_LevelSpeed
+VDC_RollingActive: DEFB 0              ; 1, пока SND_ROLLING нужно остановить на fast->normal
 VDC_ChainLocalEnd:
 ; --- Stats counters (показываются в game-over диалоге, reset на VDC_Init) ---
 VDC_StatTimeFrames: DEFW 0  ; сколько frame'ов прошло в state=PLAY (60Hz tick)
 VDC_StatCombos:     DEFB 0  ; текущее combo (≥2 explosions одного цвета подряд)
 VDC_StatMaxCombo:   DEFB 0  ; max combo за уровень
 VDC_StatMaxChain:   DEFB 0  ; max chain bonus за уровень
-VDC_StatCoins:      DEFB 0  ; coin pickups (TODO: coin mech не реализован → 0)
+VDC_StatCoins:      DEFB 0  ; coin pickups: механика монет не реализована, поэтому 0
 VDC_StatPrevMatchColor: DEFB #FF  ; previous match color, sentinel #FF (нет предыдущего)
 VDC_StatChainCount: DEFB 0  ; consecutive explosions без miss-shot. ≥5 + combo=0 = chain bonus
 VDC_BulletGapMinDist: DEFB 255  ; min Manhattan distance bullet → ближайший GAP-slot за полёт.
@@ -3482,18 +3463,13 @@ VDC_TmpMR:        DEFB 0
 VDC_TmpMCount:    DEFB 0
 VDC_TmpMC_Color:  DEFB 0
 
-; --- Debug counters (2026-05-16): источник SlotsLen-инкрементов ---
-VDC_DbgSpawnCnt:  DEFB 0   ; +=1 каждый раз когда VDC_TrySpawn реально добавил шар (хвостовой spawn)
-VDC_DbgInsTail:   DEFB 0   ; +=1 каждый InsertAt с target == SlotsLen (вставка в самый конец)
-VDC_DbgInsMid:    DEFB 0   ; +=1 каждый InsertAt с target < SlotsLen (mid-chain insertion от bullet)
-
 VDC_LfsrSeed:     DEFW 0
 VDC_LastTangent:  DEFB 0                                ; tangent байт последнего VDC_SlotPos
 VDC_LastTrackFlags: DEFB 0                              ; bit0=tunnel/no bullet hit, bit1=draw above top layer
 VDC_LastT:        DEFW 0                                ; t (16-bit signed) последнего VDC_SlotPos — для spin frame по track-advance
 
-; Second chain backing store. The active labels above remain the only VDC engine
-; ABI; two-track levels swap this block in around update/render/collision.
+; Second chain backing store. Active labels выше остаются единственным VDC engine
+; ABI; two-track levels swap this block вокруг update/render/collision.
 VDC_HasSecondChain: DEFB 0
 VDC_MAIN1_PAGE   EQU #04
 VDC2_Slots:        DS VDC_MAX_SLOTS

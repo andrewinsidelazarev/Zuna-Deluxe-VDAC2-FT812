@@ -20,11 +20,12 @@ def main() -> int:
     failures: list[str] = []
     gameplay = block.split(".gameplay_top_mask:", 1)[1]
     required = [
+        "CALL ZL_BuildActiveChainCache",
         "LD   A, 1",
-        "CALL ZL_DrawActiveChainWithMode",
+        "CALL ZL_DrawCachedActiveChain",
         "CALL ZL_DrawTopMaskOverlay",
         "LD   A, 2",
-        "JP   ZL_DrawActiveChainWithMode",
+        "JP   ZL_DrawCachedActiveChain",
     ]
     pos = -1
     for token in required:

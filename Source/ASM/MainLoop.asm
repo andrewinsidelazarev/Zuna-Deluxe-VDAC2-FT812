@@ -28,11 +28,7 @@
 ZL_SCR_W        EQU 1024
 ZL_SCR_H        EQU 768
 ZL_SUB          EQU 16                                ; subpixel множитель
-ZL_CMD_WARN_BYTES EQU #0F00                           ; warn до потолка: буфер #4CB0..#5C00 = 3920 байт,
-                                                      ; дальше Core-код. Worst замер (dual+tunnel, полная
-                                                      ; анимация) = 2872б — см. test_cmd_buffer_budget_z80.py.
 ZL_FT_CMD_DMA_ENABLED EQU 1                           ; 1=send frame CMD buffer to FT812 via TS-Config DMA_RAM_SPI
-ZL_PROFILER_ENABLED EQU 0                             ; 1=show FT812 timing overlay
 ZL_FROG_DRAW_ENABLED EQU 1                            ; canary master: isolate frog tearing source
 ZL_FROG_DRAW_PLATE   EQU 1                            ; no rotation
 ZL_FROG_DRAW_BODY    EQU 1                            ; rotated main body
@@ -58,11 +54,6 @@ MainLoop:       ; --- Init game state (одноразово при первом 
                 LD   (ZL_SpinK), A
 
 .Loop           ; --- 1. Update input + game state (Z80-only, параллельно с FT812 render) ---
-                if ZL_PROFILER_ENABLED
-                CALL ZL_ProfileReadClock
-                LD   (ZL_ProfileLoopStartLo), DE
-                LD   (ZL_ProfileLoopStartHi), HL
-                endif
                 CALL Input_Scan                      ; единый опрос ввода: мышь + PS/2-клавиатура
                 CALL EscToMenu                       ; ESC = нажатие кнопки MENU (открыть pause-меню)
                 CALL ZL_AimUpdate
@@ -102,62 +93,26 @@ MainLoop:       ; --- Init game state (одноразово при первом 
                 CALL ZL_DrawFrame
                 CALL DrawDebugClock
                 FT_Display
-                FT_CMD_Count
-                LD   (ZL_CmdBytes), BC
-                LD   HL, ZL_CMD_WARN_BYTES
-                AND  A
-                SBC  HL, BC
-                JR   NC, .CmdSizeOk
-                LD   A, 1
-                LD   (ZL_CmdOverflow), A
-.CmdSizeOk
 
-                if ZL_PROFILER_ENABLED
-                CALL ZL_ProfileReadClock
-                LD   BC, (ZL_ProfileLoopStartLo)
-                LD   IX, (ZL_ProfileLoopStartHi)
-                CALL ZL_ProfileDeltaK
-                LD   (ZL_ProfileBuildK), HL
-                LD   (ZL_ProfilePostBuildLo), DE
-                LD   (ZL_ProfilePostBuildHi), IX
-                endif
-
-                ; --- 3. Sync с FT812 swap interrupt, then wait until previous
-                ; DLSWAP request completed.  On real VDAC2, letting the
-                ; coprocessor rebuild RAM_DL during active scanout tears badly.
+                ; --- 3. Sync с FT812 swap interrupt, затем ждать завершения
+                ; предыдущего DLSWAP request. На реальном VDAC2 coprocessor,
+                ; пересобирающий RAM_DL во время active scanout, даёт сильный tearing.
 .WaitIntSync    FT_RD_REG8 FT_REG_INT_FLAGS
                 AND  FT_INT_SWAP
                 JR   Z, .WaitIntSync
-                FT_WR_REG8 FT_REG_INT_FLAGS, FT_INT_SWAP   ; Clear flag
+                FT_WR_REG8 FT_REG_INT_FLAGS, FT_INT_SWAP   ; очистить flag
 .WaitDLSwap     FT_RD_REG8 FT_REG_DLSWAP
                 AND  3
                 JR   NZ, .WaitDLSwap
 
-                if ZL_PROFILER_ENABLED
-                CALL ZL_ProfileReadClock
-                LD   BC, (ZL_ProfilePostBuildLo)
-                LD   IX, (ZL_ProfilePostBuildHi)
-                CALL ZL_ProfileDeltaK
-                LD   (ZL_ProfileIdleK), HL
-                LD   (ZL_ProfilePreWriteLo), DE
-                LD   (ZL_ProfilePreWriteHi), IX
-                endif
-
-                ; --- 4. Burst write Z80 buffer → FT812 RAM_CMD in the swap window,
-                ; wait until coprocessor has produced RAM_DL, then request swap.
+                ; --- 4. Burst write Z80 buffer → FT812 RAM_CMD в swap window;
+                ; дождаться, пока coprocessor построит RAM_DL, затем request swap.
                 if ZL_FT_CMD_DMA_ENABLED
                 CALL ZL_FT_CMD_Write_DMA
                 else
                 FT_CMD_Write
                 endif
                 CALL FT.Coprocessor.WaitFlush
-                if ZL_PROFILER_ENABLED
-                CALL ZL_ProfileReadClock
-                LD   BC, (ZL_ProfilePreWriteLo)
-                LD   IX, (ZL_ProfilePreWriteHi)
-                CALL ZL_ProfileDeltaK
-                LD   (ZL_ProfileWriteK), HL
-                endif
                 FT_WR_REG8 FT_REG_DLSWAP, FT_DLSWAP_FRAME
 
                 ; --- 5. Frame counter ---
@@ -335,7 +290,7 @@ ZL_DrawFrame:
                 CALL ZL_EmitSetMatrix
                 CALL ZL_DrawSpaceStarsMaybe
 
-                ; One bitmap primitive for the remaining bitmap layers.
+                ; Один bitmap primitive для оставшихся bitmap layers.
                 FT_Begin FT_BITMAPS
 
                 ; ============================================================
@@ -365,12 +320,10 @@ ZL_DrawFrame:
                 endif
                 FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, ZL_BALL_DRAW, ZL_BALL_DRAW
 
-                ; --- VDC chain rendering: per-ball tangent + grouped matrix emit.
-                ; Algorithm:
-                ;   Pre-pass: cache stable tangent, cell, Vx, Vy for each ball.
-                ;   Draw: quantize tangent to 8 BRAD and emit matrix only when it
-                ;   differs from the previous visible ball. This keeps per-slot
-                ;   tangent stability without the old bucket segment flicker.
+                ; Рендер цепи: pre-pass кеширует tangent/cell/Vx/Vy для каждого шара.
+                ; Draw-pass квантует tangent до 8 BRAD и эмитит matrix только при
+                ; отличии от предыдущего видимого шара. Так сохраняется стабильность
+                ; tangent без flicker между bucket-сегментами.
                 LD   C, 255 : LD D, 255 : LD E, 255
                 CALL FT.Coprocessor.ColorRGB
                 ; 1024×768: гейты heavy-dual/top-mask сняты — спин/вращение на всех
@@ -404,9 +357,9 @@ ZL_DrawFrame:
                 JP   ZL_AfterChains
 
 ; ----------------------------------------------------------------------------
-; Space-only procedural starfield. Drawn after the bitmap background, before all
-; gameplay bitmaps, so stars are above the Space picture but below track/balls.
-; Uses FT812 POINTS only: no RAM_G, no assets, no persistent star state.
+; Procedural starfield только для Space. Рисуется после bitmap background и до всех
+; gameplay bitmaps: stars выше Space picture, но ниже track/balls.
+; Использует только FT812 POINTS: без RAM_G, assets и persistent star state.
 ; ----------------------------------------------------------------------------
 ZL_DrawSpaceStarsMaybe:
                 LD   A, (CurrentLevel)
@@ -633,14 +586,15 @@ ZL_DrawActiveChainForLevel:
                 CALL ZL_UploadTopMasksMaybe
                 CALL ZL_RestoreActiveTrackPage
                 CALL ZL_SetupBallBitmapState
+                CALL ZL_BuildActiveChainCache
                 LD   A, 1
                 LD   (ZL_ChainDrawPass), A             ; top-mask levels: under/tunnel balls first
-                CALL ZL_DrawActiveChainWithMode
+                CALL ZL_DrawCachedActiveChain
                 CALL ZL_DrawTopMaskOverlay
                 CALL ZL_SetupBallBitmapState
                 LD   A, 2
                 LD   (ZL_ChainDrawPass), A             ; then draw balls marked above the tunnel cover
-                JP   ZL_DrawActiveChainWithMode
+                JP   ZL_DrawCachedActiveChain
 
 ZL_GetTopMaskForCurrentLevel:
                 LD   A, (CurrentLevel)
@@ -794,12 +748,38 @@ ZL_DrawActiveChain:
                 XOR  A
                 LD   (ZL_ChainDrawPass), A             ; 0 = legacy/all balls in one pass
 ZL_DrawActiveChainWithMode:
+                CALL ZL_BuildActiveChainCache
+                JP   ZL_DrawCachedActiveChain
+
+; ----------------------------------------------------------------------------
+; ZL_BuildActiveChainCache — pre-pass по Slots[].
+; Кеширует tangent/cell/Vx/Vy/track flags один раз; top-mask уровни потом рисуют
+; cached data двумя проходами (under/above), не пересчитывая VDC_SlotPos.
+; ----------------------------------------------------------------------------
+ZL_BuildActiveChainCache:
                 LD   A, (VDC_SlotsLen)
                 LD   (ZL_BallCount), A
                 OR   A
-                JP   Z, .ChainEnd
+                RET  Z
                 LD   B, A                             ; B = loop count
                 LD   C, 0                             ; C = i
+                CP   70
+                LD   A, #F0                           ; <70 balls: 16 tangent buckets
+                JR   C, .PrePassMaskReady
+                LD   A, #E0                           ; full chain: 8 buckets, fewer matrix emits
+.PrePassMaskReady:
+                LD   (ZL_TangentQuantMask), A
+                LD   A, (VDC_HSA)
+                LD   H, 0 : LD L, A
+                ADD  HL, HL
+                ADD  HL, HL
+                ADD  HL, HL
+                ADD  HL, HL
+                ADD  HL, HL                            ; HL = HSA * VDC_CELL_SIZE
+                LD   A, (VDC_HSub)
+                LD   E, A : LD D, 0
+                ADD  HL, DE                            ; baseT = HSA*CELL_SIZE + HSub
+                LD   (ZL_PrePassBaseT), HL
                 LD   HL, ZL_BALL_CACHE_ADDR                 ; cache write ptr
                 LD   (ZL_CacheWPtr), HL
 .PrePassLoop:   PUSH BC                               ; save count+i
@@ -819,9 +799,36 @@ ZL_DrawActiveChainWithMode:
                 LD   (ZL_TmpFrame), A                 ; color
                 LD   A, C
                 PUSH HL                               ; save cache ptr
-                CALL VDC_SlotPos                      ; BC=X, DE=Y, CF=1=skip
+                LD   HL, (ZL_PrePassBaseT)
+                PUSH HL                               ; baseT для add offset после чтения offsets[i]
+                LD   H, 0 : LD L, A
+                LD   DE, (VDC_pOffsets)
+                ADD  HL, DE
+                LD   A, (HL)
+                LD   E, A
+                LD   D, 0
+                BIT  7, A
+                JR   Z, .PrePassOffPos
+                DEC  D                                ; sign-extend offset
+.PrePassOffPos:
+                POP  HL                               ; HL = baseT
+                ADD  HL, DE                            ; HL = t = baseT + sext(offset[i])
+                BIT  7, H
+                JR   Z, .PrePassTNonNeg
                 POP  HL                               ; restore cache ptr
-                JP   C, .PrePassMark
+                JP   .PrePassMark
+.PrePassTNonNeg:
+                PUSH HL
+                LD   DE, (TrackData)                   ; NumSamples
+                AND  A
+                SBC  HL, DE
+                POP  HL
+                JR   C, .PrePassTIn
+                LD   HL, (TrackData)
+                DEC  HL
+.PrePassTIn:
+                CALL VDC_ReadSampleAtHL                ; BC=X, DE=Y, sets LastT/Tangent/Flags
+                POP  HL                               ; restore cache ptr
                 LD   (ZL_TmpBallX), BC
                 LD   (ZL_TmpBallY), DE
                 ; 1024×768: шар ЦЕЛИКОМ вне экрана → gap-маркер (не эмитим).
@@ -836,20 +843,20 @@ ZL_DrawActiveChainWithMode:
                 LD   DE, ZL_BALL_HALF
                 ADD  HL, DE                           ; HL = X+26
                 BIT  7, H
-                JR   NZ, .PrePassCull                 ; X < −26 → целиком слева
+                JP   NZ, .PrePassCull                 ; X < −26 → целиком слева
                 LD   DE, 1024 + ZL_BALL_DRAW + 1
                 AND  A
                 SBC  HL, DE
-                JR   NC, .PrePassCull                 ; X ≥ 1050 → целиком справа
+                JP   NC, .PrePassCull                 ; X ≥ 1050 → целиком справа
                 LD   HL, (ZL_TmpBallY)
                 LD   DE, ZL_BALL_HALF
                 ADD  HL, DE
                 BIT  7, H
-                JR   NZ, .PrePassCull                 ; Y < −26 → целиком сверху
+                JP   NZ, .PrePassCull                 ; Y < −26 → целиком сверху
                 LD   DE, 768 + ZL_BALL_DRAW + 1
                 AND  A
                 SBC  HL, DE
-                JR   NC, .PrePassCull                 ; Y ≥ 794 → целиком снизу
+                JP   NC, .PrePassCull                 ; Y ≥ 794 → целиком снизу
                 POP  HL                               ; cache ptr — шар (частично) на экране
                 LD   A, (VDC_LastTrackFlags)
                 LD   (ZL_TmpTrackFlags), A
@@ -868,11 +875,12 @@ ZL_DrawActiveChainWithMode:
                 endif
                 ADD  A, D                             ; cell = color*32 + spin
                 LD   (ZL_TmpFrame), A
-                ; Raw tangent only. The old per-slot hysteresis state lived near
-                ; #4000 and collided with the runtime stack at #40F2 on hardware.
                 LD   A, (VDC_LastTangent)
+                LD   D, A
+                LD   A, (ZL_TangentQuantMask)
+                AND  D                                ; store quantized tangent, draw-pass only compares
                 POP  HL                               ; restore cache ptr
-                LD   (HL), A : INC HL                 ; +0 tangent
+                LD   (HL), A : INC HL                 ; +0 quantized tangent
                 LD   A, (ZL_TmpFrame)
                 LD   (HL), A : INC HL                 ; +1 global cell (0..191, или 0xFF=gap)
                 ; Vx = (BallX - HALF) × SUB
@@ -902,11 +910,15 @@ ZL_DrawActiveChainWithMode:
                 LD   A, (ZL_TmpTrackFlags)
                 LD   (HL), A : INC HL                 ; +6 track flags
                 LD   (ZL_CacheWPtr), HL
+                LD   HL, (ZL_PrePassBaseT)
+                LD   DE, -VDC_CELL_SIZE
+                ADD  HL, DE
+                LD   (ZL_PrePassBaseT), HL
                 POP  BC
                 INC  C
                 DEC  B
                 JP   NZ, .PrePassLoop
-                JP   .ChainDraw
+                RET
 
 .PrePassCull:   POP  HL                               ; cache ptr → как gap
                 JP   .PrePassMark
@@ -918,22 +930,27 @@ ZL_DrawActiveChainWithMode:
                 LD   BC, 6
                 ADD  HL, BC
                 LD   (ZL_CacheWPtr), HL
+                LD   HL, (ZL_PrePassBaseT)
+                LD   DE, -VDC_CELL_SIZE
+                ADD  HL, DE
+                LD   (ZL_PrePassBaseT), HL
                 POP  BC
                 INC  C
                 DEC  B
                 JP   NZ, .PrePassLoop
+                RET
 
-                ; ============================================================
-                ; Per-ball matrix loop (2026-05-18, замена bucket-loop'а).
-                ; Для каждого шара: emit cmd_loadid + translate(HALF) + rotate(tang)
-                ; + translate(-HALF) + setmatrix + handle select + cell + vertex2f.
-                ; Стоимость ~52 байта RAM_CMD/шар × 85 = ~4.4KB/кадр (FIFO).
-                ; Dual handle: cell<128 → handle 0; cell>=128 → handle 9 (colors 4-5).
-                ; ============================================================
-.ChainDraw:     LD   A, (ZL_BallCount)
+; ============================================================================
+; ZL_DrawCachedActiveChain — draw-pass по cache из ZL_BuildActiveChainCache.
+; Для каждого шара: matrix bucket + handle select + cell + vertex2f.
+; Стоимость ~52 байта RAM_CMD/шар × 85 = ~4.4KB/кадр (FIFO).
+; Dual handle: cell<128 → handle 0; cell>=128 → handle 9 (colors 4-5).
+; ============================================================================
+ZL_DrawCachedActiveChain:
+                LD   A, (ZL_BallCount)
                 OR   A
-                JP   Z, .ChainEnd
-                ; Init sentinels: tangent (0x01 — never matches mod-8) и handle (#FF — force first emit).
+                RET  Z
+                ; Init sentinels: tangent (0x01 — never matches quantized) и handle (#FF — force first emit).
                 LD   A, #01
                 LD   (ZL_TmpLastTangent), A
                 LD   A, #FF
@@ -990,19 +1007,9 @@ ZL_DrawActiveChainWithMode:
                 LD   A, (FT.Coprocessor.BufferPtr + 1)
                 CP   #58                              ; BufferPtr ≥ #5800 → запас 1024б на хвост кадра
                 JP   NC, .PBNoMatrix
-.PBQuantByCount:
                 ; --- Skip matrix emit если quantized tangent совпал с предыдущим
-                ; emit'ом (соседи цепи часто в одном bucket'е). 16 BRAD canary quantization.
-                LD   A, (IX+0)                        ; stable tangent
-                LD   D, A
-                LD   A, (ZL_BallCount)
-                CP   70
-                LD   A, D
-                JR   C, .PBQuant16
-                AND  #E0                              ; 8 buckets only at full chain
-                JR   .PBQuantDone
-.PBQuant16:     AND  #F0                              ; 16 buckets normally
-.PBQuantDone:
+                ; emit'ом (соседи цепи часто в одном bucket'е).
+                LD   A, (IX+0)
                 LD   HL, ZL_TmpLastTangent
                 CP   (HL)
                 JR   Z, .PBNoMatrix                   ; same bucket → reuse matrix
@@ -1033,8 +1040,8 @@ ZL_DrawActiveChainWithMode:
                 AND  #7F                              ; local cell within handle
                 endif
                 CALL FT.Coprocessor.Cell
-                ; Match-3 visual phase: draw the normal ball with hardware fade-out.
-                ; ColorA is persistent, so restore 255 immediately after this vertex.
+                ; Match-3 visual phase: рисовать обычный ball с hardware fade-out.
+                ; ColorA persistent, поэтому сразу после vertex вернуть 255.
                 LD   A, (ZL_TmpSlotIdx)
                 LD   H, 0 : LD L, A
                 LD   DE, (VDC_pExplodeFrame)
@@ -1093,7 +1100,6 @@ ZL_DrawActiveChainWithMode:
                 LD   A, (ZL_ChainDrawPass)
                 CP   1
                 CALL NZ, ZL_DrawExplosions
-.ChainEnd:
                 RET
 
 ; [ZL_DrawActiveChainSimple удалён 2026-06-09: мёртвый код (ни одного вызова во
@@ -1148,15 +1154,14 @@ DrawWinStateVisual:
                 RET
 
 ; ----------------------------------------------------------------------------
-; Frog/bullet layer. Must be above tunnel top-cover: the cover hides chain balls
-; under bridges/tunnels, but the frog is a foreground gameplay sprite.
+; Слой frog/bullet должен быть выше tunnel top-cover: cover прячет chain balls
+; под мостами/тоннелями, а лягушка и пуля являются foreground gameplay sprite.
 ; ----------------------------------------------------------------------------
 ZL_DrawFrogLayer:
-                ; Frog composition. Pause dialog (3) may still have live balls on
-                ; screen, so it keeps the old hide-after-dialog-load guard. Lose
-                ; retry/gameover (1/2) and win done/fade (5/6) keep the frog
-                ; visible: by then chains are empty, so dialog upload cannot tear
-                ; against ball rendering.
+                ; Frog composition. Pause dialog (3) может оставлять live balls на
+                ; экране, поэтому лягушку прячем до завершения dialog load. Lose
+                ; retry/gameover (1/2) и win done/fade (5/6) оставляют frog видимой:
+                ; к этому моменту chains пусты, и dialog upload не конфликтует с ball rendering.
                 LD   A, (Core.VDC_DialogState)
                 OR   A
                 JR   Z, .draw_frog
@@ -1220,9 +1225,6 @@ ZL_AfterChains:
                 CALL DrawHudTopText
                 CALL DrawHudProgress
                 CALL DrawHudMenu
-                if ZL_PROFILER_ENABLED
-                CALL ZL_DrawProfiler
-                endif
 
                 ; --- Retry dialog (показывается когда VDC_DialogState != 0) ---
                 ; 1024×768: рамка/глифы/OK диалога рисуются при scale(1.6)-матрице,
@@ -1350,8 +1352,8 @@ ZL_BallColorRGB:
                 DEFB 255, 90, 240            ; 4 PURPLE/PINK
                 DEFB 255, 255, 255           ; 5 WHITE
 
-; ZL_DrawExplosions — separate pass for match-3 destroy sprites.
-; Uses cached chain positions; draws 64x64 frames centered on the fading ball.
+; ZL_DrawExplosions — отдельный pass для match-3 destroy sprites.
+; Использует cached chain positions; рисует 64x64 frames по центру fading ball.
 ; ZL_EmitScale16Matrix — точная scale(1.6)-матрица ЗАПЕЧЁННЫМИ DL-словами
 ; BITMAP_TRANSFORM (A=E=160/256 = ровно 1/1.6). НЕ через CMD_SCALE: его
 ; инверсия в копроцессоре усечённая (A=159/256 = факт. ×1.6101) — весь контент
@@ -1442,8 +1444,6 @@ ZL_ExplosionRGBTable:
                 DEFB 48,120,255, 64,255,80, 255,72,48
                 DEFB 255,220,0, 210,80,255, 255,255,255
 
-; [ZL_EmitLoadId -> moved to shared_render.asm (resident; shared by gameplay #04 + level-select #41)]
-; [ZL_EmitTranslate -> moved to shared_render.asm (resident; shared by gameplay #04 + level-select #41)]
 ZL_EmitRotate:  ADD  A, 192                          ; offset native face direction
                 LD   D, A : LD E, 0
                 LD   (ZL_TmpAngle), DE
@@ -1458,7 +1458,6 @@ ZL_EmitRotate:  ADD  A, 192                          ; offset native face direct
 ; ZL_EmitSetMatrix — append cmd_setmatrix (4 байт opcode).
 ; Применяет текущую coprocessor матрицу как BITMAP_TRANSFORM_A..F (6 DL cmds).
 ; ----------------------------------------------------------------------------
-; [ZL_EmitSetMatrix -> moved to shared_render.asm (resident; shared by gameplay #04 + level-select #41)]
 ZL_KBD_STEP     EQU 4                                 ; BRAD/frame, ≈1.4°/frame ≈ 80°/sec @57Hz
 ZL_MOTION_THR   EQU 1                                 ; px threshold для motion detection
 
@@ -1507,9 +1506,9 @@ ZL_AimUpdate:
                 LD   DE, ZL_MOTION_THR
                 AND  A
                 SBC  HL, DE
-                JR   C, ZL_FmEnRestore                ; |dy| < threshold → no motion
+                JR   C, ZL_FmEnRestore                ; |dy| < threshold → нет motion
 
-.motion:        ; Mouse moved → set flag + reset grace counter + save prev_raw.
+.motion:        ; Mouse moved: ставим flag, reset grace counter, сохраняем prev_raw.
                 LD   A, 1
                 LD   (ZL_MouseMoved), A
                 LD   A, 8                             ; grace: после motion stop ещё 8 кадров обновлять angle (Smooth догоняет raw)
@@ -1544,9 +1543,9 @@ ZL_Mul16x8:     LD   C, L : LD B, H                   ; BC = multiplicand
 
 ; ----------------------------------------------------------------------------
 ; ZL_SpinPhase — A = ((t * ZL_SPIN_K_DEFAULT) >> 8) & ZL_SPIN_MASK.
-;   In: HL = VDC_LastT. Out: A = spin phase. Scratch: BC, DE, HL, AF.
-;   Current ARGB4 build has K=81, so avoid the 8-iteration generic multiply in
-;   the per-ball render hot path. If compile-time K changes, fall back safely.
+;   Вход: HL = VDC_LastT. Выход: A = spin phase. Scratch: BC, DE, HL, AF.
+;   Current ARGB4 build имеет K=81, поэтому избегаем 8-iteration generic multiply
+;   в per-ball render hot path. Если compile-time K изменится, fallback безопасен.
 ; ----------------------------------------------------------------------------
 ZL_SpinPhase:
                 if ZL_SPIN_K_DEFAULT = 81
@@ -1587,37 +1586,15 @@ ZL_AbsHL:       BIT  7, H
 
 
 ; ----------------------------------------------------------------------------
-; ZL_SmoothMouse — exponential low-pass filter (alpha = 1/4, восстановлено
-; 2026-05-17 после жалобы на «желейный» прицел):
-;   new = old + (raw - old) / 4 = old*3/4 + raw/4
-; Latency ~3-4 кадра (~70 ms @57Hz). 1-px jitter Hyper-V подавляется т.к.
-; ±1/4 в integer = 0 → Smooth не дрожит при идле raw=±1 px.
+; ZL_SmoothMouse — low-pass filter disabled:
+;   smoothed coordinates mirror raw mouse position each frame.
+; Latency from software filtering is 0 frames; FT812 frame/swap latency remains.
 ; ----------------------------------------------------------------------------
-ZL_SmoothMouse: ; --- X axis ---
-                LD   HL, (ZL_SmoothX)                 ; HL = old
-                LD   D, H : LD E, L                   ; DE = old
+ZL_SmoothMouse:
                 LD   BC, (Input.Mouse.PositionX)
-                AND  A
-                SBC  HL, BC                           ; HL = old - raw (signed)
-                SRA  H : RR L
-                SRA  H : RR L                         ; HL = (old-raw)/4 signed
-                EX   DE, HL                           ; HL = old, DE = (old-raw)/4
-                AND  A
-                SBC  HL, DE                           ; HL = old - (old-raw)/4 = new
-                LD   (ZL_SmoothX), HL
-
-                ; --- Y axis ---
-                LD   HL, (ZL_SmoothY)
-                LD   D, H : LD E, L
+                LD   (ZL_SmoothX), BC
                 LD   BC, (Input.Mouse.PositionY)
-                AND  A
-                SBC  HL, BC
-                SRA  H : RR L
-                SRA  H : RR L
-                EX   DE, HL
-                AND  A
-                SBC  HL, DE
-                LD   (ZL_SmoothY), HL
+                LD   (ZL_SmoothY), BC
                 RET
 
 ; ----------------------------------------------------------------------------
@@ -1626,19 +1603,19 @@ ZL_SmoothMouse: ; --- X axis ---
 ; MainLoop их сразу переписывает (см. начало MainLoop).
 ; ----------------------------------------------------------------------------
 ZL_FrameCounter:DEFW 0
-; [ZL_SmoothX -> moved to shared_render.asm (resident; shared by gameplay #04 + level-select #41)]
-; [ZL_SmoothY -> moved to shared_render.asm (resident; shared by gameplay #04 + level-select #41)]
 ZL_PrevRawX:    DEFW 512                              ; raw mouse prev — для motion detection (центр 1024×768)
 ZL_PrevRawY:    DEFW 384
 ZL_MouseMoved:  DEFB 0                                ; 0=stationary, 1=moved (≥THR per axis)
-ZL_MotionGrace: DEFB 0                                ; frames left для catch-up Smooth после mouse motion
+ZL_MotionGrace: DEFB 0                                ; frames left для догоняющего Smooth после mouse motion
 ZL_ChainHSA:    DEFW 0                                ; head sample на треке
 ZL_ChainTick:   DEFB 0                                ; subdivider 4 для медленного движения
 ZL_ColorIdx:    DEFB 0                                ; текущий cell для CELL()-эмита в цепи
 ZL_TmpFrame:    DEFB 0                                ; cell/spin frame scratch (chain rendering)
-ZL_TmpSlotIdx:  DEFB 0                                ; current VDC slot index for bucket hysteresis
+ZL_TmpSlotIdx:  DEFB 0                                ; текущий VDC slot index в prepass
 ZL_TmpTrackFlags: DEFB 0                              ; track flags captured from VDC_LastTrackFlags
 ZL_ChainDrawPass: DEFB 0                              ; 0=all, 1=under top layer, 2=above top layer
+ZL_TangentQuantMask: DEFB #F0                         ; cache-build mask: #F0 normal, #E0 for full chains
+ZL_PrePassBaseT: DEFW 0                               ; running (HSA-i)*CELL_SIZE+HSub during chain cache build
 ZL_TopMaskUploadedLevel: DEFB #FF                     ; current level whose tunnel top masks are in RAM_G
 ZL_TopMaskCount: DEFB 0
 ZL_TopMaskTablePtr: DEFW 0
@@ -1647,18 +1624,13 @@ ZL_TopMaskSrcLo: DEFW 0
 ZL_TopMaskRamLo: DEFW 0
 ZL_TopMaskRamHi: DEFB 0
 ZL_DialogFrameUploadDeferred: DEFB 0
-; [ZL_TmpTx -> moved to shared_render.asm (resident; shared by gameplay #04 + level-select #41)]
-; [ZL_TmpTy -> moved to shared_render.asm (resident; shared by gameplay #04 + level-select #41)]
-; [ZL_TmpAngle -> moved to shared_render.asm (resident; shared by gameplay #04 + level-select #41)]
 ZL_TmpBallX:    DEFW 0                                ; chain render: текущий шар X (px)
 ZL_TmpBallY:    DEFW 0                                ; chain render: текущий шар Y (px)
 ZL_TmpAngleByte:DEFB 0                                ; chain render: combined rotation byte
 ZL_SpinK:       DEFB ZL_SPIN_K_DEFAULT                ; runtime spin multiplier (per-level)
 ; [ZL_CmdDmaWordsHi/Lo переехали в shared_render.asm вместе с DMA-функцией]
-ZL_CmdBytes:    DEFW 0                                ; last FT812 RAM_CMD byte count before write
-ZL_CmdOverflow: DEFB 0                                ; sticky: 1 if command stream crossed warn threshold
 ZL_BallCount:   DEFB 0                                ; cached VDC_SlotsLen для bucket prepass
-ZL_TmpBucket:   DEFB 0                                ; current bucket в outer loop (legacy)
+ZL_TmpBucket:   DEFB 0                                ; current bucket в outer loop
 ZL_TmpLastTangent: DEFB 0                             ; per-ball loop: last emitted quantized tangent
 ZL_TmpLastHandle:  DEFB 0xFF                          ; lazy BITMAP_HANDLE — last emitted ball handle (0/9, #FF=reset)
 ZL_BallRotationDisabled: DEFB 0                       ; pause/dialog guard: skip per-ball matrix state
@@ -1667,17 +1639,6 @@ ZL_HasTopMaskLevel: DEFB 0                            ; current level has tunnel
 ZL_HeavyBallCount: DEFB 0                             ; dual heavy levels use chain1+chain2 count for threshold
 ZL_CacheWPtr:   DEFW 0                                ; write ptr в prepass
 ; (WIN-частицы хранятся резидентно в VDC_WinPrtcl; рабочих ZL-переменных нет.)
-ZL_ProfileLoopStartLo: DEFW 0
-ZL_ProfileLoopStartHi: DEFW 0
-ZL_ProfilePostBuildLo: DEFW 0
-ZL_ProfilePostBuildHi: DEFW 0
-ZL_ProfilePreWriteLo:  DEFW 0
-ZL_ProfilePreWriteHi:  DEFW 0
-ZL_ProfileBuildK:      DEFW 0                         ; FT812 REG_CLOCK ticks / 1024
-ZL_ProfileIdleK:       DEFW 0
-ZL_ProfileWriteK:      DEFW 0
-ZL_ProfileDeltaEndLo:  DEFW 0
-ZL_ProfileDeltaEndHi:  DEFW 0
                 ; Per-ball cache: tangent, cell, Vx_lo, Vx_hi, Vy_lo, Vy_hi, flags = 7 bytes.
                 ; bucket = #FF → skip (gap/off-track).
                 ; Размещён в свободной зоне slot 1 ниже Core (page 5 #4000-#5FFF),
@@ -1723,102 +1684,5 @@ ZL_EmitBallMatrixFromBRAD:
                 LDIR
                 LD   (FT.Coprocessor.BufferPtr), DE
                 RET
-
-; ----------------------------------------------------------------------------
-; FT812 frame profiler (diagnostic overlay).
-; B/W/I are REG_CLOCK delta / 1024. At 60 MHz FT812 clock:
-;   74 Hz frame ~= 792, 57 Hz frame ~= 1028.
-; If B+W approaches frame budget and I is near zero, Z80/SPI path misses vblank.
-; ----------------------------------------------------------------------------
-ZL_ProfileReadClock:
-                FT_RD_REG32 FT_REG_CLOCK                ; BCDE = 32-bit little-endian value
-                LD   H, B
-                LD   L, C
-                RET                                     ; HLDE = clock
-
-; In: HLDE=end clock, IXBC=start clock. Out: HL=(delta >> 10), DE=end lo, IX=end hi.
-ZL_ProfileDeltaK:
-                LD   (ZL_ProfileDeltaEndLo), DE
-                LD   (ZL_ProfileDeltaEndHi), HL
-                EX   DE, HL                             ; HL=end low, DE=end high
-                AND  A
-                SBC  HL, BC                             ; HL=delta low
-                EX   DE, HL                             ; DE=delta low, HL=end high
-                PUSH IX
-                POP  BC                                 ; BC=start high
-                SBC  HL, BC                             ; HL=delta high
-                ; Convert 32-bit delta HL:DE to 16-bit delta/1024.
-                ; result bits: low=(D>>2)|(L<<6), high=(L>>2)|((H&3)<<6)
-                LD   A, D
-                SRL  A
-                SRL  A
-                LD   C, A
-                LD   A, L
-                ADD  A, A
-                ADD  A, A
-                ADD  A, A
-                ADD  A, A
-                ADD  A, A
-                ADD  A, A
-                OR   C
-                LD   E, A                               ; result low byte temp
-                LD   A, L
-                SRL  A
-                SRL  A
-                LD   B, A
-                LD   A, H
-                AND  3
-                RRCA
-                RRCA
-                OR   B
-                LD   D, A                               ; result high byte temp
-                EX   DE, HL                             ; HL=result
-                LD   DE, (ZL_ProfileDeltaEndLo)
-                LD   IX, (ZL_ProfileDeltaEndHi)
-                RET
-
-ZL_DrawProfiler:
-                CALL SetFontCancun8
-                LD   C, 255 : LD D, 242 : LD E, 168
-                CALL FT.Coprocessor.ColorRGB
-                LD   E, 255
-                CALL FT.Coprocessor.ColorA
-                FT_Begin FT_BITMAPS
-
-                LD   HL, str_prof_b
-                LD   BC, 26 * 16
-                LD   DE, 454 * 16
-                CALL DrawString
-                LD   HL, (ZL_ProfileBuildK)
-                CALL DrawWordValue
-
-                LD   HL, str_prof_w
-                LD   BC, 126 * 16
-                LD   DE, 454 * 16
-                CALL DrawString
-                LD   HL, (ZL_ProfileWriteK)
-                CALL DrawWordValue
-
-                LD   HL, str_prof_i
-                LD   BC, 226 * 16
-                LD   DE, 454 * 16
-                CALL DrawString
-                LD   HL, (ZL_ProfileIdleK)
-                CALL DrawWordValue
-
-                LD   HL, str_prof_c
-                LD   BC, 326 * 16
-                LD   DE, 454 * 16
-                CALL DrawString
-                LD   HL, (ZL_CmdBytes)
-                CALL DrawWordValue
-
-                LD   C, 255 : LD D, 255 : LD E, 255
-                JP   FT.Coprocessor.ColorRGB
-
-str_prof_b:    DEFB "B", 0
-str_prof_w:    DEFB "W", 0
-str_prof_i:    DEFB "I", 0
-str_prof_c:    DEFB "C", 0
 
                 endif ; ~_ZUMA_MAIN_LOOP_

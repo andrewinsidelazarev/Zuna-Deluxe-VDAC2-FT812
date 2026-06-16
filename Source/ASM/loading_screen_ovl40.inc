@@ -35,7 +35,7 @@ OVL_DrawNextLevelLoadingScreen:
                 LD   (FT.Coprocessor.BufferPtr), DE
                 FT_Begin FT_BITMAPS
 
-                ; Prefix: "LOADING LEVEL "
+                ; Префикс: "LOADING LEVEL "
                 FT_BitmapHandle LOADING_TEXT_HANDLE
                 FT_BitmapSource LOADING_TEXT_RAMG
                 FT_BitmapLayout FT_ARGB4, LOADING_TEXT_W * 2, LOADING_TEXT_H
@@ -46,7 +46,7 @@ OVL_DrawNextLevelLoadingScreen:
                 LD   DE, ((480 - LOADING_TEXT_H) / 2 * 8 / 5) * 16
                 CALL FT.Coprocessor.Vertex2f
 
-                ; Dynamic level number "X-X" тем же bitmap-slice способом.
+                ; Динамический level number "X-X" тем же bitmap-slice способом.
                 LD   HL, (OVL_LoadingLevelX)
                 LD   DE, LOADING_TEXT_PREFIX_W
                 ADD  HL, DE
@@ -130,7 +130,7 @@ OVL_DrawLoadingLevelCharSlice:
                 JR   OVL_DrawLoadingSliceAtCurX
 .dllc_dash:     LD   DE, LOADING_TEXT_DASH_X
                 LD   A, LOADING_TEXT_DASH_W
-                ; fallthrough
+                ; дальше сразу OVL_DrawLoadingSliceAtCurX
 
 OVL_DrawLoadingSliceAtCurX:
                 LD   (OVL_LoadingSliceW), A

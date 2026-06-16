@@ -1,16 +1,16 @@
 ;//////////////////////////////////////////////////////////////
-;//  Self-contained SD (Z-Controller) raw sector read.
-;//  Ported from the WC device driver DSDZC.ASM read path
-;//  (via Desktop/WC/Chkdsk/src/sd_zc.a80 by the ChkDsk session).
-;//  The card is already initialised by WC before the SPG launches
-;//  (hardware state persists), so we only issue CMD17 reads.
+;//  Самодостаточное чтение raw sector с SD (Z-Controller).
+;//  Портировано из read path WC device driver DSDZC.ASM
+;//  (через Desktop/WC/Chkdsk/src/sd_zc.a80 из ChkDsk session).
+;//  Карта уже initialized Wild Commander до запуска SPG (hardware state живёт),
+;//  поэтому здесь отправляются только CMD17 reads.
 ;//
-;//  This BYPASSES the bundled TS-DOS driver, whose FAT chain walk
-;//  drifts -128 sectors at the first FAT-sector boundary in our SPG
-;//  context. We do our own BPB/FAT walk on top of sd_read_sector.
+;//  Этот путь BYPASSES bundled TS-DOS driver: его FAT chain walk в нашем SPG
+;//  context сдвигался на -128 sectors на первой FAT-sector boundary. Поэтому
+;//  BPB/FAT walk выполняется нашим кодом поверх sd_read_sector.
 ;//
-;//  Unreal/this host uses BYTE addressing (sd_blkt = 0): the CMD17
-;//  argument is LBA*512. (Real SDHC would use block addressing.)
+;//  Unreal/этот host использует BYTE addressing (sd_blkt = 0): CMD17 argument
+;//  равен LBA*512. Реальная SDHC использовала бы block addressing.
 ;//////////////////////////////////////////////////////////////
 
 SD_CONF         equ     #77             ; config / chip-select port
@@ -26,10 +26,10 @@ sd_init:
                 call    sd_snb
                 ret
 
-;--- sd_read_sector: read one 512-byte sector
-;    in:  HL = LBA (low 16), DE = LBA (high 16)  [LBA is 32-bit]
-;         IX = destination buffer (512 bytes)
-;    out: CF = 1 on error, CF = 0 on success
+;--- sd_read_sector: прочитать один 512-byte sector
+;    Вход: HL = LBA (low 16), DE = LBA (high 16) [LBA is 32-bit]
+;          IX = destination buffer (512 bytes)
+;    Выход: CF = 1 on error, CF = 0 on success
 sd_read_sector:
                 ld      (sd_lba+0),hl
                 ld      (sd_lba+2),de
@@ -38,10 +38,10 @@ sd_read_sector:
                 push    ix
                 pop     hl                      ; HL = buffer
                 call    sd_cmd17
-                jr      nz,.err                 ; R1 must be #00
+                jr      nz,.err                 ; R1 обязан быть #00
                 call    sd_wait_token
                 jr      c,.err
-                call    sd_reads                ; read 512 bytes -> (HL), HL += 512
+                call    sd_reads                ; прочитать 512 bytes -> (HL), HL += 512
                 in      a,(SD_DATA)             ; CRC16 lo (ignored)
                 in      a,(SD_DATA)             ; CRC16 hi (ignored)
                 call    sd_csh
@@ -53,14 +53,14 @@ sd_read_sector:
 .range          scf                             ; LBA вне тома — карту не трогаем вообще
                 ret
 
-;--- CMD17 (single-block read). Address from sd_lba.
+;--- CMD17 (single-block read). Address берётся из sd_lba.
 ;    byte addressing (sd_blkt==0): argument = LBA*512 (byte offset).
-;    Preserves HL (caller's buffer pointer). Port of DSDZC CMDz.
+;    Сохраняет HL (caller buffer pointer). Порт DSDZC CMDz.
 sd_cmd17:
                 ld      a,SD_CMD17
                 call    sd_csh
                 call    sd_csl
-                push    hl                      ; preserve buffer pointer
+                push    hl                      ; сохранить buffer pointer
                 ld      de,(sd_lba+0)           ; DE = LBA low16
                 ld      bc,(sd_lba+2)           ; BC = LBA high16
                 ld      l,c
@@ -68,8 +68,8 @@ sd_cmd17:
                 ld      c,a                     ; C = command
                 ld      a,(sd_blkt)
                 or      a
-                jr      nz,.send                ; block addressing -> send LBA as-is
-                ; byte addressing: [HL:DE] = LBA*512  (x2 then x256 byte-shift)
+                jr      nz,.send                ; block addressing -> отправить LBA как есть
+                ; byte addressing: [HL:DE] = LBA*512 (x2, затем x256 byte-shift)
                 ex      de,hl : add hl,hl
                 ex      de,hl : adc hl,hl
                 ld      h,l : ld l,d : ld d,e : ld e,a  ; A=sd_blkt=0 here
@@ -83,10 +83,10 @@ sd_cmd17:
                 out     (c),e
                 ld      a,#FF
                 out     (c),a                   ; CRC (ignored)
-                pop     hl                      ; restore buffer pointer
+                pop     hl                      ; восстановить buffer pointer
                 jp      sd_resp
 
-;--- read 512 bytes from data port into (HL); HL advances by 512
+;--- прочитать 512 bytes из data port в (HL); HL advances by 512
 sd_reads:
                 push    bc
                 ld      bc,SD_DATA              ; B=0 -> 256 per INIR
@@ -103,7 +103,7 @@ sd_csh:
                 pop     af : pop bc
                 ret
 
-;--- chip select low (select) + clock, then wait ready
+;--- chip select low (select) + clock, затем wait ready
 sd_csl:
                 push    bc : push af
                 ld      bc,SD_CONF : ld a,SD_CS1 : out (c),a
@@ -111,9 +111,9 @@ sd_csl:
                 pop     af : pop bc
                 jp      sd_wait
 
-;--- wait until card returns #FF (ready), BOUNDED. Never spin forever: if the
-;    card stays busy we give up so a read fails cleanly (-> CF=1 -> L1 fallback)
-;    instead of hanging the SD/SPI bus, which would also wedge WC's next SPG load.
+;--- ждать, пока card вернёт #FF (ready), BOUNDED. Бесконечно не крутимся: если
+;    card stays busy, сдаёмся, чтобы read чисто провалился (-> CF=1 -> L1 fallback)
+;    вместо зависания SD/SPI bus, которое ломает и следующий WC SPG load.
 sd_wait:
                 push    bc : push de : push af
                 ld      bc,SD_DATA
@@ -123,8 +123,8 @@ sd_wait:
 .done           pop     af : pop de : pop bc
                 ret
 
-;--- wait for data token #FE with bounded timeout.
-;    out: CF=0 token received, CF=1 timeout/error token.
+;--- ждать data token #FE с bounded timeout.
+;    Выход: CF=0 token received, CF=1 timeout/error token.
 sd_wait_token:
                 push    bc
                 ld      bc,SD_DATA
@@ -154,7 +154,7 @@ sd_snb:
                 pop     af : pop bc
                 ret
 
-;--- read R1 response (bit7=0), up to 10 tries
+;--- прочитать R1 response (bit7=0), до 10 попыток
 sd_resp:
                 push    de : push bc
                 ld      bc,SD_DATA

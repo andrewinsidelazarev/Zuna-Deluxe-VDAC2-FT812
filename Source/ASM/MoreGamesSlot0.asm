@@ -1,5 +1,6 @@
-; More Games room, menu quit path and system-wide fire input state.
-; Kept in slot 0 because main1_play is close to its 16K page limit.
+; More Games room, menu quit path и system-wide fire input state.
+; Хранится в UI overlay (#41): экран вызывается только из меню, а slot0 держим
+; свободным для resident helpers.
 
 ; Standalone SPG exit path → грузим Wild Commander сами (boot.$C HOBETA с SD).
 ; MEMCONFIG=0+JP#0000 (Service ROM) НЕ грузит boot.$ (даёт пустой ZX-экран), поэтому
@@ -88,19 +89,11 @@ MORE_GAMES_Z4_SIZE    EQU 37533
 MoreGames:
                 CALL LoadMoreGamesAssets
                 CALL FadeInMoreGames
-                ; Прайм фронт-детекторов ПОСЛЕ фейда: считаем Огонь/ЛКМ/ESC «уже
-                ; нажатыми», чтобы клавиша/ЛКМ, которой выбрали More (и которую ещё
-                ; держат), не вызвала мгновенный выход — нужен свежий фронт.
-                LD   A, 1
-                LD   (MoreGamesFirePrev), A
-                LD   (MoreGamesLmbPrev), A
-                LD   (MoreGamesEscPrev), A
-.loop:          CALL Core.Input_Scan                       ; мышь + PS/2-клавиатура (раз/кадр)
+                CALL MoreGamesPrimeInputPrev
+.loop:          CALL Core.Input_Scan                       ; static screen: poll input as fast as possible
                 CALL MoreGamesExitPressed                  ; A=1 на фронте Огонь|ЛКМ|ESC
                 OR   A
                 JP   NZ, FadeMoreGamesToMenu
-                CALL MoreGamesBuildFrame
-                CALL Core.MenuSwapFrame
                 JP   .loop
 
 LoadMoreGamesAssets:
@@ -115,8 +108,27 @@ LoadMoreGamesAssets:
                 LD   DE, MORE_GAMES_PAL_RAMG & #FFFF
                 CALL FT.WriteMem
                 SetPage2 6
-                SetPage3 UI_OVL_PAGE                    ; More Games runs in UI context (#41): restore it, not #04
-                                                         ; (was #04 — left MenuSwapFrame/MenuInflate on the wrong page → black screen)
+                SetPage3 UI_OVL_PAGE                    ; More Games работает в UI context (#41): restore его, не #04
+                                                         ; раньше #04 оставлял MenuSwapFrame/MenuInflate на wrong page → black screen
+                RET
+
+MoreGamesPrimeInputPrev:
+                ; Прайм после fade текущим состоянием, а не hard-coded pressed.
+                ; Иначе первый ЛКМ мог съедаться, если первый scan ещё видел stale/held down.
+                CALL Core.Input_Scan
+                CALL Core.Input_FireKey
+                LD   HL, MoreGamesFirePrev
+                CALL MoreGamesStorePressedFlag
+                CALL Core.Input_MouseLMB
+                LD   HL, MoreGamesLmbPrev
+                CALL MoreGamesStorePressedFlag
+                CALL Core.Input_Esc
+                LD   HL, MoreGamesEscPrev
+MoreGamesStorePressedFlag:
+                LD   A, 0
+                JR   Z, .store
+                INC  A
+.store:         LD   (HL), A
                 RET
 
 MoreGamesBuildFrame:
@@ -159,26 +171,33 @@ MoreGamesInflateAssets:
 MoreGamesInflateAssetsEnd:
 MoreGamesInflateAssetsCount EQU (MoreGamesInflateAssetsEnd - MoreGamesInflateAssets) / 6
 
-; MoreGamesExitPressed — выход из экрана More Games. Возвращает A=1 на ФРОНТЕ
-; нажатия ЛЮБОГО из: огонь-КЛАВИША (Space|Enter|Kempston-Fire, Core.Input_FireKey),
-; ЛКМ (Core.Input_MouseLMB) или ESC (Core.Input_Esc). Иначе A=0.
+; MoreGamesExitPressed — выход из экрана More Games. Возвращает A=1 на действии:
+; огонь-КЛАВИША/ESC по press edge, ЛКМ по press edge ИЛИ release edge.
 ; 🔴 ВАЖНО: огонь-клавиша и ЛКМ — ОТДЕЛЬНЫЕ фронт-детекторы (НЕ через Input_Fire,
 ; который их ИЛИ-объединяет). Иначе залипшая/фантомно-нажатая ЛКМ (на этом стенде
 ; мышиные/Kempston-биты порой читаются «нажато» постоянно — см. Frog.asm) держит
 ; объединённый сигнал в NZ → у клавиатурного огня НИКОГДА нет фронта (симптом:
 ; «выходит только по ESC»). Раздельно — залипшая ЛКМ не блокирует огонь с клавы.
 ; Input_EdgeZ обязан идти СРАЗУ после опроса — промежуточный LD HL,addr флаги не
-; трогает, поэтому Z доходит до EdgeZ целым. *Prev primed=1 гасят перенос из меню.
+; трогает, поэтому Z доходит до EdgeZ целым.
 MoreGamesExitPressed:
                 CALL Core.Input_FireKey                    ; Space|Enter|Kempston (БЕЗ ЛКМ)
                 LD   HL, MoreGamesFirePrev
                 CALL Core.Input_EdgeZ                      ; NZ=фронт, обновляет (HL)
                 JR   NZ, .yes
-                CALL Core.Input_MouseLMB                   ; ЛКМ — изолированный фронт
+                CALL Core.Input_MouseLMB                   ; ЛКМ — press/release click
                 LD   HL, MoreGamesLmbPrev
-                CALL Core.Input_EdgeZ
+                JR   Z, .lmb_released
+                LD   A, (HL)
+                LD   (HL), 1
+                OR   A
+                JR   Z, .yes                              ; released->pressed
+                JR   .check_esc
+.lmb_released:  LD   A, (HL)
+                LD   (HL), 0
+                OR   A
                 JR   NZ, .yes
-                CALL Core.Input_Esc                        ; ESC
+.check_esc:     CALL Core.Input_Esc                        ; ESC
                 LD   HL, MoreGamesEscPrev
                 CALL Core.Input_EdgeZ
                 JR   NZ, .yes
