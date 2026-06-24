@@ -11,6 +11,12 @@
 
                 DEVICE ZXSPECTRUM4096
                 define MAPPING_REGISTERS              ; реестры через FMADDR_REGS
+RUNTIME_DIAGNOSTICS_ENABLED EQU 0                      ; 1 = включить отдельный runtime diagnostics ASM
+                if RUNTIME_DIAGNOSTICS_ENABLED
+                define DIAG_SECTION_GLOBAL_EQU
+                include "DiagnosticsRuntime.asm"
+                undefine DIAG_SECTION_GLOBAL_EQU
+                endif
 
 ; ----------------------------------------------------------------------------
 ; FT command buffer: TSLib дефолтит на #C000 (slot 3). После main0/main1 split
@@ -34,33 +40,15 @@ InterruptVA          EQU #4000                        ; IM2 vector area (page-al
 TSLib                EQU #1000                        ; адрес где живёт TSLib
 TSLibPage            EQU #00                          ; страница TSLib
 
-; --- Circular RAM log EQU (используется и в slot 0 Log routines, и в slot 1 Core hooks) ---
-GAMELOG_ADDR        EQU #4480                          ; сдвиг −#380: за ужатым ball-cache (#4100..#4480)
-GAMELOG_IDX_ADDR    EQU #4C80
-GAMELOG_FROZEN_ADDR EQU #4C81
-LOG_TMP_TYPE_ADDR   EQU #4C82
-LOG_TMP_CTX_ADDR    EQU #4C83
-LOG_TMP_DATA_ADDR   EQU #4C84
-LOG_END_ADDR        EQU #4C88
-BUILD_CANARY_ADDR   EQU #4C8C                          ; 33б → #4C8C..#4CAD, до CMD-буфера #4CB0
-BUILD_CANARY_LEN    EQU 33
-; Boot canary: написан ПЕРВОЙ инструкцией Start (#5C00), ДО любого Init.
-; Дамп различает: канарейка ОТСУТСТВУЕТ → WC ещё грузит SPG / не дошёл до Core;
-; "BOOT" есть, но BUILD_CANARY (#5020) пуст → Core стартовал, но Init_Core завис.
-BOOT_CANARY_ADDR    EQU #5044
-EVT_SHOT_FIRED      EQU 1
-EVT_BBOX_HIT        EQU 2
-EVT_HEMI            EQU 3
-EVT_INSERT          EQU 4
-EVT_CASCADE_TRIGGER EQU 5
-EVT_MATCH3          EQU 6
+; Runtime diagnostics addresses/hooks live in DiagnosticsRuntime.asm and are not
+; part of the normal build.
 
 ; --- Text atlases (nativealien48 ARGB4, red-yellow gradient). Объявлены здесь
 ; (ДО TSLib block) чтобы EQU были доступны во всех slot 0/1/3 функциях через
 ; sjasmplus forward-resolve. FT_RAM_G #0000..#10000 = 64K free area (раньше
 ; не использовалась, bg начинается с #010000). Размеры см. text_*.info.
 FROG_ARGB4_ENABLED    EQU 1
-BALLS_ARGB4_ENABLED   EQU 1                         ; canary: native ARGB4 balls, 16 spin phases, без palette indirection
+BALLS_ARGB4_ENABLED   EQU 0                         ; L19 experiment: PALETTED4444 balls, 4 baked angles × 8 spin phases
 ; Slot-3 overlay pages (logical #C000, разные physical pages, never co-resident).
 ; Определено здесь (global, before module Core), чтобы resident Fade* transitions
 ; и Init_Core видели UI_OVL_PAGE без forward ref. LOADER_OVL_PAGE живёт в
@@ -301,175 +289,20 @@ TSLIB_End:
 TSLIB_Size       EQU TSLIB_End - TSLIB_Start
                 display "TSLib:    \t", /A, TSLIB_Start, " size=", /D, TSLIB_Size, " bytes"
 
-; --- Log_Init и LogEvent в slot 0 (page 0) после TSLib --------------------
-; Перенесено из Core (slot 1) чтобы не превысить 8 KB предел Core.
-; Free zone после TSLIB_End (~12 KB до #3FFF). EQU адресов (GAMELOG_ADDR,
-; LOG_TMP_*) определены в MainLoop.asm — forward references работают.
-Log_Init:       LD   HL, GAMELOG_ADDR
-                LD   DE, GAMELOG_ADDR + 1
-                LD   BC, LOG_END_ADDR - GAMELOG_ADDR - 1
-                LD   (HL), 0
-                LDIR
-                RET
+                if RUNTIME_DIAGNOSTICS_ENABLED
+                define DIAG_SECTION_SLOT0
+                include "DiagnosticsRuntime.asm"
+                undefine DIAG_SECTION_SLOT0
+                endif
 
-LogEvent:       PUSH AF
-                PUSH BC
-                PUSH DE
-                PUSH HL
-                LD   A, (GAMELOG_IDX_ADDR)
-                LD   H, 0
-                LD   L, A
-                ADD  HL, HL
-                ADD  HL, HL
-                ADD  HL, HL                            ; HL = idx * 8
-                LD   DE, GAMELOG_ADDR
-                ADD  HL, DE
-                LD   A, (LOG_TMP_TYPE_ADDR)
-                LD   (HL), A
-                INC  HL
-                LD   A, (LOG_TMP_CTX_ADDR)
-                LD   (HL), A
-                INC  HL
-                LD   A, (Core.ZL_FrameCounter)         ; low byte
-                LD   (HL), A
-                INC  HL
-                XOR  A
-                LD   (HL), A
-                INC  HL
-                EX   DE, HL
-                LD   HL, LOG_TMP_DATA_ADDR
-                LD   BC, 4
-                LDIR
-                LD   A, (GAMELOG_IDX_ADDR)
-                INC  A
-                LD   (GAMELOG_IDX_ADDR), A
-                POP  HL
-                POP  DE
-                POP  BC
-                POP  AF
-                RET
+Cache_C000_OnMainLoop:
+                LD   HL, FMADDR_REGS + HIGH CACHECONFIG
+                LD   (HL), EN_0000 | EN_4000 | EN_8000 | EN_C000
+                JP   Core.MainLoop
 
-; ----- 4 logger helpers (slot 0) — Core code просто CALL LogXxx 3 байта вместо
-;       30 байт inline payload. Все preserve регистры.
-LogShotFired:                                          ; SHOT_FIRED: ctx=Frog_Angle, d1=SmoothX, d2=SmoothY
-                PUSH HL                                ; (Frog_Angle — реальное направление bullet velocity,
-                PUSH AF                                ; SmoothXY — куда курсор aim. Сравнение даёт grace stale)
-                LD   A, EVT_SHOT_FIRED
-                LD   (LOG_TMP_TYPE_ADDR), A
-                LD   A, (Core.Frog_Angle)
-                LD   (LOG_TMP_CTX_ADDR), A
-                LD   HL, (Core.ZL_SmoothX)
-                LD   (LOG_TMP_DATA_ADDR), HL
-                LD   HL, (Core.ZL_SmoothY)
-                LD   (LOG_TMP_DATA_ADDR+2), HL
-                CALL LogEvent
-                POP  AF
-                POP  HL
-                RET
-
-LogBboxHit:                                            ; in: A=best_hit_idx
-                PUSH HL
-                PUSH AF
-                LD   (LOG_TMP_CTX_ADDR), A
-                LD   A, EVT_BBOX_HIT
-                LD   (LOG_TMP_TYPE_ADDR), A
-                LD   HL, (Core.Bullet_X)
-                LD   (LOG_TMP_DATA_ADDR), HL
-                LD   HL, (Core.Bullet_Y)
-                LD   (LOG_TMP_DATA_ADDR+2), HL
-                CALL LogEvent
-                POP  AF
-                POP  HL
-                RET
-
-LogHemi:                                               ; in: A=target_idx
-                PUSH HL
-                PUSH BC
-                PUSH DE
-                PUSH AF
-                LD   (LOG_TMP_CTX_ADDR), A
-                LD   A, EVT_HEMI
-                LD   (LOG_TMP_TYPE_ADDR), A
-                POP  AF                                ; восстановить target_idx in A
-                PUSH AF
-                CALL Core.VDC_SlotPos                  ; BC=X, DE=Y, CF=skip
-                JR   NC, .lh_ok
-                LD   BC, #FFFF
-                LD   DE, #FFFF
-.lh_ok:         LD   (LOG_TMP_DATA_ADDR), BC
-                LD   (LOG_TMP_DATA_ADDR+2), DE
-                CALL LogEvent
-                POP  AF
-                POP  DE
-                POP  BC
-                POP  HL
-                RET
-
-LogInsert:                                             ; in: nothing (reads VDC_* directly)
-                PUSH HL
-                PUSH AF
-                LD   A, EVT_INSERT
-                LD   (LOG_TMP_TYPE_ADDR), A
-                LD   A, (Core.VDC_TmpInsIdx)
-                LD   (LOG_TMP_CTX_ADDR), A
-                LD   A, (Core.VDC_SlotsLen)
-                LD   (LOG_TMP_DATA_ADDR), A
-                LD   A, (Core.VDC_HSA)
-                LD   (LOG_TMP_DATA_ADDR+1), A
-                LD   A, (Core.VDC_TmpInsColor)
-                LD   (LOG_TMP_DATA_ADDR+2), A
-                LD   A, (Core.VDC_HSub)
-                LD   (LOG_TMP_DATA_ADDR+3), A
-                CALL LogEvent
-                POP  AF
-                POP  HL
-                RET
-
-LogMatch3:                                             ; MATCH3: ctx=color, d1=lb|rb, d2=count|marker
-                PUSH HL
-                PUSH AF
-                LD   A, EVT_MATCH3
-                LD   (LOG_TMP_TYPE_ADDR), A
-                LD   A, (Core.VDC_TmpMC_Color)
-                LD   (LOG_TMP_CTX_ADDR), A
-                LD   A, (Core.VDC_TmpML)
-                LD   (LOG_TMP_DATA_ADDR), A             ; lb
-                LD   A, (Core.VDC_TmpMR)
-                LD   (LOG_TMP_DATA_ADDR+1), A           ; rb
-                LD   A, (Core.VDC_TmpMCount)
-                LD   (LOG_TMP_DATA_ADDR+2), A           ; count
-                LD   A, (Core.VDC_TmpInsIdx)
-                LD   (LOG_TMP_DATA_ADDR+3), A           ; TmpInsIdx (откуда был triggered)
-                CALL LogEvent
-                POP  AF
-                POP  HL
-                RET
-
-LogCascadeTrigger:                                     ; CASCADE_TRIGGER: ctx=gap_idx, d1=len|HSA, d2=offset|HSub
-                PUSH HL
-                PUSH DE
-                PUSH AF
-                LD   A, EVT_CASCADE_TRIGGER
-                LD   (LOG_TMP_TYPE_ADDR), A
-                LD   A, (Core.VDC_TmpGapIdx)
-                LD   (LOG_TMP_CTX_ADDR), A
-                LD   A, (Core.VDC_SlotsLen)
-                LD   (LOG_TMP_DATA_ADDR), A
-                LD   A, (Core.VDC_HSA)
-                LD   (LOG_TMP_DATA_ADDR+1), A
-                LD   A, (Core.VDC_TmpGapIdx)
-                LD   H, 0
-                LD   L, A
-                LD   DE, (Core.VDC_pOffsets)
-                ADD  HL, DE
-                LD   A, (HL)
-                LD   (LOG_TMP_DATA_ADDR+2), A
-                LD   A, (Core.VDC_HSub)
-                LD   (LOG_TMP_DATA_ADDR+3), A
-                CALL LogEvent
-                POP  AF
-                POP  DE
-                POP  HL
+Cache_C000_Off:
+                LD   HL, FMADDR_REGS + HIGH CACHECONFIG
+                LD   (HL), EN_0000 | EN_4000 | EN_8000
                 RET
 
 ClampOffsetOrder:                                      ; не дать positive tail offsets инвертировать visual slot order
@@ -576,6 +409,7 @@ FadeLevelSelectToGameplay:
                 JP   Core.EnterGameplayForCurrentLevel
 
 FadeGameplayToMenu:
+                CALL Cache_C000_Off
                 SetPage3 UI_OVL_PAGE                     ; slot 3 -> UI overlay СНАЧАЛА: DrawBlackTransitionFrame
                                                          ; вызывает MenuSwapFrame, который живёт на UI page
                 LD   A, UI_OVL_PAGE : LD (CurrentCodePage), A   ; отследить scene page
@@ -688,9 +522,12 @@ ADVENTURE_RANK2_POS    EQU 15
 ADVENTURE_RANK3_POS    EQU 33
 ADVENTURE_RANK4_POS    EQU 54
 
-; Level-select thumbnails — SPG-resident zlib ARGB4 streams. Destination держим
-; в стороне от FONT_NATIVE_RAMG, потому что titles рисуются live text.
-LS_PREVIEW_BG_RAMG       EQU #0D4000
+; Level-select thumbnails — raw ARGB4 streams from ZUMALVL.PAK.
+; Two RAM_G buffers let Back/Next load the new thumbnail without touching the
+; RAM_G region still referenced by the current display list.
+LS_PREVIEW_BG_RAMG_B     EQU #0B3000
+LS_PREVIEW_BG_RAMG_A     EQU #0D4000
+LS_PREVIEW_BG_RAMG       EQU LS_PREVIEW_BG_RAMG_A
 LS_PREVIEW_BG_X          EQU 177                          ; 640-логика (для пропорций)
 LS_PREVIEW_BG_Y          EQU 240
 LS_PREVIEW_BG_SX         EQU 283                          ; 177×1.6 — экранная позиция превью
@@ -701,6 +538,13 @@ LS_PREVIEW_BG_W          EQU 306
 LS_PREVIEW_BG_H          EQU 196
 LS_PREVIEW_BG_HANDLE     EQU 6
 
+LevelSelectPreviewDrawRamL:  DEFW LS_PREVIEW_BG_RAMG_A & #FFFF
+LevelSelectPreviewDrawRamH:  DEFB (LS_PREVIEW_BG_RAMG_A >> 16) & #FF
+LevelSelectPreviewLoadRamL:  DEFW LS_PREVIEW_BG_RAMG_A & #FFFF
+LevelSelectPreviewLoadRamH:  DEFB (LS_PREVIEW_BG_RAMG_A >> 16) & #FF
+LevelSelectPreviewActiveBuf: DEFB 0
+LevelSelectPreviewLoadBuf:   DEFB 0
+
                 include "level_select_preview_markers.inc"
                 include "level_select_preview_spg.inc"
 
@@ -710,7 +554,11 @@ DrawLevelSelectPreview:
                 ; БЕЗ маппинга #04 (machinery resident) — #04-хелпер тут недоступен!
                 CALL Core.Resident_EmitScale16
                 FT_BitmapHandle LS_PREVIEW_BG_HANDLE
-                FT_BitmapSource LS_PREVIEW_BG_RAMG
+                LD   B, #01                             ; BITMAP_SOURCE
+                LD   A, (LevelSelectPreviewDrawRamH)
+                LD   C, A
+                LD   DE, (LevelSelectPreviewDrawRamL)
+                CALL FT.Coprocessor.Command_BCDE
                 FT_BitmapLayout FT_ARGB4, LS_PREVIEW_BG_W * 2, LS_PREVIEW_BG_H
                 FT_BitmapSize FT_NEAREST, FT_BORDER, FT_BORDER, LS_PREVIEW_BG_DRAW_W, LS_PREVIEW_BG_DRAW_H
                 FT_Begin FT_BITMAPS
@@ -747,6 +595,7 @@ DrawKillzoneDual:
                 ; kill-zone area заметно деградирует, поэтому overlay закрывает и
                 ; idle KzFrame=1.
                 CALL UpdateKillzoneDrawXY
+DrawKillzoneAfterXY:
                 CALL Core.ZL_EmitScale16Matrix        ; 1024×768: scale 1.6 точным блоком (88→141)
                 FT_BitmapHandle 3
                 FT_PaletteSource Core.KZ_PALETTE_RAMG
@@ -771,7 +620,7 @@ DrawKillzoneDual:
                 LD   A, (Core.VDC_HasSecondChain)
                 OR   A
                 RET  Z
-                JP   DrawSecondKillzoneDual
+                JP   L19SecondKillzoneGate
 
 DrawSecondKillzoneDual:
                 XOR  A
@@ -923,7 +772,15 @@ UpdateDialog:
                 LD   (Core.VDC_DialogState), A
                 RET
 .udlg_restart:
-                JP   RestartLevel
+                LD   A, (Core.VDC_DialogState)
+                CP   2                                  ; GAME_OVER_FINAL (lives=0) -> main menu
+                JR   NZ, RestartLevel
+                ASSERT Core.VDC_DialogState == Core.VDC_Lives + 1
+                LD   HL, 3
+                LD   (Core.VDC_Lives), HL               ; lives=3, dialog=0 (bytes are adjacent)
+                CALL Score_Reset                        ; next run from menu starts from score 0
+                POP  HL                                 ; abandon MainLoop CALL UpdateDialog
+                JP   FadeGameplayToMenu
 
 ; --- LEVEL DONE fade-out: рампим FadeAlpha до чёрного, потом грузим след. уровень.
 ; Сцена (поле + диалог) + DrawFadeOverlay рисуются в ZL_DrawFrame каждый кадр.
@@ -945,14 +802,6 @@ DialogFrameLoaded: DEFB 0                               ; 1 если DIALOG_FRAM
 RestartLevel:
                 XOR  A
                 LD   (Core.VDC_DialogState), A          ; скрыть диалог
-                ; Если lives=0 → reset до 3 (full restart)
-                LD   A, (Core.VDC_Lives)
-                OR   A
-                JR   NZ, .rl_keep_lives
-                LD   A, 3
-                LD   (Core.VDC_Lives), A
-                CALL Score_Reset                        ; full restart (жизни кончились) → счёт=0, NextLifeScore=50000
-.rl_keep_lives:
                 CALL Core.SetCurrentTrackPage           ; dialog lazy upload leaves slot 2 on DIALOG_FRAME pages
                 CALL Core.VDC_Init                      ; chain reset, state=INTRO
                 CALL Core.Frog_Init
@@ -1102,12 +951,12 @@ DrawFrameStrips:
                 ; рамки. Helper в #04 (Core), замаплен во время gameplay (зовёт MainLoop).
                 CALL Core.ZL_EmitScale16Matrix
                 FT_PaletteSource FRAME_PAL_RAMG
+                XOR  A : CALL FT.Coprocessor.Cell
                 ; --- TOP draw 1024×70 at (0, 0) ---
                 FT_BitmapHandle FRAME_TOP_HANDLE
                 FT_BitmapSource FRAME_TOP_RAMG
                 FT_BitmapLayout FT_PALETTED4444, FRAME_TOP_W, FRAME_TOP_H
                 FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, FRAME_TOP_DRAW_W, FRAME_TOP_DRAW_H
-                XOR  A : CALL FT.Coprocessor.Cell
                 LD   BC, 0
                 LD   DE, 0
                 CALL FT.Coprocessor.Vertex2f
@@ -1116,7 +965,6 @@ DrawFrameStrips:
                 FT_BitmapSource FRAME_BOT_RAMG
                 FT_BitmapLayout FT_PALETTED4444, FRAME_BOT_W, FRAME_BOT_H
                 FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, FRAME_BOT_DRAW_W, FRAME_BOT_DRAW_H
-                XOR  A : CALL FT.Coprocessor.Cell
                 LD   BC, 0
                 LD   DE, (768 - FRAME_BOT_DRAW_H) * 16
                 CALL FT.Coprocessor.Vertex2f
@@ -1125,7 +973,6 @@ DrawFrameStrips:
                 FT_BitmapSource FRAME_LEFT_RAMG
                 FT_BitmapLayout FT_PALETTED4444, FRAME_LEFT_W, FRAME_LEFT_H
                 FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, FRAME_LEFT_DRAW_W, FRAME_LEFT_DRAW_H
-                XOR  A : CALL FT.Coprocessor.Cell
                 LD   BC, 0
                 LD   DE, FRAME_TOP_DRAW_H * 16
                 CALL FT.Coprocessor.Vertex2f
@@ -1134,7 +981,6 @@ DrawFrameStrips:
                 FT_BitmapSource FRAME_RIGHT_RAMG
                 FT_BitmapLayout FT_PALETTED4444, FRAME_RIGHT_W, FRAME_RIGHT_H
                 FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, FRAME_RIGHT_DRAW_W, FRAME_RIGHT_DRAW_H
-                XOR  A : CALL FT.Coprocessor.Cell
                 LD   BC, (1024 - FRAME_RIGHT_DRAW_W) * 16
                 LD   DE, FRAME_TOP_DRAW_H * 16
                 JP   FT.Coprocessor.Vertex2f
@@ -2057,7 +1903,7 @@ Score_CheckExtraLife:
                 LD   (Core.NextLifeScore + 2), A
                 JR   .cel_loop
 ; ----------------------------------------------------------------------------
-; Score_Reset — score = 0, NextLifeScore = 50000 (new run / full restart).
+; Score_Reset — score = 0, NextLifeScore = 50000 (new run / final Game Over exit).
 ; ----------------------------------------------------------------------------
 Score_Reset:
                 LD   HL, 0
@@ -2401,40 +2247,20 @@ VDC_CheckKillzone:
                 CP   65
                 JR   NC, .ck_closed
                 ; rem ∈ [1..64]: KzFrame = 2 + ((64 - rem) >> 3) ∈ [2..9]
-                LD   B, A
                 LD   A, 64
-                SUB  B
+                SUB  L
                 SRL  A : SRL A : SRL A
                 ADD  A, 2
                 LD   (Core.VDC_KzFrame), A
-                LD   A, L
-                CP   1
-                JR   NZ, .ck_warn_maybe
+                DEC  L
+                RET  NZ
                 CALL Core.VDC_LoseStartReady
-                JR   C, .ck_hold_before_kz
+                JP   C, Core.VDC_LoseHoldBeforeKillzone
                 XOR  A
                 LD   (Core.VDC_LoseHoldCnt), A
-.ck_warn_maybe:
-                LD   A, (Core.VDC_KzFrame)
-                ; Сирена опасности (оригинал; HD выпилил): один раз при входе в
-                ; ближнюю зону (KzFrame >= 7 ≈ rem <= 24). Флаг снимается в
-                ; .ck_closed — отъехали (rollback/match) → при след. приближении
-                ; прозвучит снова. Без флага сирена пилила бы каждый кадр.
-                CP   7
-                RET  C                                  ; ещё далеко — без сирены
-                LD   A, (Core.VDC_WarnPlayed)
-                OR   A
-                RET  NZ                                 ; уже звучала в этом заходе
-                LD   A, 1
-                LD   (Core.VDC_WarnPlayed), A
-                LD   A, Core.SND_WARNING1
-                JP   Core.GS_PlaySfx
-.ck_hold_before_kz:
-                JP   Core.VDC_LoseHoldBeforeKillzone
+                RET
 .ck_closed:     LD   A, 1
                 LD   (Core.VDC_KzFrame), A
-                XOR  A
-                LD   (Core.VDC_WarnPlayed), A           ; отъехали — разрешить сирену снова
                 RET
 .ck_trigger:    CALL Core.VDC_LoseStartReady
                 JP   C, Core.VDC_LoseHoldBeforeKillzone
@@ -2500,6 +2326,9 @@ Frog_FilteredRandomColor:                              ; in A: 0xFF=force fresh;
                 LD   A, B                              ; keep input color
                 JR   .frc_exit
 .frc_pick_new:
+                LD   A, D
+                OR   A
+                JP   Z, .frc_fb_in                     ; no live colors, only markers → keep current valid color
                 ; --- Popcount mask D → B (число цветов в цепи) ---
                 LD   B, 0
                 LD   E, Core.VDC_NUM_COLORS            ; параметрический лимит цветов
@@ -2745,6 +2574,7 @@ SCRATCH_PAGE    EQU #01
 CurrentCodePage:  DB UI_OVL_PAGE
 UnpackAndUploadPage:
                 DI
+                CALL Cache_C000_Off
                 LD   (.uaup_src), A
                 LD   (.uaup_saved_sp), SP
                 LD   SP, .uaup_temp_stack_top
@@ -2791,6 +2621,7 @@ UnpackAndUploadPage:
 ; ----------------------------------------------------------------------------
 UnpackZX7Page:
                 DI
+                CALL Cache_C000_Off
                 LD   (.uzx7_src), A
                 LD   A, B  : LD (.uzx7_dst), A
                 LD   (.uzx7_saved_sp), SP
@@ -2912,16 +2743,16 @@ SafeInflatePage2:
 
                 include "LevelSelectPreviewSlot0.asm"
 
-LOG_BLOCK_END:
+SLOT0_BLOCK_END:
                 ; slot0-регион (#0000..#3FFF, всегда замаплен) ОБЯЗАН закончиться до
                 ; #4000 — иначе хвост налезает на область slot1 (Core) в рантайме →
                 ; тихая порча/зависание (sjasmplus сам на это НЕ ругается). Ловим тут.
                 ; Если упало: вынеси крупные таблицы/данные в overlay (#04/#41), как
                 ; сделано с font_level48_meta.inc.
-                ASSERT LOG_BLOCK_END <= #4000
+                ASSERT SLOT0_BLOCK_END <= #4000
 
-TSLIB_TOTAL_SIZE EQU LOG_BLOCK_END - TSLIB_Start
-                display "Log:      \t", /A, Log_Init, " end=", /A, LOG_BLOCK_END
+TSLIB_TOTAL_SIZE EQU SLOT0_BLOCK_END - TSLIB_Start
+                display "Slot0:    \t", /A, TSLIB_Start, " end=", /A, SLOT0_BLOCK_END
                 SAVEBIN "Build/TSLib.bin", TSLIB_Start, TSLIB_TOTAL_SIZE
 
 ; --- Core block (page 5) -------------------------------------------------
@@ -2930,6 +2761,7 @@ TSLIB_TOTAL_SIZE EQU LOG_BLOCK_END - TSLIB_Start
 Start:
                 ; ----- EntryPoint -----
                 LD   SP, StackTop
+                if RUNTIME_DIAGNOSTICS_ENABLED
                 ; ----- BOOT CANARY -----
                 ; Доказывает, что WC SPG-loader долистал до Core EntryPoint и
                 ; передал управление НАМ — до любого Init. Пишем "BOOT" в
@@ -2939,6 +2771,7 @@ Start:
                 LD   (BOOT_CANARY_ADDR), HL
                 LD   HL, #544F                          ; 'O','T' (LE → #4F #54)
                 LD   (BOOT_CANARY_ADDR + 2), HL
+                endif
                 CALL Initialize
                 CALL UploadBootLoadingAssets
                 CALL BootProgressReset
@@ -3084,7 +2917,7 @@ LoadGameplayAssets:
                 SetPage2_A
                 LD   HL, #8000
                 LD   BC, 512
-                LD   A, (BG_PALETTE_RAMG >> 16) & 0xFF
+                LD   A, B
                 LD   DE, BG_PALETTE_RAMG & 0xFFFF
                 CALL FT.WriteMem
 
@@ -3115,7 +2948,8 @@ LoadGameplayAssets:
                 LD   HL, #8000
                 LD   BC, 512                          ; ARGB4 = 256 × 2 bytes
                 LD   A, (BALLS_PALETTE_RAMG >> 16) & 0xFF
-                LD   DE, BALLS_PALETTE_RAMG & 0xFFFF
+                LD   D, C
+                LD   E, C
                 CALL FT.WriteMem
                 endif
 
@@ -3231,7 +3065,8 @@ LoadGameplayAssets:
                 LD   HL, #8000
                 LD   BC, 512
                 LD   A, (FRAME_PAL_RAMG >> 16) & 0xFF
-                LD   DE, FRAME_PAL_RAMG & 0xFFFF
+                LD   D, B
+                LD   E, C
                 CALL FT.WriteMem
                 ; 5 ZX7-compressed strips through UnpackAndUploadPage (each 16K block).
                 ; Setup BgRamH/L to FRAME_TOP_RAMG, then loop через 5 страниц подряд.
@@ -3358,7 +3193,9 @@ LoadGameplayAssets:
                 CALL VDC_Init
                 CALL Frog_Init
                 CALL Bullet_Init
-                CALL Log_Init                          ; circular RAM log для F12-dump
+                if RUNTIME_DIAGNOSTICS_ENABLED
+                CALL Log_Init
+                endif
                 RET
 
 GetCurrentLevelRecord:
@@ -3578,6 +3415,20 @@ GetCurrentPartime:
                 LD   A, (HL)
                 RET
 
+; Out: CF=1 если в цепи есть хотя бы один живой цвет (< VDC_NUM_COLORS),
+;      CF=0 если цепь пуста или состоит только из gap/explode markers.
+VDC_ChainHasLiveBall:
+                OR   A
+                JR   Z, .cw_no_live
+                LD   B, A
+.cw_live_loop:  LD   A, (HL)
+                CP   VDC_NUM_COLORS
+                RET  C
+                INC  HL
+                DJNZ .cw_live_loop
+.cw_no_live:    AND  A
+                RET
+
 VDC_CheckWinMaybe:
                 LD   A, (VDC_GameState)
                 OR   A
@@ -3586,15 +3437,35 @@ VDC_CheckWinMaybe:
                 OR   A
                 RET  Z
                 LD   A, (VDC_SlotsLen)
-                OR   A
-                RET  NZ
+                LD   HL, VDC_Slots
+                CALL VDC_ChainHasLiveBall
+                RET  C
+                ; Dual-level gate: runtime flag OR level identity. If
+                ; VDC_HasSecondChain is transiently wrong, L05/L12/L19 still
+                ; cannot enter WIN while VDC2 has balls.
                 LD   A, (VDC_HasSecondChain)
                 OR   A
-                JR   Z, .win_all_clear
+                JR   NZ, .win_check_second
+                LD   A, (CurrentLevel)
+                CP   4                                ; L05 blackswirley
+                JR   Z, .win_check_second
+                CP   11                               ; L12 snakepit
+                JR   Z, .win_check_second
+                CP   18                               ; L19 serpents
+                JR   NZ, .win_all_clear
+.win_check_second:
                 LD   A, (VDC2_SlotsLen)
-                OR   A
-                RET  NZ
+                LD   HL, VDC2_Slots
+                CALL VDC_ChainHasLiveBall
+                RET  C
 .win_all_clear:
+                XOR  A
+                LD   (Bullet_Active), A
+                LD   (Frog_IsFire), A
+                LD   A, FROG_BALL_IDLE
+                LD   (Frog_BallExpand), A
+                LD   A, 24
+                LD   (Frog_TongueExpand), A
                 LD   A, VDC_STATE_WIN
                 LD   (VDC_GameState), A
                 LD   A, VDC_WIN_TICKS
@@ -3649,7 +3520,8 @@ VDC_UpdateWin:
 ; --- VDC_WinOutroInit — на входе в WIN: эмиттеры из head-сэмплов, пул пуст. ---
 VDC_WinOutroInit:
                 ; Дозалить атлас WIN-взрыва в регион шаров (#050000) — шаров на
-                ; экране уже нет (SlotsLen==0, проверено в VDC_CheckWinMaybe), так
+                ; экране уже нет (нет live slots < VDC_NUM_COLORS; проверено в
+                ; VDC_CheckWinMaybe), так
                 ; что регион свободен. UnpackAndUploadPage резидентна (slot0),
                 ; использует slot3 как scratch и восстанавливает его в
                 ; CurrentCodePage (#04) — безопасно из gameplay-контекста.
@@ -3756,7 +3628,40 @@ VDC_WinEmitStep:
                 ADD  HL, DE
                 LD   (VDC_WinStepPos), HL
                 RET
-.es_done:       LD   HL, #FFFF
+.es_done_kz:    LD   HL, (TrackData)
+                DEC  HL                                  ; HL = S_kz
+                LD   DE, (VDC_WinStepSpawn)
+                AND  A : SBC HL, DE                      ; уже спавнили ровно в KZ?
+                JR   Z, .es_done
+                LD   HL, (TrackData)
+                DEC  HL
+                CALL VDC_ReadSampleAtHL                  ; финальная точка kill-zone
+                CALL VDC_WinSpawnParticle
+                LD   A, SND_ENDOFLEVELPOP1
+                CALL GS_PlaySfx
+                LD   HL, 100
+                CALL Score_Add24
+.es_done:       
+                ; pos > S_kz
+                ; Check if we already spawned exactly at S_kz
+                LD   HL, (TrackData)
+                DEC  HL                                  ; HL = S_kz
+                LD   DE, (VDC_WinStepSpawn)
+                AND  A : SBC HL, DE                      ; S_kz - spawn
+                JR   Z, .es_done_skip
+                
+                ; Spawn final KZ particle exactly at S_kz
+                LD   HL, (TrackData)
+                DEC  HL
+                CALL VDC_ReadSampleAtHL
+                CALL VDC_WinSpawnParticle
+                LD   A, SND_ENDOFLEVELPOP1
+                CALL GS_PlaySfx
+                LD   HL, 100
+                CALL Score_Add24
+
+.es_done_skip:
+                LD   HL, #FFFF
                 LD   (VDC_WinStepPos), HL
                 RET
 
@@ -3897,6 +3802,7 @@ LoadNextLevelWithLoading:
 ; заново заливает его в RAM_G и рисует стабильный чёрный loading-кадр.
 ; Не возвращается: JP MainLoop = чистый перезапуск кадрового цикла.
 EnterGameplayForCurrentLevel:
+                CALL Cache_C000_Off
                 SetPage3 LOADER_OVL_PAGE
                 CALL OVL_ResolveCurrentModeSelection
                 XOR  A
@@ -3917,7 +3823,7 @@ EnterGameplayForCurrentLevel:
                 ; Гасим «LOADING LEVEL X-X» чёрным кадром СРАЗУ после полной
                 ; загрузки (включая SFX) — перед свопом в геймплейный кадр.
                 CALL DrawBlackLoadingFrame
-                JP   MainLoop
+                JP   Cache_C000_OnMainLoop
 
 DrawBlackLoadingFrame:
                 FT_CMD_Start
@@ -4075,6 +3981,7 @@ LoadLevelSelectFontNative:
                 DJNZ .upload_font
                 RET
 
+                if !FROG_ARGB4_ENABLED
 UploadFrogPalette:
                 PUSH HL                                ; input HL = low 16 bits of RAM_G palette addr
                 SetPage2_A
@@ -4083,6 +3990,7 @@ UploadFrogPalette:
                 LD   BC, 512
                 LD   A, #0C                            ; all frog palettes live at #0C0000..#0C07FF
                 JP   FT.WriteMem
+                endif
 
 BG_FIRST_PAGE      EQU 7
 BG_PAGE_COUNT      EQU 8                               ; 400×300 PALETTED4444 = 120000 bytes, 8 × 16K pages
@@ -4160,16 +4068,19 @@ Init_Core:      FMapAddrInit                          ; FT_EN, MEM_WO, page0=TSL
                 SetPage1 5                            ; #4000 → Core code page (main0 resident)
                 SetPage2 6                            ; #8000 → TrackData (track_640.bin)
                 SetPage3 UI_OVL_PAGE                  ; #C000 → UI overlay (boot scene = menu); gameplay maps #04 in FadeLevelSelectToGameplay
+                if RUNTIME_DIAGNOSTICS_ENABLED
                 LD   HL, BuildCanaryBytes
                 LD   DE, BUILD_CANARY_ADDR
                 LD   BC, BUILD_CANARY_LEN
                 LDIR
+                endif
                 RET
 
-BuildCanaryBytes:
-                DB "ZVDAC2 2026-05-24 PAGE3GUARD",0
-                DB #00, #05, #06, #04
-BuildCanaryBytesEnd:
+                if RUNTIME_DIAGNOSTICS_ENABLED
+                define DIAG_SECTION_CORE_DATA
+                include "DiagnosticsRuntime.asm"
+                undefine DIAG_SECTION_CORE_DATA
+                endif
 
 TrackData       EQU #8000                             ; в slot 2 (page 6)
 
