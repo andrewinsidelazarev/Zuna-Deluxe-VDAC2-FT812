@@ -48,7 +48,7 @@ TSLibPage            EQU #00                          ; страница TSLib
 ; sjasmplus forward-resolve. FT_RAM_G #0000..#10000 = 64K free area (раньше
 ; не использовалась, bg начинается с #010000). Размеры см. text_*.info.
 FROG_ARGB4_ENABLED    EQU 1
-BALLS_ARGB4_ENABLED   EQU 0                         ; L19 experiment: PALETTED4444 balls, 4 baked angles × 8 spin phases
+BALLS_ARGB4_ENABLED   EQU 0                         ; global balls atlas: PALETTED4444 50px-in-51px guarded cells
 ; Slot-3 overlay pages (logical #C000, разные physical pages, never co-resident).
 ; Определено здесь (global, before module Core), чтобы resident Fade* transitions
 ; и Init_Core видели UI_OVL_PAGE без forward ref. LOADER_OVL_PAGE живёт в
@@ -67,6 +67,7 @@ FONT_LEVEL48_PAGE_BASE EQU #21                          ; SPG pages #21,#22
 FONT_LEVEL48_NUM_PAGES EQU 2
 FONT_LEVEL48_RAMG      EQU #004000                      ; 2×16K окно → #004000..#00C000
 FONT_LEVEL48_HANDLE    EQU 11
+DIAG_TRK_PG1           EQU 0                            ; diag L18-zone off in normal builds
 
 TEXT_SPIRALDOOM_H      EQU 36                            ; опорная высота строки для Y-раскладки интро (исторический ориентир)
 
@@ -297,12 +298,12 @@ TSLIB_Size       EQU TSLIB_End - TSLIB_Start
 
 Cache_C000_OnMainLoop:
                 LD   HL, FMADDR_REGS + HIGH CACHECONFIG
-                LD   (HL), EN_0000 | EN_4000 | EN_8000 | EN_C000
+                LD   (HL), EN_0000 | EN_4000 | EN_C000
                 JP   Core.MainLoop
 
 Cache_C000_Off:
                 LD   HL, FMADDR_REGS + HIGH CACHECONFIG
-                LD   (HL), EN_0000 | EN_4000 | EN_8000
+                LD   (HL), EN_0000 | EN_4000
                 RET
 
 ClampOffsetOrder:                                      ; не дать positive tail offsets инвертировать visual slot order
@@ -853,7 +854,7 @@ DrawRetryDialog:
 ;   SPEED = 24, PREVIEW_TICKS = 120 → head_sample reaches NumSamples (~2774)
 ; Sparkle skipped если sample < 0 или sample >= NumSamples (head ещё не дошёл / уже прошёл).
 ; Tint: warm gold. Caller восстановит белый ColorRGB.
-; TrackData в slot 2 page 6 (default mapping).
+; Active Track V2 pages are selected by SetCurrentTrackPage.
 ; ----------------------------------------------------------------------------
 ; Comet: 8 sparkles spaced 16 samples = ~128 samples trail (короткая «очередь»),
 ; head advances 30 samples/tick → ~92 ticks для прохода 2774 samples (вместо 120).
@@ -891,12 +892,12 @@ DrawPreviewSparkles:
                 BIT  7, H
                 JR   NZ, .dps_advance
                 ; sample < NumSamples?
-                LD   DE, (Core.TrackData)              ; word at #8000 = NumSamples
+                LD   DE, (Core.VDC_ActiveTrackSamples) ; NumSamples from Track V2 metadata
                 AND  A
                 SBC  HL, DE
                 JR   NC, .dps_advance                  ; sample >= NumSamples
                 ADD  HL, DE                            ; restore sample
-                CALL Core.VDC_ReadSampleAtHL           ; BC=X, DE=Y for 6-byte/split tracks
+                CALL Core.VDC_ReadSampleAtHL           ; BC=X, DE=Y from Track V2
                 LD   (.dps_xword), BC
                 LD   (.dps_yword), DE
                 ; BC = (X-12) * 16
@@ -2616,7 +2617,7 @@ UnpackAndUploadPage:
 ; ----------------------------------------------------------------------------
 ; UnpackZX7Page: расжать compressed page A → dest page B.
 ; Source = slot 2 (#8000), dest = slot 3 (#C000). После RET слоты восстановлены:
-; slot 2 → page 6 (TrackData), slot 3 → page #04 (main1_play).
+; slot 2 → first active Track V2 page, slot 3 → page #04 (main1_play).
 ; Stack пересажен на uzx7_temp_stack чтобы LDIR в slot 3 не зацепил наш стек.
 ; ----------------------------------------------------------------------------
 UnpackZX7Page:
@@ -2631,7 +2632,7 @@ UnpackZX7Page:
                 LD   HL, #8000
                 LD   DE, #C000
                 CALL Dzx7Turbo
-                LD   A, 6   : LD BC, PAGE2 : OUT (C), A   ; восстановить slot 2 = TrackData page
+                CALL Core.SetCurrentTrackPage               ; восстановить slot 2 = active Track V2 page
                 LD   A, (CurrentCodePage) : LD BC, PAGE3 : OUT (C), A   ; восстановить slot 3 = current scene overlay (#41 ui / #04 gameplay)
                 LD   SP, (.uzx7_saved_sp)
                 EI
@@ -2740,6 +2741,122 @@ SafeInflatePage2:
                 RET
 .sip2_saved_page2: DB 0
 .sip2_src_page:    DB 0
+
+                module Core
+; Slot0 implementation of Track V2 readers. Slot0 is always mapped during
+; gameplay, so Core keeps only tiny trampolines while the heavy reader body
+; lives in the page-0 headroom.
+VDC_ReadSampleAtHL_Slot0:
+                CALL VDC_ReadRenderSampleAtHL_Slot0    ; BC=Vx, DE=Vy
+                PUSH DE                                ; raw Vy
+                LD   H, B : LD L, C
+                CALL VDC_V16ToCenter_Slot0
+                LD   B, H : LD C, L                    ; BC = X
+                POP  HL                                ; raw Vy
+                PUSH BC
+                CALL VDC_V16ToCenter_Slot0
+                EX   DE, HL                            ; DE = Y
+                POP  BC
+                PUSH BC : PUSH DE
+                LD   A, (VDC_ActiveTrackPage1)
+                SetPage2_A
+                XOR  A
+                LD   (VDC_RenderTrackPageIdx), A
+                POP  DE : POP  BC
+                AND  A
+                RET
+
+VDC_ReadRenderSampleAtHL_Slot0:
+                LD   (VDC_LastT), HL
+                PUSH HL
+                LD   A, H
+                RRCA
+                RRCA
+                RRCA
+                AND  #03                               ; page index = t >> 11
+                LD   E, A
+                LD   A, (VDC_RenderTrackPageIdx)
+                CP   E
+                JR   Z, .page_ready
+                LD   A, E
+                LD   (VDC_RenderTrackPageIdx), A
+                LD   D, 0
+                LD   HL, (VDC_pTrackPages)
+                ADD  HL, DE
+                LD   A, (HL)
+                SetPage2_A
+.page_ready:   POP  HL
+                LD   A, H
+                AND  #07
+                LD   H, A                              ; local sample = t & #07FF
+                ADD  HL, HL
+                ADD  HL, HL
+                ADD  HL, HL                            ; local * 8
+                SET  7, H                              ; #8000 + local*8
+                LD   C, (HL) : INC HL
+                LD   B, (HL) : INC HL                  ; BC = baked Vx
+                LD   E, (HL) : INC HL
+                LD   D, (HL) : INC HL                  ; DE = baked Vy
+                LD   A, (HL)
+                LD   (VDC_LastTangent), A : INC HL
+                LD   A, (HL)
+                LD   (VDC_LastTrackFlags), A
+                AND  A
+                RET
+
+VDC_V16ToCenter_Slot0:
+                SRA  H : RR L
+                SRA  H : RR L
+                SRA  H : RR L
+                SRA  H : RR L
+                LD   DE, 26
+                ADD  HL, DE
+                RET
+
+                if DIAG_TRK_PG1
+; ----------------------------------------------------------------------------
+; ZL_DiagTrkPg1 — диагностик L18-зоны (#0F-страница трека), slot 0 (Main1 полон).
+; Раз в кадр: Fletcher-16 загруженной второй страницы трека (samples 2048+) →
+; белая полоса шириной = сумма внизу экрана. Длина полосы эмулятор vs реал:
+; совпала → #0F грузится верно (баг ниже по потоку); разная → #0F приходит битой.
+; Геймплейную логику не трогает. module Core → символы без префикса.
+; ----------------------------------------------------------------------------
+ZL_DiagTrkPg1:
+                LD   A, (VDC_TrackPageCount1)
+                CP   2
+                RET  C                                  ; нет второй страницы → нечего мерить
+                LD   A, (VDC_TrackPages1 + 1)           ; физ. страница #0F-сэмплов
+                SetPage2_A
+                LD   HL, #8000
+                LD   BC, 16384
+                LD   DE, 0                              ; D=s2, E=s1 (Fletcher-16)
+.dtp_cs:        LD   A, (HL)
+                ADD  A, E : LD E, A                     ; s1 += byte
+                ADD  A, D : LD D, A                     ; s2 += s1
+                INC  HL
+                DEC  BC
+                LD   A, B : OR C
+                JR   NZ, .dtp_cs
+                LD   H, D : LD L, E                     ; HL = Fletcher-16
+                SRL  H : RR L
+                SRL  H : RR L                           ; HL = sum>>2 = x1 (1/16 px); полоса 0..1023px
+                LD   (ZL_DiagBarX16), HL
+                CALL SetCurrentTrackPage                ; вернуть slot 2 = active track page
+                LD   C, 255 : LD D, 255 : LD E, 255
+                CALL FT.Coprocessor.ColorRGB
+                FT_Begin FT_RECTS
+                LD   BC, 0
+                LD   DE, 740 * 16
+                CALL FT.Coprocessor.Vertex2f
+                LD   BC, (ZL_DiagBarX16)
+                LD   DE, 760 * 16
+                CALL FT.Coprocessor.Vertex2f
+                FT_End
+                RET
+ZL_DiagBarX16:  DEFW 0
+                endif
+
+                endmodule
 
                 include "LevelSelectPreviewSlot0.asm"
 
@@ -2879,50 +2996,17 @@ UploadBootLoadingAssets:
                 RET
 
 LoadGameplayAssets:
+.retry_level:   LD   B, 3
+.retry_one:     PUSH BC
                 CALL LoadGameplayLevelSpecificFromPack
-                JR   C, .LevelSpecificLoaded
-
-                ; Залить bg_level01 400x300 PALETTED4444 (8 страниц #07..#0E)
-                ; в RAM_G #010000, затем 512-байтную ARGB4 palette.
-                CALL GetCurrentBgFirstPage
-                LD   (BgPg), A
-                LD   HL, BG_RAMG_ADDR & 0xFFFF
-                LD   (BgRamL), HL
-                LD   A, (BG_RAMG_ADDR >> 16) & 0xFF
-                LD   (BgRamH), A
-                LD   B, BG_PAGE_COUNT
-.UploadBg:      PUSH BC
-                LD   A, (BgPg)
-                SetPage2_A
-                LD   HL, #8000                          ; источник в slot 2
-                LD   BC, 16384
-                LD   A,  (BgRamH)
-                LD   DE, (BgRamL)
-                CALL FT.WriteMem
                 POP  BC
-                ; advance RAM_G addr += #4000
-                LD   HL, (BgRamL)
-                LD   DE, #4000
-                ADD  HL, DE
-                LD   (BgRamL), HL
-                JR   NC, .NoCarry
-                LD   A, (BgRamH)
-                INC  A
-                LD   (BgRamH), A
-.NoCarry:       LD   A, (BgPg)
-                INC  A
-                LD   (BgPg), A
-                DJNZ .UploadBg
-                CALL GetCurrentBgPalettePage
-                SetPage2_A
-                LD   HL, #8000
-                LD   BC, 512
-                LD   A, B
-                LD   DE, BG_PALETTE_RAMG & 0xFFFF
-                CALL FT.WriteMem
+                JR   C, .LevelSpecificLoaded
+                DJNZ .retry_one
+                CALL DrawBlackLoadingFrame
+                JR   .retry_level
 
 .LevelSpecificLoaded:
-                ; Залить balls_atlas PALETTED4444.
+                ; Залить единый balls atlas: PALETTED4444 50px-in-51px guarded cells.
                 LD   A, BALLS_FIRST_PAGE
                 LD   (BgPg), A
                 LD   HL, BALLS_RAMG_ADDR & 0xFFFF
@@ -2939,10 +3023,7 @@ LoadGameplayAssets:
                 LD   (BgPg), A
                 DJNZ .UploadBalls
 
-                ; Palette ARGB4 СТРОГО 512 байт → FT_RAM_G #080000 (PALETTED4444).
-                ; Размер ровно 512: FT812 при больших значениях считывает мусор за
-                ; концом палитры; при меньшем зависает (out-of-range index).
-                if !BALLS_ARGB4_ENABLED
+                ; Balls palette ARGB4 СТРОГО 512 байт → FT_RAM_G #080000.
                 LD   A, BALLS_PALETTE_PAGE
                 SetPage2_A
                 LD   HL, #8000
@@ -2951,7 +3032,7 @@ LoadGameplayAssets:
                 LD   D, C
                 LD   E, C
                 CALL FT.WriteMem
-                endif
+.BallsPaletteDone:
 
                 ; Залить frog body / plate / tongue / face-overlay в RAM_G.
                 ; FROG_ARGB4_ENABLED: 122×122×2 = 29768 bytes, 2 pages per sprite.
@@ -3183,13 +3264,15 @@ LoadGameplayAssets:
                 DJNZ .UploadFontC
 
                 ; Восстановить слоты после серии compressed uploads:
-                ; slot 2 = selected TrackData, slot 3 = main1_play (page #04).
+                ; slot 2 = selected Track V2 page, slot 3 = main1_play (page #04).
                 CALL GS_StopMenuMusic
                 CALL GS_LoadGameplaySoundsMaybeQuiet
                 CALL SetCurrentTrackPage
                 SetPage3 #04
+                CALL ZL_UploadTopMasksMaybe
+                CALL SetCurrentTrackPage
 
-                ; --- VDC physics init (TrackData уже доступен в slot 2) ---
+                ; --- VDC physics init (Track V2 metadata/pages уже доступны) ---
                 CALL VDC_Init
                 CALL Frog_Init
                 CALL Bullet_Init
@@ -3252,18 +3335,28 @@ GetCurrentTrackPage:
                 RET
 
 SetCurrentTrackPage:
-                CALL GetCurrentTrackPage
+                LD   HL, VDC_TrackPages1
+                LD   (VDC_pTrackPages), HL
+                LD   HL, (VDC_TrackSamples1)
+                LD   (VDC_ActiveTrackSamples), HL
+                LD   A, (VDC_TrackPages1)
                 LD   (VDC_ActiveTrackPage1), A
-                LD   A, TRACK_PAGE2
-                LD   (VDC_ActiveTrackPage2), A
+                LD   A, #FF
+                LD   (VDC_RenderTrackPageIdx), A
                 LD   A, (VDC_ActiveTrackPage1)
                 SetPage2_A
                 RET
 
 SetSecondTrackPage:
-                LD   A, TRACK_PAGE2
+                LD   HL, VDC_TrackPages2
+                LD   (VDC_pTrackPages), HL
+                LD   HL, (VDC_TrackSamples2)
+                LD   (VDC_ActiveTrackSamples), HL
+                LD   A, (VDC_TrackPages2)
                 LD   (VDC_ActiveTrackPage1), A
-                LD   (VDC_ActiveTrackPage2), A
+                LD   A, #FF
+                LD   (VDC_RenderTrackPageIdx), A
+                LD   A, (VDC_ActiveTrackPage1)
                 SetPage2_A
                 RET
 
@@ -3602,7 +3695,7 @@ VDC_WinEmitStep:
                 LD   A, H : AND L : INC A
                 RET  Z                                   ; #FFFF → неактивен
                 ; S_kz = NumSamples-1; если pos > S_kz → done
-                LD   DE, (TrackData)
+                LD   DE, (VDC_ActiveTrackSamples)
                 DEC  DE                                  ; DE = S_kz
                 EX   DE, HL                              ; HL=S_kz, DE=pos
                 AND  A : SBC HL, DE                      ; S_kz - pos
@@ -3628,12 +3721,12 @@ VDC_WinEmitStep:
                 ADD  HL, DE
                 LD   (VDC_WinStepPos), HL
                 RET
-.es_done_kz:    LD   HL, (TrackData)
+.es_done_kz:    LD   HL, (VDC_ActiveTrackSamples)
                 DEC  HL                                  ; HL = S_kz
                 LD   DE, (VDC_WinStepSpawn)
                 AND  A : SBC HL, DE                      ; уже спавнили ровно в KZ?
                 JR   Z, .es_done
-                LD   HL, (TrackData)
+                LD   HL, (VDC_ActiveTrackSamples)
                 DEC  HL
                 CALL VDC_ReadSampleAtHL                  ; финальная точка kill-zone
                 CALL VDC_WinSpawnParticle
@@ -3644,14 +3737,14 @@ VDC_WinEmitStep:
 .es_done:       
                 ; pos > S_kz
                 ; Check if we already spawned exactly at S_kz
-                LD   HL, (TrackData)
+                LD   HL, (VDC_ActiveTrackSamples)
                 DEC  HL                                  ; HL = S_kz
                 LD   DE, (VDC_WinStepSpawn)
                 AND  A : SBC HL, DE                      ; S_kz - spawn
                 JR   Z, .es_done_skip
                 
                 ; Spawn final KZ particle exactly at S_kz
-                LD   HL, (TrackData)
+                LD   HL, (VDC_ActiveTrackSamples)
                 DEC  HL
                 CALL VDC_ReadSampleAtHL
                 CALL VDC_WinSpawnParticle
@@ -3997,14 +4090,10 @@ BG_PAGE_COUNT      EQU 8                               ; 400×300 PALETTED4444 =
 BG_RAMG_ADDR       EQU #010000                         ; bg в RAM_G FT812
 BG_PALETTE_PAGE    EQU #11      ; #0F занят ZiFi SD driver (WDFCVBI2.COD)
 BG_PALETTE_RAMG    EQU #02D500                         ; 4-byte aligned, after useful 400×300 bitmap
-BALLS_FIRST_PAGE   EQU #2D                             ; balls atlas pages
-                if BALLS_ARGB4_ENABLED
-BALLS_PAGE_COUNT   EQU 12                              ; ARGB4 canary: 6×16×32×32×2 = 192 KB
-                else
-BALLS_PAGE_COUNT   EQU 12                              ; PALETTED4444: 6×32×32×32 1bpp = 192 KB
-                endif
+BALLS_FIRST_PAGE   EQU #43                             ; global PALETTED4444 balls pages
+BALLS_PAGE_COUNT   EQU 12                              ; 6×12×51×51 = 187272 bytes, padded to 192 KB
+BALLS_PALETTE_PAGE EQU #4F                             ; 512-byte ARGB4 palette
 BALLS_RAMG_ADDR    EQU #050000                         ; сразу после bg+padding (#04C000)
-BALLS_PALETTE_PAGE EQU #39                             ; palette ARGB4 СТРОГО 512 байт (256 entries × 2 bytes)
 BALLS_PALETTE_RAMG EQU #080000                         ; FT_RAM_G — после balls (192K=#080000), 4-byte aligned
 FROG_PAGE          EQU #52                             ; body, plate, tongue, overlay pages
                 if FROG_ARGB4_ENABLED
@@ -4062,11 +4151,12 @@ BgPg:           DEFB 0
 BgRamL:         DEFW 0
 BgRamH:         DEFB 0
 
-Init_Core:      FMapAddrInit                          ; FT_EN, MEM_WO, page0=TSLibPage
+Init_Core:      CALL SpiBusIdle                       ; warm reset does not clear Z-Controller SPI CS latch
+                FMapAddrInit                          ; FT_EN, MEM_WO, page0=TSLibPage
                 System_Setting SYS_ZCLK14 | SYS_CACHEEN
-                Cache_Setting  EN_0000 | EN_4000 | EN_8000
+                Cache_Setting  EN_0000 | EN_4000
                 SetPage1 5                            ; #4000 → Core code page (main0 resident)
-                SetPage2 6                            ; #8000 → TrackData (track_640.bin)
+                SetPage2 6                            ; #8000 → first Track V2 page after level load
                 SetPage3 UI_OVL_PAGE                  ; #C000 → UI overlay (boot scene = menu); gameplay maps #04 in FadeLevelSelectToGameplay
                 if RUNTIME_DIAGNOSTICS_ENABLED
                 LD   HL, BuildCanaryBytes
@@ -4076,13 +4166,35 @@ Init_Core:      FMapAddrInit                          ; FT_EN, MEM_WO, page0=TSL
                 endif
                 RET
 
+; Put the shared FT812/SD SPI bus into a known idle state as early as possible.
+; Z80 warm reset may leave Z-Controller port #77 latched with FT or SD selected.
+SpiBusIdle:     PUSH AF
+                PUSH BC
+                PUSH DE
+                LD   BC, SPI_CTRL
+                LD   A, SPI_FT_CS_OFF                 ; #03: deselect FT812 and SD
+                OUT  (C), A
+                LD   BC, SPI_DATA
+                LD   A, #FF
+                LD   D, 16
+.sbi_clk:       OUT  (C), A
+                DEC  D
+                JR   NZ, .sbi_clk
+                LD   BC, SPI_CTRL
+                LD   A, SPI_FT_CS_OFF
+                OUT  (C), A
+                POP  DE
+                POP  BC
+                POP  AF
+                RET
+
                 if RUNTIME_DIAGNOSTICS_ENABLED
                 define DIAG_SECTION_CORE_DATA
                 include "DiagnosticsRuntime.asm"
                 undefine DIAG_SECTION_CORE_DATA
                 endif
 
-TrackData       EQU #8000                             ; в slot 2 (page 6)
+TrackData       EQU #8000                             ; slot 2 window, now Track V2 sample page
 
 Init_Int:       ; Стандартная IM2 + frame INT инициализация (как в TSLib HelloWorld).
                 ; HALT перед RET КРИТИЧЕН: ждём первый FRAME interrupt — это даёт

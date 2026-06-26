@@ -31,16 +31,20 @@ QS_PAGE3    EQU #13AF
 QS_MEMCONF  EQU #21AF
 QS_INTMASK  EQU #2AAF
 QS_CACHECFG EQU #2BAF
-QS_DBG_STAGE EQU Core.Quit_DbgStage
-QS_DBG_SECTS EQU Core.Quit_DbgSectors
+                if RUNTIME_DIAGNOSTICS_ENABLED
+QS_TRACE_STAGE EQU Core.QuitTraceStage
+QS_TRACE_SECTS EQU Core.QuitTraceSectors
+                endif
 
 QuitStub_Run:                                   ; точка входа = #4000
                 DI
                 LD   SP, #5F00                   ; локальный стек в той же странице, что и стаб
+                if RUNTIME_DIAGNOSTICS_ENABLED
                 LD   A, #80
-                LD   (QS_DBG_STAGE), A
+                LD   (QS_TRACE_STAGE), A
                 XOR  A
-                LD   (QS_DBG_SECTS), A
+                LD   (QS_TRACE_SECTS), A
+                endif
                 LD   A, (QS_Cnt)
                 LD   B, A                        ; B = число секторов (63)
                 LD   IX, #6000                   ; dest: file[0]→#6000, file[17]→#6011
@@ -48,14 +52,16 @@ QuitStub_Run:                                   ; точка входа = #4000
                 CALL qwc_restore_machine_state    ; состояние WC уже во время чтения BOOT.$C
 .qsloop:        PUSH BC
                 CALL qsd_read_sector             ; [QS_Lba] → (IX), 512 байт (IX сохраняется)
-                LD   A, (QS_DBG_SECTS)
+                if RUNTIME_DIAGNOSTICS_ENABLED
+                LD   A, (QS_TRACE_SECTS)
                 INC  A
-                LD   (QS_DBG_SECTS), A
+                LD   (QS_TRACE_SECTS), A
                 CP   1
                 JR   NZ, .qsnoFirst
                 LD   A, #81
-                LD   (QS_DBG_STAGE), A
+                LD   (QS_TRACE_STAGE), A
 .qsnoFirst:
+                endif
                 LD   BC, 512
                 ADD  IX, BC                      ; dest += 512
                 CALL qwc_advance_load_page
@@ -69,8 +75,10 @@ QuitStub_Run:                                   ; точка входа = #4000
                 LD   (QS_Lba + 2), HL
 .qsnc:          POP  BC
                 DJNZ .qsloop
+                if RUNTIME_DIAGNOSTICS_ENABLED
                 LD   A, #8F
-                LD   (QS_DBG_STAGE), A
+                LD   (QS_TRACE_STAGE), A
+                endif
                 LD   HL, #6000
                 LD   B, 17
                 XOR  A

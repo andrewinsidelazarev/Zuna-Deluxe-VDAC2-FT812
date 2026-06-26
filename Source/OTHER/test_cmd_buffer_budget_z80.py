@@ -14,9 +14,8 @@
 FAIL-критерии (до midframe-flush — документирующие):
   - corrupt Core в сценариях A/B (текущий код обязан жить в бюджете);
   - peak A/B > BUDGET.
-Сценарий C ОЖИДАЕМО превышает бюджет — печатается требуемый размер для
-проектирования flush-точек; FAIL только если C внезапно corrupt-ит Core при
-peak < BUDGET (значит, модель неверна).
+Сценарии C/D/E проверяют flush-on-pressure: длинный кадр может быть разбит
+на несколько CMD chunks, но каждый chunk обязан оставаться в RAM-буфере.
 """
 from __future__ import annotations
 
@@ -36,7 +35,7 @@ LST = ROOT / "Build" / "main.lst"
 # Реальная база кадрового CMD-буфера (main.asm define CMD_ADDRESS_PTR #4CB0).
 # НЕ импортируем CMD из profile_dual_chain_perf — там устаревший 0x5E00.
 CMD = 0x4CB0
-BUDGET = 0x5C00 - CMD          # 3056: буфер упирается в Core-код
+BUDGET = 0x5C00 - CMD          # 3920: буфер упирается в Core-код
 CORE_GUARD_ADDR = 0x5C00
 CORE_GUARD_LEN = 0x40
 WARM_FRAMES = 420
@@ -154,8 +153,8 @@ def main() -> int:
     if peak_b > BUDGET:
         failures.append(f"B: peak {peak_b} > budget {BUDGET}")
 
-    # Гейт удалён из кода (полная анимация — дефолт; вместо него двухступенчатый
-    # BufferPtr-предохранитель #5800/#5B00) → сценарии C/D без патча.
+    # Гейт удалён из кода (полная анимация — дефолт); при заполнении host CMD
+    # buffer ZL_DrawCachedActiveChain должен flush-ить chunk и продолжать рисовать.
     peak_c, corrupt_c, _ = run_scenario("C L13 tunnel full-anim", 12, False)
     if corrupt_c:
         failures.append("C: tunnel-кадр затирает Core")
@@ -169,9 +168,9 @@ def main() -> int:
     if peak_d > BUDGET:
         failures.append(f"D: peak {peak_d} > budget {BUDGET}")
 
-    # E: синтетический апокалипсис — обе цепи под завязку (120+120). Проверка
-    # ступеней предохранителя: Core не затёрт, буфер в бюджете (часть шаров
-    # деградирует/скипается — это и есть контракт ступеней).
+    # E: синтетический апокалипсис — обе цепи под завязку (120+120).
+    # Проверка flush-on-pressure: Core не затёрт, буфер в бюджете, шары не
+    # скипаются только ради защиты RAM-буфера.
     peak_e, corrupt_e, _ = run_scenario("E L12 synth 120+120  ", 11, False,
                                         track2_level=12, synth_len=120)
     if corrupt_e:

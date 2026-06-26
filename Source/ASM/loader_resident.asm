@@ -22,70 +22,35 @@ GS_WAIT_TIMEOUT    EQU #FFFF
                                       ; UI_OVL_PAGE (#41) глобально определён в main.asm (нужен Fade*
                                       ; transition до module Core); здесь используется trampoline.
 
-; Track chunkB page: треки длиннее одной 16K page (>2730 samples) режутся по
-; sample boundary. Active track pages — resident переменные, потому что
-; двухкривые boards переиспользуют тот же reader для второго path.
+; Track V2 runtime pages. Each page is a pure 16K array of 8-byte samples:
+; Vx,Vy already baked for FT812 VERTEX2F, tangent, flags, 2 bytes padding.
+; One page holds 2048 samples. Loader fills VDC_TrackPages1/2 from the V2
+; metadata sector; render code selects the active table via VDC_pTrackPages.
 TRACK_PAGE2        EQU #0F
-TRACK_SPLIT_SAMPLE EQU 2730        ; (16384-2)/6, first sample stored in TRACK_PAGE2
+TRACK_PAGE3        EQU #10
+TRACK_PAGE4        EQU #12
+TRACK_MAX_PAGES    EQU 4
+TRACK_V2_REC       EQU 8
+TRACK_V2_PAGE_SAMPLES EQU 2048
+TRACK_V2_BALL_HALF EQU 26
 
 ; ----------------------------------------------------------------------------
 ; VDC_ReadSampleAtHL — читает track sample [HL] -> BC=X, DE=Y; выставляет
-; VDC_LastT, VDC_LastTangent и VDC_LastTrackFlags; CF=0. Core-resident tail-jump
-; из VDC_SlotPos в почти заполненном Main1. Обрабатывает split на 2 page:
-; samples ниже TRACK_SPLIT_SAMPLE лежат в VDC_ActiveTrackPage1 по #8000+2+t*6;
-; samples от split и выше — в VDC_ActiveTrackPage2 по #8000+(t-split)*6
-; (у chunkB нет count header). На выходе slot 2 снова VDC_ActiveTrackPage1.
+; VDC_LastT, VDC_LastTangent и VDC_LastTrackFlags; CF=0. Compatibility path для
+; физики/пуль/эффектов: читает V2 Vx/Vy и восстанавливает центр X/Y = V/16+26.
+; На выходе slot 2 снова VDC_ActiveTrackPage1.
 ; Клобает AF, HL.
 ; ----------------------------------------------------------------------------
 VDC_ReadSampleAtHL:
-                LD   (VDC_LastT), HL                   ; expose t
-                LD   DE, TRACK_SPLIT_SAMPLE
-                AND  A
-                SBC  HL, DE                            ; HL = t - split; CF=1 if t<split
-                JR   C, .p1
-                ; --- page2 (#0F): HL = t2 = t - split ---
-                LD   D, H : LD E, L
-                ADD  HL, HL                            ; t2*2
-                ADD  HL, DE                            ; t2*3
-                ADD  HL, HL                            ; t2*6
-                LD   DE, #8000
-                ADD  HL, DE                            ; #8000 + t2*6
-                LD   A, (VDC_ActiveTrackPage2)
-                SetPage2_A                             ; map #0F (clobbers A, BC)
-                LD   E, (HL) : INC HL
-                LD   D, (HL) : INC HL                  ; DE = X
-                LD   C, (HL) : INC HL
-                LD   B, (HL) : INC HL                  ; BC = Y
-                LD   A, (HL)
-                LD   (VDC_LastTangent), A : INC HL
-                LD   A, (HL)
-                LD   (VDC_LastTrackFlags), A
-                PUSH BC : PUSH DE                      ; сохранить Y, X через page restore
-                LD   A, (VDC_ActiveTrackPage1)
-                SetPage2_A                             ; restore active track page для callers
-                POP  DE : POP  BC                      ; DE = X, BC = Y
-                JR   .rearr
-.p1:            ; --- page1 (#06, already mapped): addr = #8000 + 2 + t*6 ---
-                LD   HL, (VDC_LastT)
-                LD   D, H : LD E, L
-                ADD  HL, HL                            ; t*2
-                ADD  HL, DE                            ; t*3
-                ADD  HL, HL                            ; t*6
-                LD   DE, TrackData + 2
-                ADD  HL, DE
-                LD   E, (HL) : INC HL
-                LD   D, (HL) : INC HL                  ; DE = X
-                LD   C, (HL) : INC HL
-                LD   B, (HL) : INC HL                  ; BC = Y
-                LD   A, (HL)
-                LD   (VDC_LastTangent), A : INC HL
-                LD   A, (HL)
-                LD   (VDC_LastTrackFlags), A
-.rearr:         EX   DE, HL                            ; HL = X
-                LD   D, B : LD E, C                    ; DE = Y
-                LD   B, H : LD C, L                    ; BC = X
-                AND  A                                 ; CF = 0
-                RET
+                JP   VDC_ReadSampleAtHL_Slot0
+
+; ----------------------------------------------------------------------------
+; VDC_ReadRenderSampleAtHL — hot render helper. In: HL=t. Out: BC=Vx, DE=Vy,
+; sets VDC_LastT/Tangent/Flags, CF=0. Keeps a tiny page-index cache so sequential
+; balls only switch 16K page at 2048-sample boundaries.
+; ----------------------------------------------------------------------------
+VDC_ReadRenderSampleAtHL:
+                JP   VDC_ReadRenderSampleAtHL_Slot0
 
 ; Adventure state vars (CurrentLevel etc) раньше лежали в TSLib region #1937,
 ; где их портил activity TSLib. Теперь resident в Core, чтобы gameplay/menu/
@@ -96,8 +61,17 @@ CurrentLevel:      DEFB 0
 CurrentSettingIndex: DEFB 0
 CurrentGameMode:   DEFB 0   ; 0=Adventure, 1=Gauntlet
 AdventurePos:      DEFB 0
-VDC_ActiveTrackPage1: DEFB TRACK_L01_PAGE
-VDC_ActiveTrackPage2: DEFB TRACK_PAGE2
+VDC_TrackLoadPages:    DEFB TRACK_L01_PAGE, TRACK_PAGE2, TRACK_PAGE3, TRACK_PAGE4
+VDC_TrackPages1:       DEFB TRACK_L01_PAGE, TRACK_PAGE2, TRACK_PAGE3, TRACK_PAGE4
+VDC_TrackPages2:       DEFB TRACK_PAGE3, TRACK_PAGE4, 0, 0
+VDC_pTrackPages:       DEFW VDC_TrackPages1
+VDC_TrackSamples1:     DEFW 0
+VDC_TrackSamples2:     DEFW 0
+VDC_ActiveTrackSamples: DEFW 0
+VDC_TrackPageCount1:   DEFB 0
+VDC_TrackPageCount2:   DEFB 0
+VDC_ActiveTrackPage1:  DEFB TRACK_L01_PAGE
+VDC_RenderTrackPageIdx: DEFB #FF
 
 ; --- Hoisted gameplay/UI state (из VDC.asm / Frog.asm) -----------------------
 ; Перенесено в resident Core: transition + HUD/dialog/absorb/win logic из main.asm
@@ -127,19 +101,11 @@ NextLifeScore:       DB #50,#C3,#00 ; следующий extra-life threshold = 
 VDC_GameSeconds:     DEFW 0   ; прошедшие gameplay seconds (HUD clock в resident)
 Frog_BallColor:      DEFB 0   ; текущий loaded ball color (refiltered при смене level, resident)
 Frog_NextBallColor:  DEFB 0   ; следующий ball color
-; VDC invariant diagnostics для F12 dumps. Первая ошибка latch до VDC_Init:
-;   code 1: SlotsLen > VDC_MAX_SLOTS
-;   code 2: HSA > TrackNumSlots
-;   code 3: Slots[i] is neither color nor GAP marker
-;   code 4: Offsets[i] outside [-CELL_SIZE..CELL_SIZE]
-;   code 5: ExplodeFrame[i] has invalid ExplodeMarker
-;   code 6: Shot2[i] is not 0/1
-VDC_AssertCode:      DEFB 0
-VDC_AssertCtx:       DEFB 0
-VDC_AssertLen:       DEFB 0
-VDC_AssertHSA:       DEFB 0
-VDC_AssertValue:     DEFB 0
-VDC_AssertFrame:     DEFW 0
+                if RUNTIME_DIAGNOSTICS_ENABLED
+                define DIAG_SECTION_RESIDENT_VARS
+                include "DiagnosticsRuntime.asm"
+                undefine DIAG_SECTION_RESIDENT_VARS
+                endif
 ; LevelSelectPreviewFrogAngle: пишет/читает resident preview-frog renderer
 ; (LevelSelectPreviewSlot0). Renderer мапит gameplay overlay (#04) ради frog/DL
 ; emit code; этот байт должен оставаться доступным через swap, поэтому он resident,
@@ -173,27 +139,6 @@ VDC_WinEmitPos2:   DEFW #FFFF           ; chain2
 VDC_WinEmitSpawn2: DEFW 0
 VDC_WinPrtcl:      DEFS WIN_PRTCL_MAX * 5  ; на частицу: X(w),Y(w),f2(b); f2=255 мёртвая
 
-; Loader diagnostics — RESIDENT, чтобы F12 dump (captured slot 1 = Core, а не
-; loader overlay page) показывал, до какого шага дошла загрузка. Overlay loader
-; пишет сюда, пока slot 1 mapped. В dump эти байты помогают бисектить failed load:
-;   ZiFi_GpDbgStep : 0=not started, 1=Init, 2=PakOpen, 3=PakReadToc,
-;                    #34=bg SD done, #35=track SD done, 6=success;
-;                    #FF=Init err, #FE=PakOpen err, #FD=PakReadToc err.
-;   ZiFi_DbgGamesA : RawPak_OpenRoot granular step —
-;                    #20 entry, #21 BPB read OK, #22 BPB valid, #26 search start,
-;                    #25 PAK found; #A1 BPB CMD17 err, #A2 bps!=512, #A3 spc=0,
-;                    #A6 PAK not found anywhere, #A7 run-table overflow.
-;   ZiFi_DbgGamesFound : сколько directories посещено при recursive search.
-ZiFi_GpDbgStep:     DEFB 0
-ZiFi_GpDbgBgOff:    DEFW 0
-ZiFi_GpDbgBgSize:   DEFW 0
-ZiFi_DbgGamesA:     DEFB 0
-ZiFi_DbgGamesFound: DEFB 0
-ZiFi_DbgZumaFound:  DEFB 0
-ZiFi_DbgPakFound:   DEFB 0
-ZiFi_DbgPakSizeL:   DEFW 0
-ZiFi_DbgPakSizeH:   DEFW 0
-
 ; ----------------------------------------------------------------------------
 ; Overlay trampolines (resident). Каждый мапит LOADER_OVL_PAGE в slot 3, вызывает
 ; реальный OVL_* routine в overlay и восстанавливает PAGE3=#04. Выполняется под DI,
@@ -214,6 +159,10 @@ LoadGameplayLevelSpecificFromPack:
 ; code пропадает из slot 3 при возврате. Gameplay trampoline выше вызывается только
 ; из gameplay и корректно восстанавливает #04.
 LoadLevelSelectPreviewAssets:
+                LD   HL, (LevelSelectPreviewLoadRamL)
+                LD   (BgRamL), HL
+                LD   A, (LevelSelectPreviewLoadRamH)
+                LD   (BgRamH), A
                 DI
                 SetPage3 LOADER_OVL_PAGE
                 CALL OVL_LoadLevelSelectPreviewAssets
@@ -323,6 +272,8 @@ GS_PlaySfx:
                 LD   A, GS_SFX_NOTE
                 LD   (GS_SfxRequestNote), A
 GS_PlaySfxCommon:
+                LD   A, 50
+                LD   (GS_SfxSilenceTimer), A
                 LD   A, (GS_Present)
                 OR   A
                 JR   Z, .done
@@ -446,6 +397,7 @@ GS_SfxLoaded:       DEFB 0
 GS_RamPages:        DEFB 0
 GS_SfxRequestId:    DEFB 0
 GS_SfxRequestNote:  DEFB 0
+GS_SfxSilenceTimer: DEFB 0
 GS_SfxHandles:      DEFS GS_SOUND_COUNT
 
 ; LevelsMapLoaded — 0, пока PAK не найден и его sector run-table не собрана
@@ -464,8 +416,11 @@ Boot_Hdr:          DEFS 32        ; первые 32 байта файла (HOBET
 Boot_StartLba:     DEFS 4         ; LBA первого сектора файла (абсолютный, LE)
 Boot_SecCount:     DEFB 0         ; число секторов = ceil(size/512)
 Boot_Blkt:         DEFB 0         ; sd_blkt (0=byte addressing, 1=block)
-Quit_DbgStage:     DEFB 0         ; стадия Quit: #10 probe, #20 copy, #30 params, #40 jump, #80+ стаб
-Quit_DbgSectors:   DEFB 0         ; сколько секторов успел прочитать стаб
+                if RUNTIME_DIAGNOSTICS_ENABLED
+                define DIAG_SECTION_QUIT_TRACE_VARS
+                include "DiagnosticsRuntime.asm"
+                undefine DIAG_SECTION_QUIT_TRACE_VARS
+                endif
 ProbeBootHobeta:
                 DI
                 SetPage3 LOADER_OVL_PAGE

@@ -6,7 +6,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from zuma_z80_simulator import ZumaZ80Sim
 
-MAX_SLOTS = 128
+
+def max_slots(sim):
+    return sim.sym["Core.VDC_Offsets"] - sim.sym["Core.VDC_Slots"]
 
 
 def clear_arrays(sim):
@@ -19,7 +21,7 @@ def clear_arrays(sim):
         "Core.VDC_ExplodeMarker",
     ):
         base = s[base_name]
-        for i in range(MAX_SLOTS):
+        for i in range(max_slots(sim)):
             sim.set_byte(base + i, 0)
 
 

@@ -44,7 +44,7 @@
 
 ZIFI_PAGE       EQU #0F
 ; NOTE: файл собирается в SLOT 3 / PAGE #40 loader overlay (см. main.asm). Он
-; mapped только во время level/preview load. TRACK_PAGE2 / TRACK_SPLIT_SAMPLE и
+; mapped только во время level/preview load. Track V2 reader/page tables и
 ; VDC_ReadSampleAtHL перенесены в loader_resident.asm: они должны оставаться
 ; resident в Core для per-frame track playback. Именованные entry points доступны
 ; через resident trampolines, которые вызывают OVL_* ниже.
@@ -176,10 +176,9 @@ ZiFi_DirZuma:    DEFB #10
 ZiFi_FileLvlPak: DEFB #00
                  DEFB "ZUMALVL.PAK", 0
 
-; Diagnostic vars ZiFi_GpDbgStep / ZiFi_DbgGamesA / ... перенесены в
-; loader_resident.asm: F12 dump видит slot 1 / Core, а не эту overlay page, и
-; может показать, до какого шага дошла загрузка. Overlay пишет их при mapped
-; slot 1, поэтому writes попадают в нужное место.
+; Runtime trace vars перенесены в loader_resident.asm: F12 dump видит slot 1 /
+; Core, а не эту overlay page. Overlay пишет их при mapped slot 1, поэтому
+; writes попадают в нужное место.
 
 ; ---------------------------------------------------------------------
 ; Loader-level helpers.
@@ -216,18 +215,20 @@ RAWPAK_NAME_BOOT:                               ; HOBETA WC loader в корне
                 DEFB "BOOT.$C", 0
 RAWPAK_BOOT_SIZE EQU 31761
 
-; DBG instrumentation: читать в F12 dump для бисекта failed open; адреса resident
-; в loader_resident.asm — ZiFi_DbgGamesA #6432, GpDbgStep #642D:
-;   ZiFi_DbgGamesA = RawPak open granular step:
+; Runtime trace: читать в F12 dump для бисекта failed open; адреса resident
+; берутся из актуального symbol-файла:
+;   ZiFiTraceOpenStep = RawPak open granular step:
 ;       #20 entry, #21 sector0 read OK, #22 BPB valid, #26 search start, #25 PAK found;
 ;       #A1 sector0 CMD err, #A2 BPB invalid (bps!=512 / no FAT32 partition),
 ;       #A3 spc=0, #A6 PAK (name+size) not found anywhere, #A7 run-table overflow.
-;   ZiFi_DbgGamesFound = сколько directories посещено при recursive search.
+;   ZiFiTraceDirsVisited = сколько directories посещено при recursive search.
 RawPak_OpenRoot:
+                if RUNTIME_DIAGNOSTICS_ENABLED
                 LD   A, #20
-                LD   (ZiFi_DbgGamesA), A
+                LD   (ZiFiTraceOpenStep), A
                 XOR  A
-                LD   (ZiFi_DbgGamesFound), A
+                LD   (ZiFiTraceDirsVisited), A
+                endif
                 ; Сбросить FAT-sector cache (FatBufLba = #FFFFFFFF). Cache в
                 ; RawPak_FatNext пропускает повторное чтение FAT sector, уже лежащего
                 ; в FatBuf; FAT для нас read-only, поэтому cache живёт всю session.
@@ -243,8 +244,10 @@ RawPak_OpenRoot:
                 LD   DE, 0
                 CALL RawPak_ReadSectorBuffer
                 JP   C, .ErrBpbRead
+                if RUNTIME_DIAGNOSTICS_ENABLED
                 LD   A, #21
-                LD   (ZiFi_DbgGamesA), A
+                LD   (ZiFiTraceOpenStep), A
+                endif
                 XOR  A                          ; part_lba = 0 (superfloppy: sector 0 — BPB)
                 LD   (RawPak_PartLba + 0), A
                 LD   (RawPak_PartLba + 1), A
@@ -298,8 +301,10 @@ RawPak_OpenRoot:
                 OR   A
                 JP   Z, .ErrSpc
                 LD   (RawPak_Spc), A
+                if RUNTIME_DIAGNOSTICS_ENABLED
                 LD   A, #22
-                LD   (ZiFi_DbgGamesA), A
+                LD   (ZiFiTraceOpenStep), A
+                endif
                 ; fatstart = part_lba + reserved sectors (16-bit в BPB)
                 LD   HL, RawPak_PartLba
                 LD   DE, RawPak_FatStart
@@ -353,8 +358,10 @@ RawPak_OpenRoot:
 .noVolGuard:
                 ; --- locate ZUMALVL.PAK. Fast path: переиспользовать WC active-panel
                 ; path из page #F7, затем fallback на whole-card DFS.
+                if RUNTIME_DIAGNOSTICS_ENABLED
                 LD   A, #26
-                LD   (ZiFi_DbgGamesA), A
+                LD   (ZiFiTraceOpenStep), A
+                endif
                 LD   A, (RawPak_CachedValid)   ; переиспользовать location, найденную ранее в session
                 OR   A
                 JR   Z, .search
@@ -380,7 +387,9 @@ RawPak_OpenRoot:
                 LD   (RawPak_CachedValid), A
                 LD   (LevelsMapLoaded), A      ; resident flag: пропустить "LOADING LEVELS..." в следующий раз
 .haveFile:     LD   A, #25
-                LD   (ZiFi_DbgGamesA), A
+                if RUNTIME_DIAGNOSTICS_ENABLED
+                LD   (ZiFiTraceOpenStep), A
+                endif
                 CALL RawPak_Seek0
                 CALL RawPak_BuildRunTable      ; собрать extent (run) table — поддерживает fragmentation
                 JP   NC, .ErrRuns              ; table overflow / chain error -> fallback
@@ -395,7 +404,10 @@ RawPak_OpenRoot:
 .ErrSpc:       LD   A, #A3
                 JR   .ErrSet
 .ErrPak:       LD   A, #A6                     ; ZUMALVL.PAK (name+size) нигде не найден
-.ErrSet:       LD   (ZiFi_DbgGamesA), A
+.ErrSet:
+                if RUNTIME_DIAGNOSTICS_ENABLED
+                LD   (ZiFiTraceOpenStep), A
+                endif
 .Err:          OR   A
                 RET
 
@@ -432,14 +444,18 @@ RawPak_FindPakRecursive:
 RawPak_FindByName:
                 XOR  A
                 LD   (RawPak_DirStackCnt), A
-                LD   (ZiFi_DbgGamesFound), A
+                if RUNTIME_DIAGNOSTICS_ENABLED
+                LD   (ZiFiTraceDirsVisited), A
+                endif
                 LD   HL, RawPak_RootClus        ; положить root dir в DFS stack
                 CALL RawPak_DirStackPush
 .popLoop:      CALL RawPak_DirStackPop         ; CurClus = next dir; CF=1 если stack empty
                 JP   C, .notFound
-                LD   A, (ZiFi_DbgGamesFound)    ; diag: счётчик посещённых dirs
+                if RUNTIME_DIAGNOSTICS_ENABLED
+                LD   A, (ZiFiTraceDirsVisited)
                 INC  A
-                LD   (ZiFi_DbgGamesFound), A
+                LD   (ZiFiTraceDirsVisited), A
+                endif
                 XOR  A
                 LD   (RawPak_CurSecInClus), A
                 LD   (RawPak_HaveLfn), A
@@ -1318,7 +1334,9 @@ RawPak_FatEntryPtr:
                 OR   A                            ; CF = 0
                 RET
 
-; Прочитать file logical sector (RawPak_LogCur) в (IX). Двигает RawPak_LogCur.
+; Прочитать file logical sector (RawPak_LogCur) в (IX).
+; Двигает RawPak_LogCur только после успешного SD-read; на ошибке оставляет
+; logical sector прежним, чтобы caller/retry не перескочил через битый сектор.
 ; Переводит logical sector -> physical LBA через run table.
 ; IX (dest) сохраняется через table walk и sd_read_sector.
 RawPak_ReadOneLogicalIX:
@@ -1361,9 +1379,29 @@ RawPak_ReadOneLogicalIX:
 .noCy:         EX   DE, HL                        ; HL = LBA lo16, DE = LBA hi16
                 POP  IX                            ; восстановить dest
                 CALL sd_read_sector                ; читает [HL:DE] -> (IX); CF = SD error
+                RET  C
                 LD   HL, (RawPak_LogCur)
                 INC  HL
                 LD   (RawPak_LogCur), HL
+                RET
+
+; То же чтение, но с коротким retry. Важно: RawPak_ReadOneLogicalIX не двигает
+; RawPak_LogCur на ошибке, поэтому повтор читает тот же logical sector.
+RawPak_ReadOneLogicalIX_Retry:
+                PUSH BC
+                LD   A, 3
+                LD   (RawPak_ReadRetryLeft), A
+.try:          CALL RawPak_ReadOneLogicalIX
+                JR   NC, .ok
+                LD   A, (RawPak_ReadRetryLeft)
+                DEC  A
+                LD   (RawPak_ReadRetryLeft), A
+                JR   NZ, .try
+                POP  BC
+                SCF
+                RET
+.ok:           POP  BC
+                OR   A
                 RET
 
 ; Tmp = Tmp + 1 (32-bit LE, carry-propagated).
@@ -1449,7 +1487,14 @@ RawPak_FatPtr:         DEFW 0         ; pointer в FatBuf на FAT[CurClus] пр
 RawPak_RunCount:       DEFB 0         ; число extents в RawPak_RunTable
 RawPak_RunTable:       DEFS RAWPAK_RUN_MAX * 6   ; per run: LBA(4) + len_sectors(2), little-endian
 RawPak_LogCur:         DEFW 0         ; текущий file logical sector для ReadOneLogicalIX
+RawPak_ReadRetryLeft:  DEFB 0
 RawPak_StgPage:        DEFB 0         ; staging page cursor для SD/FT phases
+RawPak_TrkPagesLeft:   DEFB 0         ; Track V2 sample pages left to load
+RawPak_TrkPagePtr:     DEFW 0         ; pointer into VDC_TrackLoadPages
+RawPak_ReadbackBuf:    DEFS 16        ; FT RAM_G readback probe for preview commit guard
+RawPak_VerifySrc:      DEFW 0
+RawPak_VerifyRamL:     DEFW 0
+RawPak_VerifyRamH:     DEFB 0
 
 ; Recursive ZUMALVL.PAK search state. DirStack — DFS frontier ожидающих directory
 ; clusters. Cached* запоминает найденную location, чтобы только первый PakOpen
@@ -2721,44 +2766,59 @@ OVL_ResolveCurrentModeSelection:
                 RET
 
 OVL_LoadGameplayLevelSpecificFromPack:
+                if RUNTIME_DIAGNOSTICS_ENABLED
                 XOR  A
-                LD   (ZiFi_GpDbgStep), A
+                LD   (ZiFiTraceStep), A
+                endif
                 CALL ZiFi_Init
                 JR   C, .initOk
+                if RUNTIME_DIAGNOSTICS_ENABLED
                 LD   A, #FF
-                LD   (ZiFi_GpDbgStep), A
+                LD   (ZiFiTraceStep), A
+                endif
                 JP   .InitErr
 .initOk:        LD   A, 1
-                LD   (ZiFi_GpDbgStep), A
+                if RUNTIME_DIAGNOSTICS_ENABLED
+                LD   (ZiFiTraceStep), A
+                endif
                 CALL ZiFi_PakOpen
                 JR   C, .openOk
+                if RUNTIME_DIAGNOSTICS_ENABLED
                 LD   A, #FE
-                LD   (ZiFi_GpDbgStep), A
+                LD   (ZiFiTraceStep), A
+                endif
                 JP   .Err
 .openOk:        LD   A, 2
-                LD   (ZiFi_GpDbgStep), A
+                if RUNTIME_DIAGNOSTICS_ENABLED
+                LD   (ZiFiTraceStep), A
+                endif
                 LD   A, (CurrentLevel)
                 CALL ZiFi_PakReadToc
                 JR   C, .tocOk
+                if RUNTIME_DIAGNOSTICS_ENABLED
                 LD   A, #FD
-                LD   (ZiFi_GpDbgStep), A
+                LD   (ZiFiTraceStep), A
+                endif
                 JP   .Err
 .tocOk:         LD   A, 3
-                LD   (ZiFi_GpDbgStep), A
+                if RUNTIME_DIAGNOSTICS_ENABLED
+                LD   (ZiFiTraceStep), A
                 LD   HL, (ZiFi_LevelTOC + 0)
-                LD   (ZiFi_GpDbgBgOff), HL
+                LD   (ZiFiTraceBgOff), HL
                 LD   HL, (ZiFi_LevelTOC + 2)
-                LD   (ZiFi_GpDbgBgSize), HL
+                LD   (ZiFiTraceBgSize), HL
+                endif
 
                 ; --- validate sections, которые умеем stage ------------------
                 ; bg должен быть ровно 256 sectors (8 x 16K pages #07..#0E).
                 LD   HL, (ZiFi_LevelTOC + 2)
                 LD   A, H : CP 1 : JP NZ, .Err
                 LD   A, L : OR A : JP NZ, .Err
-                ; track должен помещаться в две 16K pages (<= 64 sectors): chunkA #06 + chunkB #0F.
+                ; Track V2: 1 metadata sector + up to four 16K sample pages.
                 LD   HL, (ZiFi_LevelTOC + 10)
                 LD   A, H : OR A : JP NZ, .Err
-                LD   A, L : CP 65 : JP NC, .Err
+                LD   A, L : OR A : JP Z, .Err
+                CP   130 : JP NC, .Err
 
                 ; ===== SD PHASE: прочитать всё в RAM, БЕЗ FT812 access. ======
                 ; FT812 и SD card делят Z-Controller SPI bus #57/#77; interleaving
@@ -2776,7 +2836,8 @@ OVL_LoadGameplayLevelSpecificFromPack:
                 LD   IX, #8000
                 LD   B, 32
 .sdBgSec:       PUSH BC
-                CALL RawPak_ReadOneLogicalIX
+                CALL RawPak_ReadOneLogicalIX_Retry
+                JP   C, .sdBgReadErr
                 LD   DE, 512
                 ADD  IX, DE
                 POP  BC
@@ -2787,7 +2848,9 @@ OVL_LoadGameplayLevelSpecificFromPack:
                 POP  BC
                 DJNZ .sdBgPage
                 LD   A, #34
-                LD   (ZiFi_GpDbgStep), A
+                if RUNTIME_DIAGNOSTICS_ENABLED
+                LD   (ZiFiTraceStep), A
+                endif
 
                 ; palette: 1 sector -> staging page #03.
                 LD   HL, (ZiFi_LevelTOC + 4)            ; pal_off
@@ -2795,48 +2858,133 @@ OVL_LoadGameplayLevelSpecificFromPack:
                 LD   A, ZIFI_BUFFER_PAGE
                 SetPage2_A
                 LD   IX, #8000
-                CALL RawPak_ReadOneLogicalIX
+                CALL RawPak_ReadOneLogicalIX_Retry
+                JP   C, .Err
 
-                ; track: chunkA (<=32 sec) -> page #06; chunkB (rest) -> page #0F.
-                ; PAK pads chunkA до full 16K page для split tracks, поэтому logical
-                ; sectors track_off..+31 = chunkA, а +32.. = chunkB (contiguous в
-                ; RawPak_LogCur). total пересчитывается из TOC (SetPage2_A клобает BC).
+                ; track: Track V2 metadata sector -> #06 temp, then pure 16K sample
+                ; pages -> #06/#0F/#10/#12. RawPak_LogCur advances after every read.
                 LD   HL, (ZiFi_LevelTOC + 8)            ; track_off (file logical)
                 LD   (RawPak_LogCur), HL
-                ; --- chunkA -> #06 ---
-                LD   A, TRACK_L01_PAGE
+                LD   A, TRACK_L01_PAGE                 ; temp metadata page; preserves palette in #03
                 SetPage2_A
                 LD   IX, #8000
-                LD   A, (ZiFi_LevelTOC + 10)            ; total track sectors
-                CP   33
-                JR   C, .trkAcnt                        ; total<=32 -> chunkA = total
-                LD   A, 32                              ; ограничить chunkA одной page
-.trkAcnt:       LD   B, A
-.sdTrkA:        PUSH BC
-                CALL RawPak_ReadOneLogicalIX
-                LD   DE, 512
-                ADD  IX, DE
-                POP  BC
-                DJNZ .sdTrkA
-                ; --- chunkB -> #0F (только если total > 32) ---
-                LD   A, (ZiFi_LevelTOC + 10)
-                CP   33
-                JR   C, .sdTrkDone                      ; только одна page
-                SUB  32                                 ; remaining sectors
-                LD   B, A
-                LD   A, TRACK_PAGE2
-                SetPage2_A
-                LD   IX, #8000
-.sdTrkB:        PUSH BC
-                CALL RawPak_ReadOneLogicalIX
-                LD   DE, 512
-                ADD  IX, DE
-                POP  BC
-                DJNZ .sdTrkB
-.sdTrkDone:
-                LD   A, #35
-                LD   (ZiFi_GpDbgStep), A
+                CALL RawPak_ReadOneLogicalIX_Retry
+                JP   C, .Err
 
+                ; Metadata magic/version: "ZTV2".
+                LD   IX, #8000
+                LD   A, (IX+0) : CP #5A : JP NZ, .Err  ; 'Z'
+                LD   A, (IX+1) : CP #54 : JP NZ, .Err  ; 'T'
+                LD   A, (IX+2) : CP #56 : JP NZ, .Err  ; 'V'
+                LD   A, (IX+3) : CP #32 : JP NZ, .Err  ; '2'
+                LD   A, (IX+10) : CP TRACK_V2_REC : JP NZ, .Err
+                LD   L, (IX+11)
+                LD   H, (IX+12)
+                LD   DE, TRACK_V2_PAGE_SAMPLES
+                AND  A
+                SBC  HL, DE
+                JP   NZ, .Err
+
+                LD   L, (IX+4)
+                LD   H, (IX+5)
+                LD   (VDC_TrackSamples1), HL
+                LD   A, (IX+6)
+                LD   (VDC_TrackPageCount1), A
+                LD   L, (IX+7)
+                LD   H, (IX+8)
+                LD   (VDC_TrackSamples2), HL
+                LD   A, (IX+9)
+                LD   (VDC_TrackPageCount2), A
+
+                ; Validate page counts and exact section size.
+                LD   A, (VDC_TrackPageCount1)
+                OR   A
+                JP   Z, .Err
+                LD   B, A
+                LD   A, (VDC_TrackPageCount2)
+                ADD  A, B
+                LD   (RawPak_TrkPagesLeft), A
+                OR   A
+                JP   Z, .Err
+                CP   TRACK_MAX_PAGES + 1
+                JP   NC, .Err
+                LD   B, A
+                ADD  A, A
+                ADD  A, A
+                ADD  A, A
+                ADD  A, A
+                ADD  A, A
+                INC  A                                  ; 1 metadata + N*32 sectors
+                LD   B, A
+                LD   A, (ZiFi_LevelTOC + 10)
+                CP   B
+                JP   NZ, .Err
+
+                ; Fill active page tables from the fixed physical page list.
+                LD   HL, VDC_TrackPages1
+                LD   B, TRACK_MAX_PAGES * 2
+                XOR  A
+.trkClrTbl:     LD   (HL), A
+                INC  HL
+                DJNZ .trkClrTbl
+                LD   HL, VDC_TrackLoadPages
+                LD   DE, VDC_TrackPages1
+                LD   A, (VDC_TrackPageCount1)
+                LD   B, A
+.trkCopy1:      LD   A, (HL)
+                INC  HL
+                LD   (DE), A
+                INC  DE
+                DJNZ .trkCopy1
+                LD   A, (VDC_TrackPageCount2)
+                OR   A
+                JR   Z, .trkCopy2Done
+                LD   B, A
+                LD   DE, VDC_TrackPages2
+.trkCopy2:      LD   A, (HL)
+                INC  HL
+                LD   (DE), A
+                INC  DE
+                DJNZ .trkCopy2
+.trkCopy2Done:
+
+                LD   HL, VDC_TrackLoadPages
+                LD   (RawPak_TrkPagePtr), HL
+.sdTrkPage:     LD   A, (RawPak_TrkPagesLeft)
+                OR   A
+                JR   Z, .sdTrkDone
+                LD   HL, (RawPak_TrkPagePtr)
+                LD   A, (HL)
+                INC  HL
+                LD   (RawPak_TrkPagePtr), HL
+                SetPage2_A
+                LD   IX, #8000
+                LD   B, 32
+.sdTrkSec:      PUSH BC
+                CALL RawPak_ReadOneLogicalIX_Retry
+                JP   C, .sdTrkReadErr
+                LD   DE, 512
+                ADD  IX, DE
+                POP  BC
+                DJNZ .sdTrkSec
+                LD   HL, RawPak_TrkPagesLeft
+                DEC  (HL)
+                JR   .sdTrkPage
+.sdTrkDone:
+                CALL SetCurrentTrackPage
+                LD   A, #35
+                if RUNTIME_DIAGNOSTICS_ENABLED
+                LD   (ZiFiTraceStep), A
+                endif
+                JR   .ftPhase
+
+.sdBgReadErr:  POP  BC
+                POP  BC
+                JP   .Err
+.sdTrkReadErr: POP  BC
+                JP   .Err
+
+.ftPhase:
                 ; ===== FT PHASE: upload из RAM, БЕЗ SD access. =================
                 ; bg: pages #07..#0E -> BG_RAMG (по 16K), как fallback.
                 LD   HL, BG_RAMG_ADDR & #FFFF
@@ -2854,6 +3002,8 @@ OVL_LoadGameplayLevelSpecificFromPack:
                 LD   A, (BgRamH)
                 LD   DE, (BgRamL)
                 CALL FT.WriteMem
+                CALL RawPak_VerifyRamG16KPage
+                JP   NC, .ftBgVerifyErr
                 LD   HL, (BgRamL)
                 LD   DE, #4000
                 ADD  HL, DE
@@ -2868,7 +3018,9 @@ OVL_LoadGameplayLevelSpecificFromPack:
                 POP  BC
                 DJNZ .ftBgPage
                 LD   A, 4
-                LD   (ZiFi_GpDbgStep), A
+                if RUNTIME_DIAGNOSTICS_ENABLED
+                LD   (ZiFiTraceStep), A
+                endif
 
                 ; palette: page #03 -> BG_PALETTE_RAMG (512 bytes).
                 LD   A, ZIFI_BUFFER_PAGE
@@ -2878,18 +3030,30 @@ OVL_LoadGameplayLevelSpecificFromPack:
                 LD   A, (BG_PALETTE_RAMG >> 16) & #FF
                 LD   DE, BG_PALETTE_RAMG & #FFFF
                 CALL FT.WriteMem
+                CALL RawPak_VerifyGameplayPaletteRamG
+                JP   NC, .Err
                 LD   A, 6
-                LD   (ZiFi_GpDbgStep), A
+                if RUNTIME_DIAGNOSTICS_ENABLED
+                LD   (ZiFiTraceStep), A
+                endif
 
                 ; bg/palette uploaded в RAM_G, track staged в page #06.
-                SCF
-.Err:           PUSH AF
+.Ok:            SCF
+                PUSH AF
+                CALL ZiFi_Done
+                POP  AF
+                RET
+.Err:           OR   A                                  ; CF=0: caller must treat as failed load
+                PUSH AF
                 CALL ZiFi_Done
                 POP  AF
                 RET
 .InitErr:       CALL ZiFi_Done
                 OR   A
                 RET
+.ftBgVerifyErr:
+                POP  BC
+                JP   .Err
 
 ; LoadLevelFromPack_Setup — открыть ZUMALVL.PAK и загрузить TOC entry CurrentLevel
 ; в ZiFi_LevelTOC.
@@ -2940,7 +3104,9 @@ LoadLevelFromPack:
                 RET
 
 ; OVL_LoadLevelSelectPreviewAssets — stream preview thumbnail выбранного level
-; (raw ARGB4, 306x196 padded to 8x16K pages) из ZUMALVL.PAK в LS_PREVIEW_BG_RAMG.
+; (raw ARGB4, 306x196 padded to 8x16K pages) из ZUMALVL.PAK в выбранный
+; LevelSelectPreviewLoadRam*. Level-select использует ping-pong RAM_G buffers,
+; чтобы не перезаписывать bitmap, который ещё referenced текущим display list.
 ; Вход через resident LoadLevelSelectPreviewAssets trampoline: slot 3 держит
 ; LOADER_OVL_PAGE, trampoline восстанавливает PAGE3=#04 и управляет interrupts,
 ; поэтому routine НЕ должна трогать slot 3. SD и FT phases держим раздельно:
@@ -2976,7 +3142,7 @@ OVL_LoadLevelSelectPreviewAssets:
                 LD   IX, #8000
                 LD   B, 32
 .sd_sec:        PUSH BC
-                CALL RawPak_ReadOneLogicalIX
+                CALL RawPak_ReadOneLogicalIX_Retry
                 JR   C, .sd_read_err
                 LD   DE, 512
                 ADD  IX, DE
@@ -2987,11 +3153,11 @@ OVL_LoadLevelSelectPreviewAssets:
                 LD   (RawPak_StgPage), A
                 POP  BC
                 DJNZ .sd_page
-                ; FT phase: pages #07..#0E -> LS_PREVIEW_BG_RAMG.
-                LD   HL, LS_PREVIEW_BG_RAMG & #FFFF
-                LD   (BgRamL), HL
-                LD   A, (LS_PREVIEW_BG_RAMG >> 16) & #FF
-                LD   (BgRamH), A
+                CALL LevelSelectPreviewValidateStaged
+                JP   NC, .err
+                ; FT phase: pages #07..#0E -> selected preview RAM_G buffer.
+                ; BgRamL/H prepared by resident trampoline before ZiFi maps
+                ; slot0 to the driver page.
                 LD   A, #07
                 LD   (RawPak_StgPage), A
                 LD   B, 8
@@ -3003,6 +3169,8 @@ OVL_LoadLevelSelectPreviewAssets:
                 LD   A, (BgRamH)
                 LD   DE, (BgRamL)
                 CALL FT.WriteMem
+                CALL RawPak_VerifyRamG16KPage
+                JR   NC, .ft_readback_err
                 LD   HL, (BgRamL)
                 LD   DE, #4000
                 ADD  HL, DE
@@ -3020,11 +3188,79 @@ OVL_LoadLevelSelectPreviewAssets:
                 CALL ZiFi_Done
                 SCF
                 RET
+.ft_readback_err:
+                POP  BC
+                JR   .err
 .sd_read_err:   POP  BC
                 POP  BC
 .err:           CALL ZiFi_Done
 .err_init:      CALL SetCurrentTrackPage
                 OR   A
+                RET
+
+LevelSelectPreviewValidateStaged:
+                LD   A, #07
+                SetPage2_A
+                LD   HL, #8000
+                LD   B, 16
+                XOR  A
+.vpv_loop:      OR   (HL)
+                INC  HL
+                DJNZ .vpv_loop
+                JR   Z, .vpv_fail
+                SCF
+                RET
+.vpv_fail:      OR   A
+                RET
+
+RawPak_VerifyRamG16KPage:
+                LD   HL, #8000
+                LD   DE, (BgRamL)
+                LD   A, (BgRamH)
+                CALL RawPak_VerifyRamG16
+                RET  NC
+                LD   HL, (BgRamL)
+                LD   DE, #3FF0
+                ADD  HL, DE
+                EX   DE, HL
+                LD   A, (BgRamH)
+                JR   NC, .tail_no_carry
+                INC  A
+.tail_no_carry: LD   HL, #BFF0
+                JP   RawPak_VerifyRamG16
+
+RawPak_VerifyGameplayPaletteRamG:
+                LD   HL, #8000
+                LD   DE, BG_PALETTE_RAMG & #FFFF
+                LD   A, (BG_PALETTE_RAMG >> 16) & #FF
+                CALL RawPak_VerifyRamG16
+                RET  NC
+                LD   HL, #81F0
+                LD   DE, (BG_PALETTE_RAMG + #01F0) & #FFFF
+                LD   A, ((BG_PALETTE_RAMG + #01F0) >> 16) & #FF
+                JP   RawPak_VerifyRamG16
+
+RawPak_VerifyRamG16:
+                LD   (RawPak_VerifySrc), HL
+                LD   (RawPak_VerifyRamL), DE
+                LD   (RawPak_VerifyRamH), A
+                LD   HL, RawPak_ReadbackBuf
+                LD   BC, 16
+                LD   A, (RawPak_VerifyRamH)
+                LD   DE, (RawPak_VerifyRamL)
+                CALL FT.ReadMem
+                LD   HL, RawPak_ReadbackBuf
+                LD   DE, (RawPak_VerifySrc)
+                LD   B, 16
+.vrg_loop:      LD   A, (DE)
+                CP   (HL)
+                JR   NZ, .vrg_fail
+                INC  DE
+                INC  HL
+                DJNZ .vrg_loop
+                SCF
+                RET
+.vrg_fail:      OR   A
                 RET
 
                 include "loading_screen_ovl40.inc"     ; LOADING LEVEL X-X (перенос из page 0, 1024-порт)

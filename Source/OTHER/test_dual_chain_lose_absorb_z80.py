@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Dual-chain lose-state regression test.
 
-The second chain must not fade/remove head balls at its current position when
-chain1 triggers lose. It must first rush to its own kill-zone, then absorb, and
-the retry/game-over dialog must appear only after chain2 is empty.
+The non-triggering chain must not fade/remove head balls at its current position
+when the other chain triggers lose. It must first rush to its own kill-zone,
+then absorb, and the retry/game-over dialog must appear only after both chains
+are empty.
 """
 from __future__ import annotations
 
@@ -184,10 +185,128 @@ def run_case(level: int) -> tuple[bool, str]:
     )
 
 
+def run_primary_after_chain2_trigger_case(level: int) -> tuple[bool, str]:
+    emu = ZumaFullZ80Emulator(ROOT)
+    sym = emu.sym
+    load_track_page(emu, 0x06, PACK / f"track_l{level:02d}_640.bin")
+    load_track_page(emu, 0x0F, PACK / f"track_l{level:02d}_2_640.bin")
+    emu.mem.pages = [0x00, 0x05, 0x06, 0x04]
+    sb(emu, "Core.CurrentLevel", level - 1)
+    sb(emu, "Core.CurrentDifficulty", 0)
+    emu.call(sym["Core.VDC_Init"], max_steps=5_000_000)
+
+    cl_start = sym["Core.VDC_ChainLocalStart"]
+    hsa_off = sym["Core.VDC_HSA"] - cl_start
+    freeze_off = sym["Core.VDC_ChainFreezeCnt"] - cl_start
+    tns_off = sym["Core.VDC_TrackNumSlots"] - cl_start
+    tns1 = emu.get_word(sym["Core.VDC_TrackNumSlots"])
+    tns2 = emu.get_word(sym["Core.VDC2_ChainLocal"] + tns_off)
+    if not (8 <= tns1 <= 240 and 8 <= tns2 <= 240):
+        return False, f"L{level:02d}: bad TrackNumSlots chain1={tns1} chain2={tns2}"
+
+    # Mirror scenario: chain2 triggered lose and is already absorbing at its KZ.
+    # Primary chain1 is still before its own KZ and must use the same rush path
+    # before any head ball is removed.
+    sb(emu, "Core.VDC_GameState", 1)  # ABSORB
+    sb(emu, "Core.VDC_DialogState", 0)
+    sb(emu, "Core.VDC_Lives", 1)
+    sb(emu, "Core.VDC_HasSecondChain", 1)
+    sb(emu, "Core.VDC_SecondActive", 0)
+    sb(emu, "Core.VDC_HeadAbsorbAlpha", 255)
+    sb(emu, "Core.VDC_DualLoseMenuDelay", 0)
+
+    chain_len = 4
+    sb(emu, "Core.VDC_SlotsLen", chain_len)
+    sb(emu, "Core.VDC_HSub", 9)
+    sb(emu, "Core.VDC_KzFrame", 1)
+    sb(emu, "Core.VDC_HSA", max(0, tns1 - 5))
+    sb(emu, "Core.VDC_ChainFreezeCnt", 0)
+    sb(emu, "Core.VDC_LoseHoldCnt", 0)
+
+    for i in range(chain_len):
+        emu.set_byte(sym["Core.VDC_Slots"] + i, i % 6)
+        emu.set_byte(sym["Core.VDC_Offsets"] + i, 0)
+        emu.set_byte(sym["Core.VDC_Shot2"] + i, 0)
+        emu.set_byte(sym["Core.VDC_ExplodeFrame"] + i, 0)
+        emu.set_byte(sym["Core.VDC_ExplodeMarker"] + i, 0)
+
+        emu.set_byte(sym["Core.VDC2_Slots"] + i, (i + 1) % 6)
+        emu.set_byte(sym["Core.VDC2_Offsets"] + i, 0)
+        emu.set_byte(sym["Core.VDC2_Shot2"] + i, 0)
+        emu.set_byte(sym["Core.VDC2_ExplodeFrame"] + i, 0)
+        emu.set_byte(sym["Core.VDC2_ExplodeMarker"] + i, 0)
+
+    sb(emu, "Core.VDC2_SlotsLen", chain_len)
+    sb(emu, "Core.VDC2_HSub", 0)
+    sb(emu, "Core.VDC2_KzFrame", 11)
+    emu.set_byte(sym["Core.VDC2_ChainLocal"] + hsa_off, min(tns2, 255))
+    emu.set_byte(sym["Core.VDC2_ChainLocal"] + hsa_off + 1, 0)
+    emu.set_byte(sym["Core.VDC2_ChainLocal"] + freeze_off, 0)
+
+    boundary_reached = False
+    prev_len = chain_len
+    first_boundary_frame: int | None = None
+    first_drop_frame: int | None = None
+    history: list[str] = []
+
+    for frame in range(MAX_FRAMES):
+        before_len = gb(emu, "Core.VDC_SlotsLen")
+        before_hsa = gb(emu, "Core.VDC_HSA")
+        before_hsub = gb(emu, "Core.VDC_HSub")
+        before_kz = gb(emu, "Core.VDC_KzFrame")
+        before_len2 = gb(emu, "Core.VDC2_SlotsLen")
+        before_dialog = gb(emu, "Core.VDC_DialogState")
+        history.append(
+            f"f={frame:03d} len1={before_len} hsa1={before_hsa} "
+            f"hsub1={before_hsub} kz1={before_kz} len2={before_len2} dlg={before_dialog}"
+        )
+        history = history[-24:]
+
+        if (before_len > 0 or before_len2 > 0) and before_dialog != 0:
+            return False, "L%02d mirror: dialog opened before both chains emptied\n%s" % (
+                level,
+                "\n".join(history),
+            )
+        if before_len > 0 and before_kz == 11 and before_hsub == 0:
+            boundary_reached = True
+            if first_boundary_frame is None:
+                first_boundary_frame = frame
+
+        emu.call(sym["Core.VDC_UpdateAllChains"], max_steps=5_000_000)
+
+        after_len = gb(emu, "Core.VDC_SlotsLen")
+        if after_len < prev_len and first_drop_frame is None:
+            first_drop_frame = frame
+        if after_len < prev_len and not boundary_reached:
+            return False, (
+                f"L{level:02d} mirror: chain1 length decreased before KZ boundary\n"
+                + "\n".join(history)
+                + "\n"
+                + f"after frame {frame}: len1 {prev_len}->{after_len}, "
+                f"kz1={gb(emu, 'Core.VDC_KzFrame')} hsub1={gb(emu, 'Core.VDC_HSub')}"
+            )
+        prev_len = after_len
+
+        if after_len == 0 and gb(emu, "Core.VDC2_SlotsLen") == 0:
+            return True, (
+                f"L{level:02d} mirror: boundary_frame={first_boundary_frame} "
+                f"first_drop_frame={first_drop_frame}"
+            )
+
+    return False, (
+        f"L{level:02d} mirror: dual-chain lose absorb did not finish\n"
+        + "\n".join(history)
+    )
+
+
 def main() -> int:
     failures: list[str] = []
     for level in CASES:
         ok, msg = run_case(level)
+        print(("PASS: " if ok else "FAIL: ") + msg)
+        if not ok:
+            failures.append(msg)
+        ok, msg = run_primary_after_chain2_trigger_case(level)
         print(("PASS: " if ok else "FAIL: ") + msg)
         if not ok:
             failures.append(msg)

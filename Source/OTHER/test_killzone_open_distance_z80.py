@@ -18,7 +18,10 @@ from zuma_z80_simulator import ZumaZ80Sim  # noqa: E402
 
 CELL_SIZE = 32
 TRACK_NUM_SLOTS = 20
-MAX_SLOTS = 128
+
+
+def max_slots(sim: ZumaZ80Sim) -> int:
+    return sim.sym["Core.VDC_Offsets"] - sim.sym["Core.VDC_Slots"]
 
 
 def sb(sim: ZumaZ80Sim, name: str, value: int) -> None:
@@ -32,7 +35,7 @@ def sw(sim: ZumaZ80Sim, name: str, value: int) -> None:
 
 def clear_array(sim: ZumaZ80Sim, name: str) -> None:
     base = sim.sym[name]
-    for i in range(MAX_SLOTS):
+    for i in range(max_slots(sim)):
         sim.set_byte(base + i, 0)
 
 

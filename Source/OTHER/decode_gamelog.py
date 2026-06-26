@@ -3,7 +3,7 @@ import argparse
 from pathlib import Path
 
 
-GAMELOG_ADDR = 0x4480
+GAMELOG_ADDR = 0x4B80
 GAMELOG_IDX_ADDR = 0x4C80
 ENTRY_SIZE = 8
 ENTRY_COUNT = (GAMELOG_IDX_ADDR - GAMELOG_ADDR) // ENTRY_SIZE
@@ -69,8 +69,11 @@ def main() -> None:
         raise SystemExit(f"dump too small: size={len(data)}")
 
     idx = data[GAMELOG_IDX_ADDR]
+    if idx >= ENTRY_COUNT:
+        idx = 0
     entries: list[tuple[int, int]] = []
-    for n in range(ENTRY_COUNT):
+    for i in range(ENTRY_COUNT):
+        n = (idx + i) % ENTRY_COUNT
         off = GAMELOG_ADDR + n * ENTRY_SIZE
         typ = data[off]
         if args.all or typ in EVENTS:

@@ -99,8 +99,8 @@ def main() -> int:
         ("BG_PALETTE", a("BG_PALETTE_RAMG"), 0x200, ""),
         ("DIALOG_OK", a("DIALOG_OK_RAMG"), 0x2800, "300x34"),
         ("FROG_ARGB4", a("FROG_RAMG_ADDR"), 0x20000, "frog/plate/tongue/overlay 4x32K"),
-        ("BALLS_ARGB4", a("BALLS_RAMG_ADDR"), 0x30000, "192K, 16 фаз"),
-        ("BALLS_PALETTE", a("BALLS_PALETTE_RAMG"), 0x200, ""),
+        ("BALLS_ATLAS", a("BALLS_RAMG_ADDR"), 0x30000, "192K, normal ARGB4 or L19 PALETTED4444 loaded per level"),
+        ("BALLS_PALETTE", a("BALLS_PALETTE_RAMG"), 0x200, "L19 PALETTED4444 only"),
         ("FRAME_PALETTE", a("FRAME_PAL_RAMG"), 0x200, ""),
         ("TOP_MASK_A", a("TOP_MASK_RAMG_A"), a("TOP_MASK_RAMG_A_END") - a("TOP_MASK_RAMG_A"), "active tunnel ARGB4 top-cover tiles"),
         ("FRAME_TOP", a("FRAME_TOP_RAMG"), 2 * PAGE, "640x44"),
@@ -162,7 +162,8 @@ def main() -> int:
         ("LS_CURSOR", a("LS_CURSOR_RAMG"), 24 * 24 * 2, ""),
         ("LS_PREVIEW_MARK/FROG/KZ", a("LS_PREVIEW_MARKER_RAMG"),
          a("LS_PREVIEW_KZ_RAMG") + a("LS_PREVIEW_KZ_BYTES") - a("LS_PREVIEW_MARKER_RAMG"), "превью-маркеры"),
-        ("LS_PREVIEW_BG", a("LS_PREVIEW_BG_RAMG"), 0x20000, "превью фона уровня"),
+        ("LS_PREVIEW_BG_B", a("LS_PREVIEW_BG_RAMG_B"), 0x20000, "ping-pong превью фона уровня"),
+        ("LS_PREVIEW_BG_A", a("LS_PREVIEW_BG_RAMG_A"), 0x20000, "ping-pong превью фона уровня"),
         ("LOADING_TEXT", a("LOADING_TEXT_RAMG"), 2 * PAGE, "баннер LOADING LEVEL"),
     ]
 
@@ -183,7 +184,7 @@ def main() -> int:
         ("boot:popcap_zlib_pages", a("BOOT_POPCAP_RAMG"), a("BOOT_POPCAP_PAGES") * PAGE, "SafeInflatePage2 / FT812 CMD_INFLATE"),
         ("game:level_bg_stream", a("BG_RAMG_ADDR"), a("BG_PAGE_COUNT") * PAGE, "level pak bg stream / fallback pages"),
         ("game:bg_palette_raw", a("BG_PALETTE_RAMG"), 0x200, "raw palette"),
-        ("game:balls_pages", a("BALLS_RAMG_ADDR"), a("BALLS_PAGE_COUNT") * PAGE, "UnpackAndUploadPage x12"),
+        ("game:balls_pages", a("BALLS_RAMG_ADDR"), a("BALLS_PAGE_COUNT") * PAGE, "UnpackAndUploadPage x12: normal ARGB4 or L19 PALETTED4444"),
         ("game:frog_pages", a("FROG_RAMG_ADDR"), a("FROG_TOTAL_PAGES") * PAGE, "UnpackAndUploadPage"),
         ("game:kz_destroy_pages", a("KZ_RAMG_ADDR"), a("KZ_PAGE_COUNT") * PAGE, "killzone + destroy"),
         ("game:cursor_page", a("CURSOR_RAMG_ADDR"), PAGE, "cursor upload pads to 16K"),
@@ -199,7 +200,8 @@ def main() -> int:
         ("game:font_cancun10_page", a("FONT_CANCUN10_STATS_RAMG"), PAGE, ""),
         ("game:font_cancun8_pages", a("FONT_CANCUN8_RAMG"), 2 * PAGE, ""),
         ("win:winexp_pages_over_balls", a("WINEXP_RAMG_ADDR"), a("WINEXP_PAGE_COUNT") * PAGE, "WIN-only overlay over BALLS"),
-        ("level_select:preview_bg_stream", a("LS_PREVIEW_BG_RAMG"), 0x20000, "8 pages from ZUMALVL preview bg"),
+        ("level_select:preview_bg_stream_b", a("LS_PREVIEW_BG_RAMG_B"), 0x20000, "8 pages from ZUMALVL preview bg"),
+        ("level_select:preview_bg_stream_a", a("LS_PREVIEW_BG_RAMG_A"), 0x20000, "8 pages from ZUMALVL preview bg"),
         ("level_select:loading_text_pages", a("LOADING_TEXT_RAMG"), 2 * PAGE, ""),
     ]
 
@@ -217,7 +219,7 @@ def main() -> int:
                 problems.append(f"{prof}:{name} конец {hx(end)} > 1МБ")
         print(f"  -> max end {hx(max_end)}  (свободно до 1МБ: {RAM_G - max_end} байт)")
         # overlaps внутри профиля (намеренное переиспользование — в allow-list)
-        allowed = {("BALLS_ARGB4", "WINEXP_ATLAS(over BALLS)")}  # шаров в WIN нет
+        allowed = {("BALLS_ATLAS", "WINEXP_ATLAS(over BALLS)")}  # шаров в WIN нет
         for i, (n1, s1, z1, _) in enumerate(rows):
             e1 = s1 + z1
             for n2, s2, z2, _ in rows[i + 1:]:

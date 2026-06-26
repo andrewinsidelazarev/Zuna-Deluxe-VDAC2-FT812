@@ -14,6 +14,14 @@ CELL_SIZE = 32
 sim = ZumaZ80Sim()
 S = sim.sym
 
+
+def gap_diag():
+    accum = sim.get_byte(S["Core.VDC_GapAccum"]) | (sim.get_byte(S["Core.VDC_GapAccum"] + 1) << 8)
+    junction = sim.get_byte(S["Core.VDC_GapJunction"])
+    pos_left = sim.get_byte(S["Core.VDC_GapPosLeft"])
+    return f"ga={accum} gj={junction} gp={pos_left}"
+
+
 sim.call(S['Core.VDC_Init'])
 sim.set_byte(S['Core.VDC_TrackNumSlots'],     85)
 sim.set_byte(S['Core.VDC_TrackNumSlots'] + 1, 0)
@@ -39,7 +47,7 @@ def t_of(s, i):
 
 
 def is_real_ball(slot_byte):
-    return slot_byte < 4  # VDC_NUM_COLORS
+    return slot_byte < 6  # VDC_NUM_COLORS
 
 
 sim.set_byte(S['Core.VDC_TmpInsIdx'], 3)
@@ -52,7 +60,7 @@ print('\n=== AFTER CheckMatch3 ===')
 s1 = state()
 print(f"  HSA={s1['hsa']:2d} HSub={s1['hsub']:2d} len={s1['slots_len']} "
       f"slots=[{sim.format_slots(s1['slots'])}] "
-      f"fc={sim.get_byte(S['Core.VDC_ChainFreezeCnt'])} gc={sim.get_byte(S['Core.VDC_GapStepCnt'])}")
+      f"fc={sim.get_byte(S['Core.VDC_ChainFreezeCnt'])} {gap_diag()}")
 print(f"  offsets={s1['offsets']}")
 
 N = 400
@@ -99,7 +107,7 @@ s = state()
 print(f"  HSA={s['hsa']} HSub={s['hsub']} len={s['slots_len']} slots=[{sim.format_slots(s['slots'])}]")
 print(f"  offsets={s['offsets']}")
 print(f"  ChainFreezeCnt={sim.get_byte(S['Core.VDC_ChainFreezeCnt'])}")
-print(f"  GapStepCnt={sim.get_byte(S['Core.VDC_GapStepCnt'])}")
+print(f"  {gap_diag()}")
 print(f"  MatchScanIdx={sim.get_byte(S['Core.VDC_MatchScanIdx'])}")
 
 # Финальный список «застрявших».

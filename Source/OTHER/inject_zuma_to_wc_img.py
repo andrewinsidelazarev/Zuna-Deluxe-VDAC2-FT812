@@ -343,7 +343,7 @@ def prepare_host_package(root: Path) -> list[Path]:
     if stale_nested_pak.exists():
         stale_nested_pak.unlink()
     files = [
-        (root / "Build" / "zuma_vdac2.spg", package_dir / "ZUMA_VD2.SPG"),
+        (root / "Build" / "ZUMA_VD2.SPG", package_dir / "ZUMA_VD2.SPG"),
         (root / "Build" / "ZUMAMAIN.PAK", package_dir / "ZUMAMAIN.PAK"),
         (root / "Build" / "ZUMALVL.PAK", package_dir / "ZUMALVL.PAK"),
         (root / "Build" / "ZUMAAUD.PAK", package_dir / "ZUMAAUD.PAK"),

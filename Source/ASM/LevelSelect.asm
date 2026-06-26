@@ -50,7 +50,8 @@ LoadLevelSelectAssets:
                 LD   B, LevelSelectInflateAssetsCount
                 LD   HL, LevelSelectInflateAssets
                 CALL MenuInflateAssetsFromTable
-                CALL LoadLevelSelectPreviewAssets
+                CALL LevelSelectPreviewResetBuffers
+                CALL LevelSelectLoadPreviewInitial
                 CALL LoadLevelSelectFontNative
                 CALL LoadLevelSelectPreviewMarkers
 
@@ -121,6 +122,7 @@ LevelSelectInflateAssets:
                 MenuInflateAsset LS_SUN_N_RAMG, LS_SUN_N_Z_PAGE, LS_SUN_N_Z_SIZE
                 MenuInflateAsset LS_SUN_H_RAMG, LS_SUN_H_Z_PAGE, LS_SUN_H_Z_SIZE
                 MenuInflateAsset LS_SUN_P_RAMG, LS_SUN_P_Z_PAGE, LS_SUN_P_Z_SIZE
+                MenuInflateAsset LS_CURSOR_RAMG, MENU_CURSOR_Z_PAGE, MENU_CURSOR_Z_SIZE
 LevelSelectInflateAssetsEnd:
 LevelSelectInflateAssetsCount EQU (LevelSelectInflateAssetsEnd - LevelSelectInflateAssets) / 6
 
@@ -238,6 +240,7 @@ LevelSelectKeyboard:
                 JR   NC, .chk_down                         ; уже Sun God (3, верх)
                 INC  A
                 LD   (CurrentDifficulty), A
+                CALL LevelSelectButtonSfx
 .chk_down:      ; Вниз — к нижнему бейджу (Rabbit): CurrentDifficulty--, clamp 0
                 CALL Input_Down
                 LD   HL, LevelSelectKbdDownPrev
@@ -248,13 +251,17 @@ LevelSelectKeyboard:
                 JR   Z, .chk_left                          ; уже Rabbit (0, низ)
                 DEC  A
                 LD   (CurrentDifficulty), A
+                CALL LevelSelectButtonSfx
 .chk_left:      ; Влево — предыдущий уровень (как Back)
                 CALL Input_Left
                 LD   HL, LevelSelectKbdLeftPrev
                 CALL Input_EdgeZ
                 JR   Z, .chk_right
+                CALL LevelSelectIsFirstLevel
+                JR   Z, .chk_right
                 LD   A, 1
                 LD   (LevelSelectBackClick), A
+                CALL LevelSelectButtonSfx
 .chk_right:     ; Вправо — следующий уровень (как Next)
                 CALL Input_Right
                 LD   HL, LevelSelectKbdRightPrev
@@ -264,6 +271,7 @@ LevelSelectKeyboard:
                 JR   Z, .chk_fire
                 LD   A, 1
                 LD   (LevelSelectNextClick), A
+                CALL LevelSelectButtonSfx
 .chk_fire:      ; Огонь — Play
                 CALL Input_FireKey
                 LD   HL, LevelSelectKbdFirePrev
@@ -271,6 +279,7 @@ LevelSelectKeyboard:
                 JR   Z, .chk_esc
                 LD   A, 1
                 LD   (LevelSelectPlayClick), A
+                CALL LevelSelectButtonSfx
 .chk_esc:       ; ESC — выход в главное меню
                 CALL Input_Esc
                 LD   HL, LevelSelectKbdEscPrev
@@ -278,7 +287,12 @@ LevelSelectKeyboard:
                 RET  Z
                 LD   A, 1
                 LD   (LevelSelectMainMenuClick), A
+                CALL LevelSelectButtonSfx
                 RET
+
+LevelSelectButtonSfx:
+                LD   A, SND_BUTTON1
+                JP   GS_PlaySfx
 
 LevelSelectApplyDifficultyClick:
                 LD   A, (LevelSelectRabbitClick)
@@ -312,7 +326,7 @@ LevelSelectApplyLevelClick:
                 JR   Z, .next
                 DEC  A
                 LD   (CurrentLevel), A
-                CALL LoadLevelSelectPreviewAssets
+                CALL LevelSelectReloadPreviewAtomic
 .next:          LD   A, (LevelSelectNextClick)
                 OR   A
                 RET  Z
@@ -321,7 +335,61 @@ LevelSelectApplyLevelClick:
                 RET  NC
                 INC  A
 .store_next:    LD   (CurrentLevel), A
-                JP   LoadLevelSelectPreviewAssets
+                JP   LevelSelectReloadPreviewAtomic
+
+LevelSelectReloadPreviewAtomic:
+                LD   B, 3
+.retry:         PUSH BC
+                LD   A, (LevelSelectPreviewActiveBuf)
+                XOR  1
+                CALL LevelSelectPreviewSelectLoadDest
+                CALL LoadLevelSelectPreviewAssets
+                POP  BC
+                JR   C, .commit
+                DJNZ .retry
+                RET
+.commit:
+                JP   LevelSelectPreviewCommitLoaded
+
+LevelSelectLoadPreviewInitial:
+                LD   B, 5
+.retry:         PUSH BC
+                LD   A, (LevelSelectPreviewActiveBuf)
+                CALL LevelSelectPreviewSelectLoadDest
+                CALL LoadLevelSelectPreviewAssets
+                POP  BC
+                JR   C, .commit
+                DJNZ .retry
+                RET
+.commit:
+                JP   LevelSelectPreviewCommitLoaded
+
+LevelSelectPreviewResetBuffers:
+                XOR  A
+                CALL LevelSelectPreviewSelectLoadDest
+                JP   LevelSelectPreviewCommitLoaded
+
+LevelSelectPreviewSelectLoadDest:
+                LD   (LevelSelectPreviewLoadBuf), A
+                OR   A
+                JR   NZ, .buf_b
+                LD   HL, LS_PREVIEW_BG_RAMG_A & #FFFF
+                LD   A, (LS_PREVIEW_BG_RAMG_A >> 16) & #FF
+                JR   .store
+.buf_b:         LD   HL, LS_PREVIEW_BG_RAMG_B & #FFFF
+                LD   A, (LS_PREVIEW_BG_RAMG_B >> 16) & #FF
+.store:         LD   (LevelSelectPreviewLoadRamL), HL
+                LD   (LevelSelectPreviewLoadRamH), A
+                RET
+
+LevelSelectPreviewCommitLoaded:
+                LD   HL, (LevelSelectPreviewLoadRamL)
+                LD   (LevelSelectPreviewDrawRamL), HL
+                LD   A, (LevelSelectPreviewLoadRamH)
+                LD   (LevelSelectPreviewDrawRamH), A
+                LD   A, (LevelSelectPreviewLoadBuf)
+                LD   (LevelSelectPreviewActiveBuf), A
+                RET
 
 LevelSelectRedHoverDifficulty:
                 LD   HL, LevelSelectBadgeStateRabbit

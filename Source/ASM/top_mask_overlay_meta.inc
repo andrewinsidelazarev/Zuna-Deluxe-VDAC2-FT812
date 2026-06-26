@@ -91,13 +91,13 @@ TopMaskL18: ; tunnellevel
                 DB 23 : DW #0990
 
 TopMaskL19: ; serpents
-                DB 0 : DW #0CCC
+                DB 10 : DW #0CCC
 
 TopMaskL20: ; overunder
-                DB 14 : DW #0CCC
+                DB 14 : DW #0E34
 
 TopMaskL21: ; inversespiral
-                DB 6 : DW #0EC4
+                DB 6 : DW #102C
 
 TopMaskL22: ; space
-                DB 0 : DW #0F9C
+                DB 0 : DW #1104

@@ -67,6 +67,7 @@ TOP_IMAGE_LEVELS = {
     "tunnellevel",
     "overunder",
     "inversespiral",
+    "serpents",
 }
 
 FT_ARGB4 = 6

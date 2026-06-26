@@ -71,8 +71,8 @@ def asr(x, n):
 def matrix_int(brad):
     """Целочисленная матрица — ТОЧНО как будет в ASM (сдвиги/множители).
 
-    A = E = (cos127 * 323) >> 8   ; 323 = 256+64+2+1  => scale 0.6256
-            cos127*323 = (cos127<<8)+(cos127<<6)+(cos127<<1)+cos127
+    A = E = (cos127 * 323) >> 8   ; 323 = 256+67 => scale 0.6256
+            ASM: |x| + ((|x|*67)>>8), затем вернуть знак
     B     = (sin127 * 323) >> 8
     D     = -B
     C     = 15616 - cs*123        ; 15616 = 61*256 ; 123 = round(61*256/127)
@@ -82,9 +82,11 @@ def matrix_int(brad):
     cos127, sin127 = cos_sin_127(brad)
 
     def mul323_sh8(x):
-        # ASM-вариант: x*1.25 = x + (x asr 2). scale 0.617 (vs 0.6256) — компактнее
-        # (без 16-bit умножения), визуально неотличимо (~1px по краю атласа).
-        return x + asr(x, 2)
+        # Match Frog_Mul323Sh8: magnitude + high byte of magnitude*67,
+        # then restore sign. For x=127 this returns exactly 160.
+        mag = abs(x)
+        out = mag + ((mag * 67) >> 8)
+        return -out if x < 0 else out
 
     def mul123(x):
         return (x << 7) - (x << 2) - x           # x*123

@@ -4,30 +4,38 @@
 > и собственных экспериментов — здесь оседают факты, формулы, код-примеры,
 > схемы и решения. Из этого вырастет полноценный учебник.
 
-**Целевая аудитория:** разработчики на Z80 (sjasmplus / asm), знакомые с TS-Conf,
-расширяющие свой код на работу с FT812 через VDAC2.
+**Целевая аудитория:** разработчики на Z80 (sjasmplus / asm), которые хотят
+разобраться с ZX-Evo, TS-Conf, VDAC2 и выводом через FT812.
 
-**Источники, осмысленные на сегодня** (локальные копии — в `Docs/`; ссылки — на оригиналы):
-- `VDAC2 #2 - Первые шаги.docx` — русскоязычный учебник #2 (порты ZX-Evo, SPI-обвязка, Z80 asm-функции FT_RD/FT_WR). Железо VDAC2 — [TS-Labs / ZX-Evolution](https://zx.andrew-lazarev.com/our-products/vdac2-videoreview-ru/).
-- `FT81x.pdf` — Bridgetek **FT81X Embedded Video Engine Datasheet** (memory map, регистры, RGB-тайминги): <https://brtchip.com/wp-content/uploads/Support/Documentation/Datasheets/ICs/EVE/DS_FT81x.pdf>
-- `FT81X_Series_Programmer_Guide.pdf` — Bridgetek **FT81X Series Programmer Guide** (opcode-таблицы DL/coprocessor): <https://brtchip.com/wp-content/uploads/Support/Documentation/Programming_Guides/ICs/EVE/FT81X_Series_Programmer_Guide.pdf>
-- `BRT_AN_033_BT81X-Series-Programming-Guide.pdf` — Bridgetek **BT81X Series Programming Guide** (расширение для совместимой BT81x; ASTC, CMD_FLASH*): <https://brtchip.com/wp-content/uploads/2023/12/BT81X-Series-Programming-Guide.pdf>
-- `AN_303 FT800 Image File Conversion.pdf` — конвертация изображений в FT-форматы (Bridgetek App Notes: <https://brtchip.com/document/application-notes/>).
-- **AN_340** — Bridgetek App Note про DXT1-эмуляцию на EVE (основа глав 18–19; см. портал App Notes выше).
-- `The_Gameduino_2_Tutorial,_Reference_and_Cookbook` — J. Bowman, 2013 (высокоуровневое API EVE через Gameduino-обёртку + Cookbook): PDF <https://excamera.com/files/gd2book_v0.pdf>, исходник книги <https://github.com/jamesbowman/gd2-book>.
-- **`TSLib`** — готовая asm-библиотека для ZX-Evo + FT812 (DeadlyKom). Лежит локально в `Docs\TSLib\` (исходники + полная FTDI-документация в `Docs\TSLib\FT812\Docs\`). Главный практический референс. FT812-SDK для ZX-Evo: <https://hype.retroscene.org/blog/734.html>; общий репозиторий ZX-Evolution: <https://github.com/tslabs/zx-evo>.
-- **Bridgetek EveApps** — официальные демо + эмулятор EVE (используется в главе 25): <https://github.com/Bridgetek/EveApps>.
+**Короткие определения перед стартом:**
 
----
+- **ZX-Evo / ZX Evolution (Pentevo)** — современная ZX Spectrum-совместимая
+  платформа, на которой работает проект.
+- **TS-Conf** — расширенная конфигурация ZX-Evo от TS-Labs: видеорежимы,
+  страничная память, DMA и порты управления экраном/периферией. В этом учебнике
+  TS-Conf даёт Z80-окружение, страницы памяти, DMA и порты, а финальную картинку
+  игры выводит FT812 через VDAC2.
+- **VDAC2** — плата видеовыхода для ZX-Evo с видеочипом FT812.
+- **FT812** — видеочип Bridgetek/FTDI EVE. Z80 отправляет ему команды и данные
+  через SPI, а FT812 сам формирует VGA/RGB-сигнал.
+- **Display List (DL)** — список 32-битных команд рисования FT812. Он хранится
+  во внутренней памяти `RAM_DL` (8 КБ, адреса `0x300000..0x301FFF`). Это не
+  готовая картинка, а команды вроде `CLEAR`, `BITMAP_HANDLE`, `VERTEX2II`,
+  `DISPLAY`.
+- **Командный процессор FT812** — внутренний обработчик команд FT812; в
+  документации EVE/TSLib его часто называют **co-processor** (далее —
+  **копроцессор**). Z80 пишет команды в кольцевой буфер `RAM_CMD` (4 КБ), а
+  копроцессор разворачивает их в настоящий Display List или операции с памятью.
 
 ## Структура учебника
 
 Учебник состоит из двух частей. Подробное оглавление со ссылками генерируется
-автоматически (раздел «Содержание» выше в HTML/PDF).
+автоматически (раздел «Оглавление» выше в HTML/PDF).
 
 **Часть I. Основы FT812 / VDAC2 (главы 1–11)** — фундамент, выведенный из
 датшитов и TSLib: аппаратная связка ZX-Evo+VDAC2, SPI-протокол, memory map,
-видеотайминги 640×480, Display List, bitmap-форматы, производительность/DMA,
+видеотайминги 640×480, список команд рисования FT812 (Display List / DL),
+bitmap-форматы, производительность/DMA,
 главный цикл рендера и карта TSLib API. Читается линейно как введение.
 
 **Часть II. Журнал разработки Zuma (главы 12–40)** — практический опыт в
@@ -35,7 +43,22 @@
 с датой и ссылками на код, baseline и память. Главы самодостаточны — можно
 читать выборочно по теме. Сквозные темы:
 
-- **Рендеринг и оптимизация DL:** 12 (bitmap matrix/scale/paletted), 16 (persistent DL state), 17 (vsync-first), 20 (render-loop приёмы), 21 (адаптивная группировка матриц шаров), 23 (PALETTED4444 шаров), 24 (бюджет строки FT812), 26 (BITMAP_HANDLE binding), 27 (matrix LUT, ARGB4 frog → fix tearing).
+**Маршрут по подсистемам для первого чтения:**
+
+- **FT812 / VDAC2:** главы 1–7, 9–12, 15–27, 35 и 40.1–40.2. Здесь memory map,
+  SPI-транзакции, Display List (DL), RAM_CMD, bitmap-форматы, копроцессор FT812,
+  матрицы, стоимость форматов и ограничения pixel-clock budget.
+- **TS-Config:** главы 1.2–1.3, 7, 22, 28, 32, 34 и 40.3. Здесь VCONFIG/DMA,
+  страничная память, общая SPI-шина, Mr.Gluk RTC и AT/PS/2-клавиатура.
+- **Дисковая подсистема SD-Card:** главы 30 и 36. Здесь CMD17, FAT32/LFN,
+  RawPak, PAK-таблицы, двойной проход сборки и инжект в образ.
+- **Звуковая подсистема General Sound:** главы 33, 37 и 40.5. Здесь порты,
+  handshake, MOD, SFX, preload, FIFO и отличия эмулятора от реального железа.
+- **Реальное железо против эмулятора:** главы 25, 29, 34, 38 и 40.7. Здесь
+  указано, какие проверки можно доверять харнессам, а какие обязаны проходить
+  на настоящем FT812/ZX-Evo.
+
+- **Рендеринг и оптимизация списка команд FT812 (DL):** 12 (bitmap matrix/scale/paletted), 16 (persistent DL state), 17 (vsync-first), 20 (render-loop приёмы), 21 (адаптивная группировка матриц шаров), 23 (PALETTED4444 шаров: L19-only этап → глобальный 50-in-51 atlas), 24 (бюджет строки FT812), 26 (BITMAP_HANDLE binding), 27 (matrix LUT, ARGB4 frog → fix tearing).
 - **Фон уровня:** 18–19 (DXT1-эмуляция L2/L4), 24 (почему перешли на единый PALETTED4444-проход).
 - **Игровые объекты:** 13, 15 (композиция лягушки), 14 (RNG), 28 (RTC-часы).
 - **Инструменты и методология:** 25 (эмулятор EveApps + дамп RAM_DL), 29 (когда эмулятор сам врёт — источник истины = RAM dump).
@@ -48,7 +71,7 @@
 - **Дисковая подсистема (сборка):** 36 (четыре пака; грабля рассинхрона `make_main_pack.py --table↔--pack` и двойной проход; трек-сплит на 2 страницы; инжект в образ) — дополняет 30 (ридер).
 - **Звук (углубление):** 37 (детект `GS_Present`; ловушка «звук молчит без `PRELOAD_IDS`»; стрим MOD и его роль в тиках анимации; SFX с питчем `GS_PlaySfxNote`) — дополняет 33.
 - **Подтяжка цепи:** 39 (PULL/CATCH-UP/отдача в slot-модели; 5 дефектов рывков квантованной модели; дробный накопитель декея; rear-comp до конца цепи; Z80-ловушка `PUSH AF/POP AF`; win-регрессия и урок `gaugeFull=1`).
-- **Свод граблей:** 40 (чек-лист перед коммитом по всем классам: матрицы/координаты, DL/co-proc, SPI-шина, сборка, звук, Z80-идиомы, реал-vs-эмулятор, тестирование).
+- **Свод граблей:** 40 (чек-лист перед коммитом по всем классам: матрицы/координаты, DL и копроцессор FT812, SPI-шина, сборка, звук, Z80-идиомы, реал-vs-эмулятор, тестирование).
 
 > Нумерация глав сквозная (1→40). Историческое примечание: ранние версии
 > учебника использовали отдельные пометки `§N/§M/§R` и нумерацию журнала
@@ -62,12 +85,17 @@
 
 VDAC2 — расширительная плата для ZX-Evo, заменяющая стандартный 5-bit VDAC.
 Содержит чип **FT812** (FTDI Embedded Video Engine):
-- 1 MB graphics RAM (RAM_G)
-- Display List engine (8 KB RAM_DL)
-- Co-processor с командным буфером (4 KB RAM_CMD)
-- VGA-выход до 800×600 (для нас целевой режим — 640×480)
-- 8/8/8 RGB output
-- SPI-интерфейс к хосту (Z80) до 30 MHz (на ZX-Evo тактирование меньше)
+- 1 МБ графической памяти `RAM_G`
+- Display List (DL): список 32-битных команд рисования в `RAM_DL` (8 КБ)
+- копроцессор FT812 с командным буфером `RAM_CMD` (4 КБ)
+- VGA/RGB-выход; в проекте 640×480 — логическое пространство игровой механики,
+  а 1024×768 — поздний режим вывода с апскейлом 8/5
+- RGB-выход 8 бит на канал
+- SPI-интерфейс к хосту (Z80): FT812 допускает SCLK до 30 MHz, но в нашем
+  Z80-пути скорость ограничивает не этот предел, а `OUT`/`OTIR` через порт
+  `SPI_DATA`. При `SYS_ZCLK14` это примерно `14 МГц / 21 такт` =
+  **~666 КБ/с** для длинного `OTIR`-блока без учёта заголовка SPI; при 7 МГц
+  было бы ~333 КБ/с.
 
 В STATUS-регистре TS-Conf версия адаптера:
 - `000` — 2-bit VDAC + PWM
@@ -283,9 +311,9 @@ FT_Write:
 |----------------------|--------|-------------|--------------------------------------|
 | `0x000000-0x0FFFFF`  | 1024 KB| RAM_G       | Графика общего назначения (bitmaps)  |
 | `0x1E0000-0x2FFFFB`  | 1152 KB| ROM_FONT    | Шрифты ROM                           |
-| `0x300000-0x301FFF`  | 8 KB   | RAM_DL      | Display List                         |
+| `0x300000-0x301FFF`  | 8 KB   | RAM_DL      | Список команд рисования (Display List / DL) |
 | `0x302000-0x302FFF`  | 4 KB   | RAM_REG     | Регистры                             |
-| `0x308000-0x308FFF`  | 4 KB   | RAM_CMD     | Co-processor command buffer (ring)   |
+| `0x308000-0x308FFF`  | 4 KB   | RAM_CMD     | Кольцевой командный буфер копроцессора |
 
 **Endianness**: little-endian для всех многобайтных значений (Z80-friendly).
 
@@ -309,7 +337,7 @@ FT_Write:
 | `0x302054` | REG_DLSWAP        | 2 rw | 0        | Управление flip'ом DL (0/1/2) |
 | `0x302070` | REG_PCLK          | 8 rw | 0        | Делитель PCLK (0=PCLK выкл) |
 | `0x30206C` | REG_PCLK_POL      | 1 rw | 0        | Полярность PCLK |
-| `0x302100` | REG_CMD_DL        | 13 rw|          | Co-processor pointer в DL |
+| `0x302100` | REG_CMD_DL        | 13 rw|          | Указатель копроцессора на текущую позицию в DL |
 
 ### 3.2. DLSWAP modes
 
@@ -325,17 +353,31 @@ FT_Write:
 
 ## 4. Видеотайминги для 640×480
 
-TSLib содержит выверенные таблицы для **трёх** режимов 640×480 (`Include\FT\81x Const.inc:359-391`):
+TSLib содержит выверенные таблицы для **трёх** режимов 640×480 в
+[`Docs/TSLib/Include/FT/81x Const.inc`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/Docs/TSLib/Include/FT/81x%20Const.inc)
+(блок `; Video modes`):
 
-### 4.1. VM_640_480_57Hz (PCLK 24 MHz, F_MUL=3) — целевой для Zuma
+### 4.1. Главный вывод: 74 Гц выбрали ради строки, а не ради FPS
 
-| Параметр    | H (Horizontal) | V (Vertical) |
-|-------------|---------------:|-------------:|
-| Front porch | 16             | 11           |
-| Sync pulse  | 96             | 2            |
-| Back porch  | 48             | 31           |
-| Visible     | **640**        | **480**      |
-| Total       | 800            | 524          |
+Выбор `VM_640_480_74Hz` был осознанным компромиссом: мы пошли на риск сузить парк
+поддерживаемых мониторов ради дополнительных тактов FT812 на строку. Режим около
+60 Гц совместимее для VGA-мониторов, но в тяжёлых кадрах Zuma срывалась именно
+**строка**, а не игровая логика.
+
+Для FT812 важен `HCYCLE`: сколько pixel-clock'ов есть на одну строку, чтобы чип
+успел пройти Display List и выдать пиксели. У 57/76 Гц строка даёт 800 PCLK, а у
+74 Гц — 832 PCLK. Это всего +32 PCLK на строку, но в момент, когда бюджет был на
+грани, именно этот запас имел смысл. `VM_640_480_76Hz` быстрее по refresh, но
+`HCYCLE` у него те же 800, поэтому проблему строки он не решал.
+
+Позже переход на `1024×768@59` дал уже 1344 PCLK на строку и вернул режим ближе к
+универсальным ~60 Гц, но на этапе 640×480 выбор 74 Гц был именно выбором строки.
+
+| Режим TSLib | PCLK | H timing (FP/SYNC/BP/VIS) | HCYCLE | V timing (FP/SYNC/BP/VIS) | VCYCLE | Refresh | Практический смысл |
+|-------------|------|---------------------------|-------:|---------------------------|-------:|--------:|--------------------|
+| `VM_640_480_57Hz` | 24 МГц | 16/96/48/640 | 800 | 11/2/31/480 | 524 | 57.25 Гц | совместимее, но меньше строковый бюджет |
+| `VM_640_480_74Hz` | 32 МГц | 24/40/128/640 | 832 | 9/3/28/480 | 520 | 73.96 Гц | выбран ради +32 PCLK/строку |
+| `VM_640_480_76Hz` | 32 МГц | 16/96/48/640 | 800 | 11/2/31/480 | 524 | 76.34 Гц | выше refresh, но строка не длиннее |
 
 `F_MUL` — значение, которое TSLib пишет в `REG_PCLK`. На плате VDAC2 (внешний
 клок через `CLKEXT` + `CLKSEL #C0`) результирующий pixel clock получается как
@@ -350,36 +392,41 @@ TSLib содержит выверенные таблицы для **трёх** �
 > клока надо обновить `REG_FREQUENCY`. Переносите на другой клок — считайте PCLK
 > по формуле делителя из даташита, не по «×8».
 
-TSLib-константа: `F0_MUL=3, H0_FPORCH=16, H0_SYNC=96, H0_BPORCH=48, H0_VISIBLE=640, V0_FPORCH=11, V0_SYNC=2, V0_BPORCH=31, V0_VISIBLE=480`.
+### 4.2. Константы TSLib для трёх 640×480-режимов
 
-### 4.2. VM_640_480_74Hz (PCLK 32 MHz, F_MUL=4) — повышенная частота
+- `VM_640_480_57Hz`: `F0_MUL=3, H0_FPORCH=16, H0_SYNC=96, H0_BPORCH=48,
+  H0_VISIBLE=640, V0_FPORCH=11, V0_SYNC=2, V0_BPORCH=31, V0_VISIBLE=480`.
+- `VM_640_480_74Hz`: `F1_MUL=4, H1_FPORCH=24, H1_SYNC=40, H1_BPORCH=128,
+  H1_VISIBLE=640, V1_FPORCH=9, V1_SYNC=3, V1_BPORCH=28, V1_VISIBLE=480`.
+- `VM_640_480_76Hz`: `F2_MUL=4, H2_FPORCH=16, H2_SYNC=96, H2_BPORCH=48,
+  H2_VISIBLE=640, V2_FPORCH=11, V2_SYNC=2, V2_BPORCH=31, V2_VISIBLE=480`.
 
-`F1_MUL=4, H1_FPORCH=24, H1_SYNC=40, H1_BPORCH=128, V1_FPORCH=9, V1_SYNC=3, V1_BPORCH=28`.
+### 4.3. Соответствие регистрам FT812
 
-### 4.3. VM_640_480_76Hz (PCLK 32 MHz, F_MUL=4)
+TSLib-макрос `FT_ModeTab` из
+[`Docs/TSLib/Include/FT/81x Const.inc`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/Docs/TSLib/Include/FT/81x%20Const.inc)
+укладывает значения в следующие регистры FT812:
 
-`F2_MUL=4, H2_FPORCH=16, H2_SYNC=96, H2_BPORCH=48, V2_FPORCH=11, V2_SYNC=2, V2_BPORCH=31`.
+| Регистр       | Формула                       | 57 Гц | 74 Гц | 76 Гц |
+|---------------|-------------------------------|------:|------:|------:|
+| REG_HSYNC0    | H_FPORCH                      | 16    | 24    | 16    |
+| REG_HSYNC1    | H_FPORCH + H_SYNC             | 112   | 64    | 112   |
+| REG_HOFFSET   | H_FPORCH + H_SYNC + H_BPORCH  | 160   | 192   | 160   |
+| REG_HSIZE     | H_VISIBLE                     | 640   | 640   | 640   |
+| REG_HCYCLE    | H_FPORCH + H_SYNC + H_BPORCH + H_VISIBLE | 800 | **832** | 800 |
+| REG_VSYNC0    | V_FPORCH − 1                  | 10    | 8     | 10    |
+| REG_VSYNC1    | V_FPORCH + V_SYNC − 1         | 12    | 11    | 12    |
+| REG_VOFFSET   | V_FPORCH + V_SYNC + V_BPORCH − 1 | 43 | 39 | 43 |
+| REG_VSIZE     | V_VISIBLE                     | 480   | 480   | 480   |
+| REG_VCYCLE    | V_FPORCH + V_SYNC + V_BPORCH + V_VISIBLE | 524 | 520 | 524 |
+| REG_PCLK      | F_MUL (см. §4.1)              | 3 → 24 МГц | 4 → 32 МГц | 4 → 32 МГц |
+| REG_PCLK_POL  | 0                             | 0     | 0     | 0     |
 
-### 4.4. Соответствие регистрам FT812
+Именно строка `REG_HCYCLE` объясняет выбор 74 Гц: у него единственного из трёх
+640×480-режимов строковый бюджет больше 800 PCLK. Цена — менее универсальный
+refresh для мониторов.
 
-TSLib `FT_ModeTab` (`81x Const.inc:460`) укладывает значения в следующие регистры FT812:
-
-| Регистр       | Формула                       | для VM_640_480_57Hz |
-|---------------|-------------------------------|--------------------:|
-| REG_HSYNC0    | H_FPORCH                      | 16                  |
-| REG_HSYNC1    | H_FPORCH + H_SYNC             | 112                 |
-| REG_HOFFSET   | H_FPORCH + H_SYNC + H_BPORCH  | 160                 |
-| REG_HSIZE     | H_VISIBLE                     | 640                 |
-| REG_HCYCLE    | H_FPORCH+SYNC+BPORCH+VISIBLE  | 800                 |
-| REG_VSYNC0    | V_FPORCH − 1                  | 10                  |
-| REG_VSYNC1    | V_FPORCH + V_SYNC − 1         | 12                  |
-| REG_VOFFSET   | V_FPORCH+V_SYNC+V_BPORCH − 1  | 43                  |
-| REG_VSIZE     | V_VISIBLE                     | 480                 |
-| REG_VCYCLE    | V_FPORCH+V_SYNC+V_BPORCH+V_VISIBLE | 524            |
-| REG_PCLK      | F_MUL (делитель клока, см. §4.1) | 3 → PCLK 24 МГц  |
-| REG_PCLK_POL  | 0                             | 0                   |
-
-### 4.5. Применение через TSLib-макрос
+### 4.4. Применение через TSLib-макрос
 
 В TSLib переключение режима — одна строчка:
 
@@ -388,15 +435,19 @@ TSLib `FT_ModeTab` (`81x Const.inc:460`) укладывает значения �
 ```
 
 Где `ResolutionWidthPtr` — Z80-указатель на 2-байтную ячейку в RAM, куда макрос
-сохраняет ширину экрана для последующего использования (`Examples\2.HelloWorld\Include.inc:8`).
+сохраняет ширину экрана для последующего использования
+([`Docs/TSLib/Examples/2.HelloWorld/Include.inc`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/Docs/TSLib/Examples/2.HelloWorld/Include.inc)).
 
-`FT_RESOLUTION` (`Include\FT\812 Macro.inc:354`) сам разворачивается в нужную таблицу
+`FT_RESOLUTION` из
+[`Docs/TSLib/Include/FT/812 Macro.inc`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/Docs/TSLib/Include/FT/812%20Macro.inc)
+сам разворачивается в нужную таблицу
 + серию `FT_WR_REG16` по адресам HCYCLE/HOFFSET/HSIZE/HSYNC0/HSYNC1/VCYCLE/VOFFSET/VSIZE/VSYNC0/VSYNC1
 + `FT_WR_REG8 FT_REG_PCLK` со значением F_MUL.
 
-### 4.6. Полная init-последовательность (TSLib `FT_BOOT_UP`)
+### 4.5. Полная init-последовательность (TSLib `FT_BOOT_UP`)
 
-`Include\FT\812 Macro.inc:104`:
+Макрос `FT_BOOT_UP` находится в
+[`Docs/TSLib/Include/FT/812 Macro.inc`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/Docs/TSLib/Include/FT/812%20Macro.inc):
 
 ```asm
 FT_BOOT_UP      macro
@@ -433,6 +484,59 @@ FT_BOOT_UP      macro
                 endm
 ```
 
+На реальном FT812 это не формальность. После `ACTIVE` чип поднимает oscillator/PLL,
+делает внутреннюю проверку RAM и только потом начинает корректно отвечать как EVE.
+По даташиту boot-up может занимать до **300 ms**, поэтому нельзя заменить ожидание
+на короткий busy-loop и сразу писать регистры. Правильный критерий готовности —
+не «прошло немного времени», а `REG_ID == #7C` и затем `REG_CPURESET == 0`, как
+показано выше. Если начать запись раньше, на эмуляторе это может случайно пройти,
+а на реальной плате FT812 выглядит как «не включился»: SPI отвечает мусором или
+часть ранних записей пропадает.
+
+#### 4.5.1. Перед `FT_BOOT_UP`: принудительно отпустить общую SPI-шину
+
+На ZX-Evo/VDAC2 FT812 и SD-карта сидят на общей SPI-шине Z-Controller:
+`SPI_CTRL=#77`, `SPI_DATA=#57`. Z80 warm reset не обязан очищать latch порта
+`#77`. Если reset пришёлся на момент активной транзакции, после перезапуска
+может остаться выбранным FT812 (`#77=#07`) или SD. Эмулятор это обычно не
+моделирует, а на реальном железе симптомы выглядят как «после reset игра
+повторно не грузится», битые preview/переходы или странные real-only ошибки
+чтения данных уровня.
+
+Поэтому самый ранний init-код игры должен привести SPI в idle **до** `FT_BOOT_UP`,
+`sd_init`, загрузки паков и любых `FT.ReadMem`/`FT.WriteMem`:
+
+```asm
+; Вызывать самым ранним кодом старта: до FMapAddrInit/FT_BOOT_UP/sd_init.
+; #03 = SPI_FT_CS_OFF: FT812 deselect, SD deselect, ZX-Evolution flag set.
+SpiBusIdle:
+                PUSH AF
+                PUSH BC
+                PUSH DE
+                LD   BC, #0077          ; SPI_CTRL
+                LD   A, #03
+                OUT  (C), A             ; отпустить FT812 и SD
+                LD   BC, #0057          ; SPI_DATA
+                LD   A, #FF
+                LD   D, 16
+.clk:           OUT  (C), A             ; 16 idle clocks, чтобы SD/FT завершили фазу
+                DEC  D
+                JR   NZ, .clk
+                LD   BC, #0077
+                LD   A, #03
+                OUT  (C), A             ; финально оставить bus idle
+                POP  DE
+                POP  BC
+                POP  AF
+                RET
+```
+
+В Zuma VDAC2 это стоит первым действием `Init_Core`. Практический результат
+v085 (2026-06-25): исчез баг повторной загрузки после reset и ушёл real-only
+L18-баг, где шары в конце трека не становились в цепочку. Root-cause был не
+«забытый `sd_csh`/`FT_OFF` при штатном возврате», а аппаратный SPI CS latch,
+оставшийся после warm reset.
+
 `REG_PCLK=2` в конце `FT_BOOT_UP` — **временное** значение: оно лишь включает
 развёртку с default-таймингами, чтобы видеовыход «ожил». Рабочий PCLK для 640×480
 задаёт следующий шаг — `FT_RESOLUTION` (REG_PCLK = F_MUL = 3 или 4). Прежний
@@ -446,15 +550,26 @@ FT_BOOT_UP      macro
                 Video_Setting VID_FT812 | VID_NOGFX  ; OUT (0xAF), %00100100
 ```
 
-`Video_Setting` — TSLib-макрос (`Include\Cache\Macro.inc` и др.), эквивалент учебника #2.
+`Video_Setting` — TSLib-макрос из
+[`Docs/TSLib/Include/Video/Macro.inc`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/Docs/TSLib/Include/Video/Macro.inc).
+Флаги `VID_FT812` и `VID_NOGFX` объявлены в
+[`Docs/TSLib/Include/TSConf.inc`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/Docs/TSLib/Include/TSConf.inc).
+По смыслу это тот же вывод в VCONFIG-порт, который описан в учебнике #2.
 
 ---
 
-## 5. Display List
+## 5. Display List (DL): список команд рисования FT812
+
+Display List, или DL, — это не готовая растровая картинка и не экранный буфер. Это маленькая
+программа для видеочипа FT812: список 32-битных команд «очистить экран»,
+«выбрать bitmap», «нарисовать вершину», «закончить кадр». FT812 читает этот
+список из `RAM_DL` во время вывода кадра.
 
 ### 5.1. Структура
 
-DL = массив 32-bit команд в RAM_DL (`0x300000`..`0x301FFF`). Максимум 2048 команд.
+DL (Display List) = массив 32-битных команд в `RAM_DL`
+(`0x300000`..`0x301FFF`). Размер `RAM_DL` — 8 КБ, одна команда занимает 4 байта,
+поэтому верхний предел — 2048 команд.
 Каждая команда — 4 байта little-endian. Последняя команда обязана быть `DISPLAY()`.
 
 После записи DL → `REG_DLSWAP=DLSWAP_FRAME` → следующий vsync покажет новый кадр.
@@ -518,9 +633,9 @@ DISPLAY()
 
 Для 240 шаров = ~244 32-bit команды = ~976 байт DL (вмещается в 8KB).
 
-### 5.5. Co-processor (RAM_CMD) — для удобства
+### 5.5. Копроцессор FT812 (RAM_CMD) — для удобства
 
-Командный буфер `0x308000`+ — кольцевой, читается co-processor'ом FT812. Команды:
+Командный буфер `0x308000`+ — кольцевой, его читает копроцессор FT812. Команды:
 - `cmd_dlstart` — открыть новый DL
 - `cmd_swap` — REG_DLSWAP
 - `cmd_loadimage` — JPEG/PNG → RAM_G
@@ -563,14 +678,18 @@ Wrapping — 4KB. После записи → `REG_CMD_WRITE = новый offset
 
 ### 7.1. Оценка bandwidth Z80 → FT812 через SPI
 
-- ZX-Evo Z80 на ~7 MHz
-- `OTIR` = 21 такта/байт = ~333 KB/s максимум
-- Через DMA TS-Conf (если задействована) — выше, до ~1 MB/s
+- В проекте включён режим `SYS_ZCLK14`: Z80 работает на 14 МГц.
+- `OTIR` = 21 такт/байт. Для длинного блока это `14 МГц / 21` =
+  ~666 КБ/с полезных данных без учёта 3-байтного адресного заголовка SPI и
+  `FT_ON`/`FT_OFF`.
+- Если Z80 работает на 7 МГц, оценка вдвое ниже: ~333 КБ/с.
+- Через DMA TS-Conf (если задействована) — выше, до ~1 MB/s.
 
 ### 7.2. Полный кадр при 60 fps
 
 - Frame budget: 16.7 ms
-- DL обновление 240 шаров: ~1 KB → 3 ms через OTIR
+- DL обновление 240 шаров: ~1 KB → примерно 1.5 ms через длинный `OTIR`-блок
+  на 14 МГц, плюс накладные расходы кадра.
 - Background не обновляется каждый кадр (статичен в RAM_G после init)
 
 ### 7.3. NO_GFX=1 экономит DMA
@@ -578,29 +697,14 @@ Wrapping — 4KB. После записи → `REG_CMD_WRITE = новый offset
 С `NO_GFX=1` лимит DMA на строку (448 циклов) полностью доступен для FT812-передач,
 а не делится с TS-Config рендером. Это критично для частых обновлений RAM_G (анимация фона).
 
----
-
-## 8. План разработки Zuma VDAC2 (контекст)
-
-1. ✅ Базовая 360×288-версия Zuma собирается в папке проекта.
-2. ✅ Python-эмулятор VDC масштабирован под 640×480 (визуальная отладка).
-3. ⏳ Init-последовательность FT812: detect → power → тайминги 640×480 → REG_PCLK.
-4. ⏳ Первый «hello DL» — синий экран через VDAC2.
-5. ⏳ Загрузка тестового bitmap в RAM_G + рендер одной точкой.
-6. ⏳ Атлас шаров → BITMAP_HANDLE → VERTEX2II loop по slots[].
-7. ⏳ Background (палитра + bitmap из конвертера).
-8. ⏳ Жаба + cursor + killzone как handles 1/2/3.
-9. ⏳ Sync VDC engine 360×288 ↔ FT812 рендер 640×480 (scale ×2 в координатах).
-
----
-
 ## 9. Главный цикл рендера (Hello World pattern из TSLib)
 
-`Examples\2.HelloWorld\Core\MainLoop.asm` — образцовая структура кадра:
+[`Docs/TSLib/Examples/2.HelloWorld/Core/MainLoop.asm`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/Docs/TSLib/Examples/2.HelloWorld/Core/MainLoop.asm)
+— образцовая структура кадра:
 
 ```asm
 .Loop           FT_CMD_Start                 ; начать собирать команды в буфер RAM Z80
-                FT_DL_Start                  ; команда DLSTART для co-processor
+                FT_DL_Start                  ; команда DLSTART для копроцессора FT812
 
                 FT_ClearColorRGB32 0x000000  ; чёрный фон
                 FT_ClearAll                  ; clear color + stencil + tag
@@ -624,7 +728,8 @@ Wrapping — 4KB. После записи → `REG_CMD_WRITE = новый offset
 ### 9.1. Что делает `FT_CMD_Start`/`FT_CMD_Write`
 
 `FT_CMD_Start` — устанавливает Z80-указатель `FT.Coprocessor.BufferPtr` в начало
-**локального буфера** `CMD_ADDRESS_PTR` в RAM Z80 (см. `BufferMacro.inc:5`).
+**локального буфера** `CMD_ADDRESS_PTR` в RAM Z80 (см.
+[`Docs/TSLib/Include/FT/Coprocessor/BufferMacro.inc`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/Docs/TSLib/Include/FT/Coprocessor/BufferMacro.inc)).
 Все последующие `FT_CMD_BUF`/`FT_ClearAll`/`FT_Begin`/`FT_Vertex2ii` — это **запись 4-байтных
 команд в этот локальный буфер** (через `LD (HL), E : INC HL` × 4).
 
@@ -639,28 +744,30 @@ Wrapping — 4KB. После записи → `REG_CMD_WRITE = новый offset
 После записи команд `REG_DLSWAP = FT_DLSWAP_FRAME (=2)` запрашивает swap в начале
 ближайшего vsync. `REG_INT_FLAGS` бит `FT_INT_SWAP` поднимается когда swap состоялся —
 это сигнал «можно начинать новый кадр». Без ожидания будут «глитчи»: писать в DL пока
-FT-engine ещё рендерит — undefined.
+движок FT812 ещё рендерит — неопределённое состояние.
 
 `FT_INT_MASK` и `FT_INT_EN` нужно настроить в init (Hello World делает: `FT_REG_INT_MASK = FT_INT_SWAP`, `FT_REG_INT_EN = 1`).
 
 ## 10. TSLib API — карта макросов
 
-### 10.1. Низкий уровень: `Include\FT\812 Macro.inc`
+### 10.1. Низкий уровень:
+[`Docs/TSLib/Include/FT/812 Macro.inc`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/Docs/TSLib/Include/FT/812%20Macro.inc)
 
 | Макрос                               | Описание |
 |--------------------------------------|----------|
 | `FT_ON` / `FT_OFF`                   | CS управление (= OUT 0x77) |
 | `FT_VMODE`                           | OUT (VCONFIG), VID_FT812 |
 | `FT_ACTIVE`                          | host command #00 → выйти из standby |
-| `FT_BOOT_UP`                         | полная init-последовательность (см. §4.6) |
-| `FT_CMD_RESET`                       | сброс co-processor (CMD_READ/WRITE = 0) |
+| `FT_BOOT_UP`                         | полная init-последовательность (см. §4.5) |
+| `FT_CMD_RESET`                       | сброс копроцессора (CMD_READ/WRITE = 0) |
 | `FT_SEND_COMMAND`                    | host command (3 байта) |
 | `FT_DELAY Count?`                    | NOP-задержка |
 | `FT_RD_REG8` / `FT_RD_REG16` / `FT_RD_REG32`  | чтение регистра |
 | `FT_WR_REG8` / `FT_WR_REG16` / `FT_WR_REG32`  | запись регистра |
 | `FT_RESOLUTION VM_*, RefPtr`         | переключение видеорежима |
 
-### 10.2. Прямой Display List в RAM_DL: `Include\FT\DL  Macro.inc`
+### 10.2. Прямой Display List в RAM_DL:
+[`Docs/TSLib/Include/FT/DL  Macro.inc`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/Docs/TSLib/Include/FT/DL%20%20Macro.inc)
 
 Каждый макрос разворачивается в `DEFD <opcode>` (4 байта в текущем месте сборки).
 Используется когда DL **зашит в постоянную область** (например, статическая графика
@@ -693,7 +800,8 @@ FT-engine ещё рендерит — undefined.
 
 `prim` для `BEGIN`: 1=BITMAPS, 2=POINTS, 3=LINES, 4=LINE_STRIP, 5/6/7/8=EDGE_STRIP_*, 9=RECTS.
 
-### 10.3. Сборка DL через co-processor: `Include\FT\Coprocessor\BufferMacro.inc`
+### 10.3. Сборка DL через копроцессор:
+[`Docs/TSLib/Include/FT/Coprocessor/BufferMacro.inc`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/Docs/TSLib/Include/FT/Coprocessor/BufferMacro.inc)
 
 Те же команды, но макросы пишут не `DEFD`, а `FT_CMD_BUF` (накапливают в RAM Z80
 для последующего `FT_CMD_Write`). Используется в `MainLoop` каждый кадр.
@@ -729,10 +837,15 @@ FT-engine ещё рендерит — undefined.
 | `FT_String addr,len`      | Строка для FT_Text |
 | `FT_Gradient x1,y1,rgb1,x2,y2,rgb2` | Градиент |
 | `FT_Display`              | Конец DL |
-| `FT_CMD_Swap`             | CMD_SWAP (через co-processor) |
+| `FT_CMD_Swap`             | CMD_SWAP (через копроцессор) |
 | `FT_CMD_Interrupt ms`     | CMD_INTERRUPT |
 
-### 10.4. Coprocessor функции (`Include\FT\Coprocessor\Buffer.asm` + Cmd.asm)
+### 10.4. Функции TSLib `FT.Coprocessor.*`
+
+Реализация:
+[`Docs/TSLib/Include/FT/Coprocessor/Buffer.asm`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/Docs/TSLib/Include/FT/Coprocessor/Buffer.asm)
+и
+[`Docs/TSLib/Include/FT/Coprocessor/Cmd.asm`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/Docs/TSLib/Include/FT/Coprocessor/Cmd.asm).
 
 Дополнительные runtime-функции:
 - `FT.Coprocessor.PointSize` — `LD DE, size` → пишет POINT_SIZE в буфер
@@ -741,19 +854,21 @@ FT-engine ещё рендерит — undefined.
 - `FT.Coprocessor.Vertex2f` — `LD HL, X : LD DE, Y` (subpixel)
 - `FT.Coprocessor.WaitFlush` — ждать пока FT прочитает RAM_CMD
 - `FT.Coprocessor.GetPtr` — получить текущий REG_CMD_DL (для return-адресов в DL)
-- `FT.Coprocessor.IsFault` — проверка ошибки co-processor
+- `FT.Coprocessor.IsFault` — проверка ошибки копроцессора
 - `FT.Coprocessor.Inflate` — распаковать deflate-blob в RAM_G
 
 ### 10.5. Прочее
 
-- `Include\Cache\Macro.inc` — `Cache_Setting EN_0000 | EN_4000 | EN_8000` — TS-Conf cache
-- `Include\DMA\Macro.inc` — TS-Conf DMA helpers (для блочных копий, в т.ч. в FT812 — но про DMA-FT учебник #3+)
-- `Include\Input\Kempston\Mouse\*` — мышь Kempston (готовое)
-- `Include\Math\F16\*`, `Fixed\18.14\*`, `Fixed\2.14\*`, `Lerp.asm`, `Mul/*`, `Div/*` — fixed-point/F16 математика
+- [`Docs/TSLib/Include/Cache/Macro.inc`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/Docs/TSLib/Include/Cache/Macro.inc) — `Cache_Setting EN_0000 | EN_4000 | EN_8000` — TS-Conf cache
+- [`Docs/TSLib/Include/DMA/Macro.inc`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/Docs/TSLib/Include/DMA/Macro.inc) — TS-Conf DMA helpers
+- [`Docs/TSLib/Include/Input/Kempston/Mouse`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/tree/main/Docs/TSLib/Include/Input/Kempston/Mouse) — мышь Kempston
+- [`Docs/TSLib/Include/Math`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/tree/main/Docs/TSLib/Include/Math) — fixed-point/F16 математика
 
 ### 10.6. Готовый Init_Video для Zuma VDAC2
 
-Реализовано в `Init_Video.asm` в корне проекта. Собирается под sjasmplus (--syntax=ab) с TSLib без ошибок (smoke-build см. `_test_init_video.asm`).
+Реализовано в
+[`Source/ASM/Init_Video.asm`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/Source/ASM/Init_Video.asm).
+Собирается под sjasmplus (`--syntax=ab`) с TSLib.
 
 Зависимости (порядок важен):
 ```asm
@@ -777,6 +892,10 @@ ResolutionHeightPtr  EQU #40F5
 
 Сама логика (см. файл):
 
+0. **Caller before `Init_Video`: `SpiBusIdle`** — самым ранним кодом старта
+   отпустить общую SPI-шину (`#77=#03`, затем 16 тактов `#57=#FF`). Это нужно
+   после warm reset: latch Z-Controller мог остаться с выбранным FT812/SD
+   после предыдущей программы или предыдущего запуска. См. §4.5.1.
 1. **Sanity-check VDAC2**: `IN A,(STATUS) : AND %111 : CP %111` — если бит-маска ≠ 111, возврат с Z=0 (нет VDAC2 на плате).
 2. **`FT_BOOT_UP`** — полная init FT812: PWRDOWN→CLKEXT→CLKSEL #C0→ACTIVE, ждать REG_ID=0x7C, default тайминги, GPIOX=0xFFFF, REG_PCLK=2 → видеовыход активирован.
 3. **`FT_CMD_RESET`** — обнулить REG_CMD_READ/WRITE (на случай висящих команд).
@@ -829,28 +948,13 @@ ResolutionHeightPtr  EQU #40F5
 - Все макросы группы `FT_*` из `BufferMacro.inc` **только пишут в этот буфер** — пока не вызван `FT_CMD_Write`, ничего на FT812 не уходит.
 - `FT_CMD_Write` — **одна** OTIR-транзакция в `REG_CMDB_WRITE` (FT_RAM_CMD). Эффективнее команд по одной.
 - `REG_DLSWAP=FT_DLSWAP_FRAME` запрашивает swap. Без ожидания `FT_INT_SWAP` следующий DL может начать строиться поверх ещё рендерящегося → артефакты.
-- `Update` после `WaitIntSwap` — пока FT-engine отрисовывает только что засвопленный кадр, Z80 свободен для физики. Это **естественный double-buffering**: кадр N+1 готовится пока кадр N показывается.
+- `Update` после `WaitIntSwap` — пока движок FT812 отрисовывает только что засвопленный кадр, Z80 свободен для физики. Это **естественная двойная буферизация**: кадр N+1 готовится пока кадр N показывается.
 
 **Точка состояния (`ZL_PointX`/`ZL_PointY` etc.)** хранится в коде через `DEFW 0` — после загрузки .bin это валидные ячейки, MainLoop при первом входе явно их инициализирует на `(SCR_W/2, SCR_H/2)` и скорость `(3, 2)` px/frame в 1/16-формате (`VertexFormat=4`, по умолчанию).
 
 **`ZL_DrawFrame`** использует runtime-функции `FT.Coprocessor.ColorRGB`/`PointSize`/`Vertex2f` (из `Coprocessor/Buffer.asm`) — они принимают значения в регистрах (BC/DE), а не immediate, что нужно для динамической позиции.
 
 **`ZL_UpdateGame`** — bouncing: `X += VelX`, если `X >= MAX_X` или `X < MIN_X` → clamp + `VelX = -VelX` через мини-helper `ZL_NegateW`. То же по Y.
-
-Smoke-test: `_test_init_video.asm` — точка входа `Init_Video → MainLoop`, при сборке через sjasmplus 1.18.3 даёт `Errors: 0, warnings: 0, compiled: 4370 lines`. Не запускался на реальном hardware/эмуляторе — это следующий шаг (нужен spgbld + правильные SAVEBIN директивы под ZX-Evo memory layout).
-
-## 11. Открытые вопросы / TODO для углубления учебника
-
-- ✅ ~~Точные тайминги VGA 640×480~~ — закрыто (TSLib `81x Const.inc:359-391`, см. §4).
-- ✅ ~~Полный список opcodes DL~~ — закрыто (TSLib `DL Macro.inc` + `BufferMacro.inc`, см. §10).
-- ⏳ RAM_CMD wrapping и синхронизация с REG_CMD_READ/WRITE — есть пример в TSLib `Coprocessor\Buffer.asm`, разобрать и перенести в учебник.
-- ⏳ Touch-engine — нам не нужен, но в учебник для полноты: описать REG_TOUCH_*.
-- ⏳ Аудио через FT812 — есть mono PCM/ADPCM; в Zuma можно подключить sfx (clicks при insert/match).
-- ⏳ DMA-передача в FT812 (упомянута в учебнике #2, но детали в #3+) — раздел дописать после.
-- ⏳ Bitmap-конвертация PNG → FT-формат: разобрать `AN_303 FT800 Image File Conversion.pdf` + изучить `Examples/3.Bitmap/Core/TexturesCharacter.inc` / `TexturesParallax.inc` — паттерн как загружают спрайты в RAM_G.
-- ⏳ Tilemap для backgrounds — `Examples/Game/Core/Tilemap_DL.asm` (1116 байт) разобрать и перенести в учебник.
-- ⏳ FT81X_Series_Programmer_Guide.pdf (4 МБ) — извлечь в txt и дописать недостающие детали (особенно секции про blend modes, color formats, optimization tips).
-- ⏳ BRT_AN_033 BT81X Programming Guide (4.8 МБ) — BT81x совместим с FT81x по DL, но добавляет ASTC bitmap formats и CMD_FLASH* — может быть полезно если когда-нибудь будет VDAC3.
 
 ---
 
@@ -899,20 +1003,38 @@ Matrix формула: `M = T(28,28) * R(angle) * T(-28,-28)`. Combined rotation
 
 Filter `FT_BILINEAR` (vs `FT_NEAREST`) даёт smooth interpolation между native pixels при upscale — обязательно для качественного render scaled bitmap.
 
-### 12.4 Memory budget для bg (1 MB RAM_G FT812)
+### 12.4. Бюджет памяти для background (1 МБ RAM_G FT812)
 
-bg 640×480 в разных форматах:
-| Format | Size | Quality | Эмулятор Unreal |
-|---|---|---|---|
-| RGB565 (full) | 614 KB | high | ✓ |
-| RGB565 + scale 0.5x (320×240) | 154 KB | средне | ✓ |
-| RGB565 + scale 0.625x (400×300) | 240 KB | хорошее (compromise) | ✓ |
-| RGB332 (1 byte/px) | 307 KB | плохо | ✓ |
-| L8 grayscale | 307 KB | greyscale only | ✓ (диагностика) |
-| PALETTED8 (1 byte index + 1 KB ARGB8 palette) | 308 KB | хорошее | ✗ серый фон |
-| PALETTED4 / PALETTED4444 | 154 KB | 16 colors | ✗ серый фон |
+Расчёт ниже — для фона 640×480. В колонке «RAM_G» указаны реальные байты
+картинки/слоёв; если грузить данные полными 16-КБ страницами `spgbld`, в RAM_G
+надо дополнительно держать выравнивающий хвост до следующей страницы.
 
-**Unreal эмулятор НЕ реализует palette-formats** — серый фон при попытке. На реальном железе ZX-Evo+FT812 PALETTED должен работать (стандарт FT81x).
+| Вариант | RAM_G | 16-КБ страниц | Качество | Комментарий |
+|---|---:|---:|---|---|
+| RGB565 full 640×480 | 614 400 Б | 38 | высокое | 2 байта/пиксель, без альфы |
+| ARGB4 full 640×480 | 614 400 Б | 38 | высокое | 2 байта/пиксель, 4 бита на A/R/G/B; для непрозрачного bg альфа не нужна |
+| RGB565 400×300 + scale 1.6 | 240 000 Б | 15 | хорошее | ранний компромисс: меньше RAM_G, но апскейл заметен |
+| ARGB4 400×300 + scale 1.6 | 240 000 Б | 15 | хорошее | тот же объём, что RGB565; нужен только если bg реально использует альфу |
+| RGB565 320×240 + scale 2.0 | 153 600 Б | 10 | среднее | экономно, но теряется детализация |
+| RGB332 640×480 | 307 200 Б | 19 | плохое | 1 байт/пиксель, грубая палитра 3-3-2 |
+| L8 640×480 | 307 200 Б | 19 | grayscale only | диагностика/маска, не цветной фон |
+| L4 640×480 | 153 600 Б | 10 | grayscale only | 16 уровней, для масок/шрифтов, не цветной фон |
+| L2 640×480 | 76 800 Б | 5 | grayscale only | 4 уровня, для масок; не цветной фон |
+| PALETTED8 640×480 | 308 224 Б | 19+palette | хорошее, если работает | 1 байт index + 1024 Б ARGB8 palette; на Unreal давал серый фон |
+| PALETTED4444 640×480 | 307 712 Б | 19+palette | хорошее, если хватает 256 цветов | 1 байт index + 512 Б ARGB4 palette; это не 4 bpp |
+| PALETTED4444 400×300 + scale 1.6 | 120 512 Б | 8+palette | хорошее для текущего bg | текущая практичная ветка: 400×300 indices + 512 Б palette |
+| pseudo-DXT L2 640×480 | 153 600 Б | 10 | приемлемо, блочность 4×4 | c0 RGB565 160×120 + c1 RGB565 160×120 + L2 mask 640×480 |
+| pseudo-DXT L4 640×480 | 230 400 Б | 15 | почти фото | c0 RGB565 160×120 + c1 RGB565 160×120 + L4 mask 640×480 |
+
+**Важно про pseudo-DXT.** Это не аппаратный формат FT812 и не распаковка в RAM_G.
+Мы храним три обычных bitmap-слоя: две цветовые плоскости `c0/c1` в RGB565 с
+размером 160×120 и полноэкранную маску 640×480. Вариант **L2** использует
+2-битную маску (4 уровня смешивания), вариант **L4** — 4-битную маску
+(16 уровней смешивания). Рендер идёт несколькими проходами через blend.
+
+**Unreal эмулятор НЕ реализует часть palette-formats** — серый фон при попытке.
+На реальном железе ZX-Evo+FT812 PALETTED должен работать по стандарту FT81x, но
+для проекта всё равно нужна проверка на реальном VDAC2.
 
 ### 12.5 Asymmetric downscale (X≠Y)
 
@@ -920,24 +1042,58 @@ bg 640×480 в разных форматах:
 
 Для типичных Zuma backgrounds (rotational symmetry — спираль, swirley) — detail изотропен, симметричный downscale (320×240, 400×300) лучше.
 
-### 12.6 spgbld page-padding gotcha
+### 12.6. Почему нули в конце spgbld-страницы могут затереть соседний ресурс
 
-Каждая spgbld page = 16384 байт. Если data меньше → padding zeros. При upload через циклы `FT.WriteMem 16384` → padding zeros пишутся в RAM_G **после** реальных данных.
+`spgbld` раскладывает данные по страницам TS-Config. Одна страница = 16 384
+байта. Если файл занимает не всю страницу, оставшийся хвост страницы заполняется
+нулями. Это обычное выравнивание страницы.
 
-**Опасность:** если RAM_G layout плотный (data1 immediately followed by data2), padding data1 затирает начало data2. Решения:
-1. Order: data2 ПОСЛЕ data1 (padding идёт после data2 в свободную область).
-2. Gap: ≥16384 байт между блоками.
-3. Точный last-page byte count: передавать `BC = real_size mod 16384` для last page.
+Проблема появляется на этапе загрузки в RAM_G FT812. Если загрузчик каждый раз
+копирует **всю** 16-КБ страницу через `FT.WriteMem 16384`, он отправляет в RAM_G
+не только реальные байты файла, но и эти нули в конце последней страницы. Нули
+пишутся сразу после полезных данных.
 
-См. также Главу 12 (root cause flicker chain 2026-05-09: bg-padding затирал atlas).
+Если следующий ресурс в RAM_G лежит вплотную, хвост из нулей может стереть его
+начало.
 
-### 12.7 Compression: PNG/JPEG
+Пример:
 
-GPU FT812 рендерит **только uncompressed pixel buffer** в RAM_G (нужен random pixel access). PNG/JPEG как source — только для compression в spg-файле:
-- `cmd_loadimage` (coprocessor): JPEG/PNG → uncompressed RAM_G (single-pass decode).
-- `cmd_inflate` (coprocessor): zlib → uncompressed RAM_G.
+```text
+RAM_G:
+#010000..#04A7FF  background, реальные данные
+#04A800..#04FFFF  нули из хвоста последней spgbld-страницы
+#04A800..#05FFFF  следующий ресурс, если положить его вплотную
+```
 
-Это уменьшает spg-file, но НЕ RAM_G. RAM_G всегда хранит uncompressed.
+В таком layout загрузка background'а сотрёт начало следующего ресурса.
+
+Рабочие варианты защиты:
+
+1. Грузить нижний по адресу ресурс первым, а следующий ресурс грузить после него
+   поверх нулевого хвоста.
+2. Оставлять между ресурсами зазор не меньше одной страницы, если загрузчик
+   всегда копирует по 16 КБ.
+3. Для последней страницы передавать в `FT.WriteMem` не 16 384 байта, а реальный
+   остаток файла: `real_size mod 16384`.
+
+См. также §12.8.2: из-за такого нулевого хвоста background затирал начало atlas'а
+шаров.
+
+### 12.7. Сжатие PNG/JPEG: экономит файл, но не RAM_G
+
+FT812 не рисует фон прямо из JPEG/PNG. Перед отрисовкой картинка всё равно должна
+лежать в `RAM_G` уже распакованной, почти как обычный BMP: пиксели подряд в одном
+из форматов FT812 (`RGB565`, `ARGB4`, `PALETTED4444`, `L2`, `L4` и т.д.).
+
+Поэтому маленький JPEG помогает только до момента загрузки:
+
+- в `.SPG` или `.PAK` файл кладём маленький JPEG/PNG/zlib-поток;
+- при загрузке `cmd_loadimage` или `cmd_inflate` распаковывает его в `RAM_G`;
+- после распаковки фон занимает в `RAM_G` полный размер выбранного bitmap-формата.
+
+Пример: JPEG 640×480 может занимать на диске 80 КБ, но после `cmd_loadimage` в
+`RGB565` он займёт в `RAM_G` **614 400 байт**. Сжатие уменьшает размер файла и
+объём чтения с SD, но не уменьшает занятый объём RAM_G после распаковки.
 
 ### 12.8 Финальный выбор для Zuma VDAC2 (level 1 spiral)
 
@@ -954,18 +1110,28 @@ Memory: 240 KB bg + ~310 KB atlas + freedom для дальнейших assets (
 2. **Downscale 640×480 → 400×300** (LANCZOS) на Z80-стороне через Python. **Важно** — LANCZOS, не BICUBIC: на резких границах spirale Zuma BICUBIC ringing artifacts.
 3. **RGB565 LE pack** — каждый пиксель 2 байта `((g>>2 & 7)<<13) | (b>>3) | ... ` little-endian. На FT812 LE — нативный порядок.
 4. **Запись в `.bin` файл** размером 240 000 байт.
-5. **spgbld pack** — `Block = #0000, #07..#15, bg_level01_pNN.bin` (15 pages × 16384 = 245 760 байт, padding 5760 zero-bytes на последней page).
+5. **Сборка страниц через spgbld** — `Block = #0000, #07..#15, bg_level01_pNN.bin`
+   (15 страниц × 16 384 = 245 760 байт; на последней странице 5 760 байт
+   нулевого хвоста).
 6. **Z80 upload-loop** в `Initialize:` ставит page в slot 2, копирует через `FT.WriteMem` 16384 байт за раз в RAM_G начиная с `BG_RAMG_ADDR=#010000`.
 7. **DL render** в `ZL_DrawFrame`: `loadidentity` + `cmd_scale(0x1999A, 0x1999A)` + `setmatrix` + `BITMAP_LAYOUT FT_RGB565, ZL_BG_W*2, ZL_BG_H` (stride 800 байт, height 300) + `BITMAP_SIZE FT_BILINEAR, BORDER, BORDER, 640, 480` + `Begin BITMAPS / Vertex2ii(0,0,1,0) / End`.
 
 ---
 
-### 12.8.2 Bug retro: bg-padding затирает atlas (#0A6000..#0A8000)
+### 12.8.2. Ретро-баг: нулевой хвост background затирал atlas шаров
 
-Эта история относится к §12.6 page-padding gotcha. **Хронология:**
-- bg первый раз грузился ПОСЛЕ atlas. atlas в `#050000..#0A6000` (302 KB старая версия 6×8 frames). bg в `#010000..#04A800` (240 KB).
-- spgbld bg padding = `0A8000 - 04A800 = 5C800` нулей. Они шли в `#04A800..#0A8000`, **затирая первые 8 KB atlas** (`#0A6000..#0A8000`) — это были последние пара cells, рендерились как пустые → flicker chain.
-- Fix: bg грузится **первым**, atlas — вторым. Atlas pages пишут поверх bg-padding в `#0A6000+` свежими данными → atlas цел.
+Эта история относится к §12.6. **Хронология:**
+
+- Background первый раз грузился **после** atlas'а. Atlas лежал в
+  `#050000..#0A6000` (302 КБ, старая версия 6×8 frames), background — в
+  `#010000..#04A800` (240 КБ).
+- Последняя spgbld-страница background'а имела нулевой хвост. При копировании
+  полных 16-КБ страниц эти нули записывались дальше реального background'а и
+  доходили до `#0A8000`.
+- В результате нули затирали первые 8 КБ atlas'а (`#0A6000..#0A8000`). Это были
+  последние несколько cells, они рендерились пустыми, и цепочка шаров мерцала.
+- Fix: background грузится **первым**, atlas — вторым. Atlas pages записывают
+  свежие данные поверх нулевого хвоста background'а, поэтому atlas остаётся целым.
 
 Универсальное правило для FT812-проектов: **порядок upload pages = обратный к RAM_G layout** (старший адрес последним), либо gap ≥16 KB между блоками.
 
@@ -1040,7 +1206,9 @@ Frog_DrawBody:
 
 ### 13.4 Atan2 от курсора → angle
 
-Источник: `c:\z80\zuma\zuma_new_spg.asm:793 ComputeFrogAngle` (TS-Conf версия, скопирован 1:1 в `Frog.asm`). Алгоритм:
+Источник алгоритма — TS-Conf версия `ComputeFrogAngle`, перенесённая в
+[`Source/ASM/Frog.asm`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/Source/ASM/Frog.asm).
+Алгоритм:
 
 1. `dx = SmoothMouseX - FrogX`, `dy = SmoothMouseY - FrogY` (16-bit signed).
 2. **Флаги октанта** (3 бита): `b0=dx<0`, `b1=dy<0`, `b2=swap` (если `|dy|>|dx|`).
@@ -1204,7 +1372,7 @@ overlay (rotation matrix)   — face без лап (HD blink frame 0), маск�
 
 ```
 #010000..#04C000  bg (15 pages, 400×300 RGB565 + scale 1.6 upscale)
-#04C000..#04E000  killzone (1 page real, в bg padding zone)
+#04C000..#04E000  killzone (1 страница, лежит после нулевого хвоста bg)
 #050000..#09C000  balls atlas (19 pages — 6 colors × 8 phases × 56×56 ARGB4)
 #09C000..#0A4000  body 122×122 ARGB4 (2 pages)
 #0A4000..#0AC000  plate 122×122
@@ -1318,7 +1486,7 @@ Visual emulator не симулирует FT812 cmd_translate/rotate/scale 1:1 �
 | 320×240 RGB565 + scale 2× (154 KB) | заметная потеря деталей на детализированной spirale |
 | RGB332 (307 KB) | работает, но 256 цветов + dithering = грязный gradient на воде |
 | PALETTED8 (308 KB + 1 KB palette) | **Unreal эмулятор не поддерживает** — серый экран. На реальном железе должно работать (стандарт FT81x), но без возможности отладки на эмуляторе — не используем. |
-| `cmd_loadimage` JPEG decode | RAM_CMD coprocessor decode 640×480 на загрузку (overhead ~2 сек), нужен `cmd_inflate` для zlib потоков; spg-файл становится меньше, но RAM_G всё равно uncompressed. Не оправдано когда spg ёмкость не критична. |
+| `cmd_loadimage` JPEG | JPEG занимает меньше места в `.SPG`/`.PAK`, но при загрузке распаковывается в обычный bitmap в RAM_G. Для 640×480 RGB565 это всё равно 614 400 байт RAM_G; экономится файл/SD-чтение, а не видеопамять после распаковки. |
 
 **Полученный bg memory layout:**
 
@@ -1326,7 +1494,7 @@ Visual emulator не симулирует FT812 cmd_translate/rotate/scale 1:1 �
 RAM_G:
   #000000..#040FFF  → reserved (DL/FONT/HANDLES area FT812)
   #010000..#04A8FF  → bg_level01 (240 000 bytes RGB565 400×300)
-  #04A900..#04FFFF  → bg padding (~5 KB) + free
+  #04A900..#04FFFF  → нулевой хвост bg (~5 KB) + свободная область
   #050000..#0E4FFF  → balls atlas (602 112 bytes ARGB4 6×16×56×56)
   #0E5000..#0FCFFF  → frog body/plate/tongue (3×30 KB ARGB4 122×122)
   #0FD000..#0FEFFF  → killzone (8 KB)
@@ -1348,9 +1516,9 @@ RAM_G:
    (статика). Баг **остался** → координаты ни при чём.
 2. **Cmd-buffer overflow** — буфер CMD_ADDRESS_PTR=#C000 на 16 КБ, фактически
    используется ~2.5 КБ за кадр. Не близко к лимиту.
-3. **Coprocessor exception** — после exception coprocessor останавливается, всё
+3. **Исключение копроцессора** — после ошибки копроцессор останавливается, всё
    что после игнорируется. Но overlay рендерится ПЕРЕД chain block, и chain
-   рендерится корректно → coprocessor жив.
+   рендерится корректно → копроцессор жив.
 4. **DL пострадал** — снимок Z80 RAM (F12-dump) показал что DL для overlay
    полностью корректный: handle=6, source=#0B4000, ARGB4 244×122 BILINEAR,
    matrix valid, vertex (266, 170) внутри 640×480.
@@ -1481,7 +1649,7 @@ sprite ПОСЛЕ atlas-блока) и привело к Cell.
 
 **Гипотеза 1 — RAM_CMD overflow (4 KB ring).**
 Решение TSLib `FT.Coprocessor.Write` уже опрашивает `REG_CMDB_SPACE` перед каждой
-SPI-записью и ждёт пока coprocessor освободит место. **Overflow невозможен** через
+SPI-записью и ждёт, пока копроцессор освободит место. **Переполнение невозможно** через
 TSLib API. Гипотеза отклонена.
 
 **Гипотеза 2 — RAM_DL overflow (8K commands = 32 KB).**
@@ -1491,7 +1659,7 @@ TSLib API. Гипотеза отклонена.
 красную полоску внизу экрана (диагностика, потом убрана). Отклонено.
 
 **Гипотеза 3 — `cmd_swap` через CMD-FIFO вместо `REG_DLSWAP`.**
-По FT81x документации `cmd_swap` = «coprocessor сам выполнит swap когда DL
+По FT81x документации `cmd_swap` = «копроцессор сам выполнит swap когда DL
 готов». Заменили manual `REG_DLSWAP=FRAME` на `FT_CMD_Swap`. **Программа
 зависла** (deadlock в CMD-FIFO). Откат, гипотеза отклонена.
 
@@ -1569,13 +1737,6 @@ build делается в render time, write строго в vblank.
 Только I/O в FT812 (`FT_CMD_Write`, `FT_WR_REG`) требует vblank window. Поэтому
 правильный sync = «build в любое время, sync прямо перед I/O burst».
 
-### Открытое (TODO для следующей итерации)
-
-- Подтверждение fix mouse-motion artifact на железе. Текущая версия —
-  кандидат на полный fix.
-- Hemisphere insert (target = i vs i+1 по ближайшему neighbour).
-
-
 ## Глава 18. DXT1-эмуляция на FT812: компрессия фона до 0.5 байт/пикс через L2-mask + RGB565 blend (2026-05-12)
 
 ### Задача
@@ -1612,9 +1773,10 @@ FT812 умеет каждый из этих кусков по-отдельнос
 - **Интерполяция между c0 и c1** через индекс → реализуется аппаратным **alpha-blending'ом**:
   L2 пишет alpha канал, c0/c1 рисуются с `DST_ALPHA` / `ONE_MINUS_DST_ALPHA` blend
 
-Это классический трюк из EVE Application Note **AN_340** (DXT1 emulation,
-Bridgetek). Конвертер `ft812_dxt_convert.py` (автор — TS-Labs)
-раскладывает обычный DXT1 в нужный layout.
+Это трюк из книги J. Bowman **The Gameduino 2 Tutorial, Reference and Cookbook**,
+раздел 15.6 DXT1: EVE/Gameduino 2 не поддерживает DXT1 напрямую, но может
+имитировать его несколькими bitmap-pass'ами и blend. Конвертер
+`ft812_dxt_convert.py` (автор — TS-Labs) раскладывает обычный DXT1 в нужный layout.
 
 ### Формат raw файла
 
@@ -1806,25 +1968,22 @@ python ft812_dxt_convert.py level01.png -o out/level01 -f l2 -t raw -e 3 -p
 
 ### Multi-level в Zuma — что меняется
 
-22 уровня × 153 600 = 3.4 МБ DXT1-эмуляции vs 13.5 МБ raw RGB565. Сейчас один
+22 уровня × 153 600 = 3.4 МБ pseudo-DXT L2 vs 13.5 МБ raw RGB565. Сейчас один
 уровень упаковывается в 10 spgbld-страниц по 16 КБ. При переключении уровней
-upload bg = ~150 КБ через SPI ≈ 70 мс на 14 МГц Z80 (вполне допустимая пауза
-при level transition).
+upload bg = 153 600 Б через длинный `OTIR` на 14 МГц Z80 — примерно
+`153600 / (14000000/21)` = **~230 мс** без учёта накладных расходов. Через
+DMA-передачу в SPI будет быстрее, но это отдельный путь и его надо мерить на
+реальном железе.
 
 Объёмы по сравнению с zlib (`cmd_inflate` план):
-- DXT1-эмуляция: 153 КБ uncompressed, ~70 мс upload, hardware decode
-- ZX0/zlib: ~100 КБ compressed → ~150 КБ uncompressed, ~120 мс upload + decode
+- pseudo-DXT L2: 153 600 Б raw upload, ~230 мс через `OTIR` на 14 МГц, без CPU-decode
+- pseudo-DXT L4: 230 400 Б raw upload, ~346 мс через `OTIR` на 14 МГц, без CPU-decode
+- ZX0/zlib: ~100 КБ compressed → ~150 КБ uncompressed, upload меньше, но добавляется decode/inflate
 
-DXT1-эмуляция выигрывает по uncompressed size (тот же объём в SPI transfer),
-проще в реализации (нет decode-кода), и качество фотореалистичных фонов
-визуально приемлемое начиная с `-e 3`.
-
-### Источники
-
-- **EVE Application Note AN_340** (Bridgetek, "Compressing texture using DXT1 with EVE2/EVE3 chipsets") — оригинальная идея трюка.
-- `ft812_dxt_convert.py` — реализация конвертера, автор TS-Labs.
-- `reference_zuma_vdac2_dxt1_emulation_l2_blend.md` — компактная памятка по технике.
-- `feedback_sjasmplus_macro_or_parens.md` — про скобки в FT_CMD_BUF.
+pseudo-DXT выигрывает по объёму уже распакованных данных в RAM_G: мы храним не
+полный RGB565-кадр, а две маленькие цветовые плоскости и полноэкранную маску.
+CPU-decode не нужен; цена переносится в несколько проходов отрисовки FT812.
+Качество фотореалистичных фонов визуально приемлемое начиная с `-e 3`.
 
 ## Глава 19. Апгрейд DXT1-эмуляции с L2 до L4: +50% SPI за фотокачество (2026-05-12)
 
@@ -1899,7 +2058,7 @@ BG_PAGE_COUNT      EQU 15                ; DXT1_L4 640×480 (c0|c1|L4 = 230400, 
 ```
 
 RAM_G layout не меняется: BG занимает `#010000..#04C000` = 245 760 байт
-(230400 реальных + 15 360 padding из последней spgbld-страницы). Killzone
+(230 400 реальных + 15 360 байт нулевого хвоста последней spgbld-страницы). Killzone
 сидит ровно на `#04C000` — без overlap.
 
 #### MainLoop.asm: формат маски и stride
@@ -1967,7 +2126,7 @@ python ft812_dxt_convert.py level_src_01.png -o out -f l4 -t raw -x -p -e 8
 (`out/level_src_01_l4.raw` 230 400 байт) копируются в проект, режутся на
 страницы, собираются.
 
-### Сплит в spgbld pages
+### Разрезание файла на 16-КБ страницы для spgbld
 
 ```python
 # split_l4.py
@@ -2013,14 +2172,6 @@ L4 даёт **2/3 объёма** native RGB565 при визуально нео�
   Если 75% экономии важнее минимальной блочности — берём L2.
 - **L4**: фотореалистичные уровни, фоны с плавными градиентами (наш случай),
   splash-screen с тонкой деталировкой. +50% к L2, но качество скачком вверх.
-
-### Источники
-
-- `ft812_dxt_convert.py` — light версия (1197 строк) после автора;
-  hybrid GPU/CPU pipeline через pyopencl + numpy.
-- `reference_zuma_vdac2_baseline_2026-05-12_bg_dxt_l4.md` — опорный baseline
-  после интеграции.
-- FT81x PG §4.7.7 — таблица `BITMAP_LAYOUT.format` (FT_L1/L2/L4/L8 codes).
 
 ## Глава 20. Render-loop оптимизации и DL-emit ловушки (2026-05-17)
 
@@ -2191,44 +2342,45 @@ alpha в 255. **Visual continuity = 1 px разрыв** вместо discrete ce
 Аналогичный паттерн можно применить к: уменьшению цепи после match-3 cascade,
 выбросу bonus-шаров, любым "цепь сжимается/растягивается" анимациям.
 
-### 20.6 Тоннели: маскирование шаров не лечит срыв строк
+### 20.6 Тоннели: маскирование шаров не лечит бюджет строки
 
 Практический вывод по уровням с тоннелями/top-mask на реальном FT812: попытки
 ускорить такие уровни через маскирование/отсечение шаров не дали рабочего
 результата. Проверялись подходы, где шары под тоннелем не рисуются или
-дополнительно ограничиваются маской/областью отрисовки. На реале это не сняло
-срыв строк.
+дополнительно ограничиваются маской/областью отрисовки. На реале это не дало
+выигрыша по pixel-clock budget строки.
 
 Причина в том, что основной дорогой участок для этих сцен — не только
-overdraw top-mask, а DL-walk и matrix-команды на шарах:
+overdraw top-mask, а широкие bitmap-pass'ы, DL-walk и matrix-команды на шарах:
 
 - `cmd_loadidentity / cmd_translate / cmd_rotate / cmd_setmatrix` раздувают
   поток команд на каждый новый угол;
 - FT812 всё равно должен разобрать DL-состояние и пройти команды матрицы;
-- маскирование пикселей не уменьшает стоимость matrix-emit'а и DL-walk.
+- маскирование пикселей не уменьшает стоимость matrix-emit'а и DL-walk;
+- если маска заменяет красивый alpha-край на жёсткую вырезку, тоннель начинает
+  выглядеть грубо: шар не «уходит под край», а обрубается.
 
-Рабочее правило для текущей версии Zuma VDAC2:
+Что важно: у тоннелей/top-mask был красивый альфа-канал. Упрощённые маски ради
+экономии не только не спасли такты строки, но и ухудшили внешний вид — пропала
+мягкая граница, вырезка стала грубой. Это плохой обмен: качество потеряли, а
+строчный бюджет FT812 не выиграли.
 
-- для любого уровня с тоннелем/top-mask выключать animation spin и per-ball
-  rotation полностью;
-- для двухцепочных уровней без тоннеля применять порог по сумме шаров обеих
-  цепей: при `>=70` total выключать spin/rotation, ниже оставлять грубую
-  квантизацию углов;
+Рабочее правило после перехода к 1024×768@59 и одному дешёвому fullscreen-проходу:
+
+- не лечить тоннели грубым pixel-mask'ом;
+- сохранять alpha-маски там, где они дают красивое перекрытие;
+- выигрывать такты строки через формат/число полноэкранных проходов и группировку
+  матриц, а не через визуальное урезание тоннелей;
+- если строка сыпалась в двух отдельных случаях — на двухцепочных уровнях и на
+  уровнях с тоннелями — не выключать анимацию шаров как workaround, если бюджет
+  строки уже возвращён на уровне фона/режима;
 - pause/dialog не должны рисовать поворот шаров вообще.
 
 Урок: если проблема проявляется как срыв строк на реальном FT812, сначала
-сокращать DL и matrix state changes. Scissor/stencil/mask полезны против
-fillrate/overdraw, но не являются лекарством от перегруженного DL-walk.
-
-### Источники
-
-- `releases/baseline_2026-05-17_killzone_smooth_absorb/` — production-ready
-  baseline после применения всех пяти приёмов.
-- `Source/ASM/MainLoop.asm`:`.BInner` — bucket loop с per-head COLOR_A inject.
-- `Source/ASM/main.asm`:`DrawKillzoneDual`, `VDC_UpdateAbsorb` — Cell-order
-  fix + skip-in-idle + HSub-based absorb.
-- FT81x PG §4.5 — `COLOR_A` opcode + persistent DL state.
-
+проверять не «сколько пикселей шара видно», а **сколько полноэкранных/широких
+bitmap-pass'ов лежит на той же строке и сколько state changes идёт через DL**.
+Scissor/stencil/mask полезны против fillrate/overdraw, но не являются лекарством
+от перегруженного бюджета строки.
 
 ## Глава 21. Per-ball matrix с per-slot hysteresis и grouped emit (2026-05-18)
 
@@ -2550,14 +2702,6 @@ RET
 - Bitmap handle 0 vs 9 (для colors 4-5 split): группировать по color group —
   уже работает (handle меняется только при cell ≥ 128).
 
-### Источники
-
-- `Source/ASM/MainLoop.asm`:`.ChainDraw` / `.PerBallLoop` — финальная реализация.
-- `Source/ASM/VDC.asm`:`VDC_RandomColor` — mul-then-shift fix.
-- `releases/baseline_2026-05-18_pre_per_ball_6_colors/` — pre-change snapshot
-  для отката.
-- FT81x PG §4.7 — BITMAP_TRANSFORM_A..F state, persistent across vertex2f.
-
 ## Глава 22. Расщепление Core на main0 + main1 (slot 1 + slot 3) и невидимая ловушка CMD_ADDRESS_PTR (2026-05-18)
 
 ### 22.1 Проблема: лимит "считать байты Core" 9216
@@ -2671,7 +2815,8 @@ Thunks потребуются позже, когда добавим Title/LevelS
 Дамп с реального железа показал: содержимое #C000 — это **FT812 display
 list команды** (CLEAR_COLOR_RGB, VERTEX_FORMAT, CLEAR), а не main1_play код.
 
-Источник в TSLib: `Docs/TSLib/Include/FT/Coprocessor/Buffer.asm:5-7`:
+Источник в TSLib:
+[`Docs/TSLib/Include/FT/Coprocessor/Buffer.asm`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/Docs/TSLib/Include/FT/Coprocessor/Buffer.asm):
 ```asm
                 ifndef CMD_ADDRESS_PTR
                 define CMD_ADDRESS_PTR #C000
@@ -2746,15 +2891,6 @@ slot 1 (#7FFF) → 8.5 KB запаса, в избытке для 3.5 KB буфе
 Следующий шаг: подключение Dzx7Turbo из TS-Conf проекта для сжатия
 per-level данных (15 страниц bg L4 × 22 уровня = 330 страниц без сжатия,
 с ZX7 ~245 страниц).
-
-### Источники
-
-- `Source/ASM/main.asm` — main0/main1 split + CMD_ADDRESS_PTR override.
-- `Docs/TSLib/Include/FT/Coprocessor/Buffer.asm:5-7` — CMD_ADDRESS_PTR дефолт.
-- `Source/OTHER/zuma_full_z80_emulator.py` — FMADDR_REGS hook + ring buffer + watchpoint.
-- `~/Desktop/Zuma Deluxe/src/ASM/zuma_new_spg.asm` — main0/main1 паттерн в TS-Conf.
-- `releases/v021-2026-05-18-main0-main1-split.spg` — рабочий baseline.
-
 
 ## Глава 23. Экономия RAM_G шаров: путь к PALETTED4444 (v025)
 
@@ -2874,7 +3010,168 @@ FT_BitmapSize FT_NEAREST, FT_BORDER, FT_BORDER, ZL_BALL_W, ZL_BALL_H
 Экономия **192 KB**. 4 точки в коде (chain, bullet, frog hand, frog
 back) используют один FT_PaletteSource per frame.
 
-### 23.7 Урок: «не работает» ≠ «формат не поддерживается»
+### 23.7 Почему atlas шаров разный по уровням: ARGB4 default, PALETTED4444 только L19
+
+Поздний вывод после 1024×768 и тестов на реальном FT812: `PALETTED4444`
+нельзя делать глобальным форматом balls atlas. Это не «лучший» формат, а
+локальный компромисс для уровня L19.
+
+Обычные уровни должны использовать быстрый прямой atlas:
+
+- формат: `ARGB4`;
+- layout: `6 colors × 16 spin phases × 32×32×2 = 192 KB`;
+- cell: `color*16 + spin16`;
+- runtime rotation/matrix остаётся включённым;
+- рендер идёт через один handle без palette lookup.
+
+L19 использует отдельный atlas:
+
+- формат: `PALETTED4444`;
+- layout: `6 colors × 4 baked tangent angles × 8 spin phases × 32×32×1 = 192 KB`;
+- cell: `color*32 + angle4*8 + spin8`;
+- runtime rotation для chain balls отключается, потому что угол уже запечён в atlas;
+- палитра `ARGB4444` лежит отдельно, строго 512 байт.
+
+Почему L19 не может просто использовать такой же baked atlas в `ARGB4`:
+
+```text
+6 цветов × 4 угла × 8 spin × 32×32 × 2 байта = 384 KB
+```
+
+Текущий RAM_G слот шаров — 12 страниц, то есть 192 KB. Поэтому baked-angle
+atlas для L19 в `ARGB4` не помещается. `PALETTED4444` даёт те же 192 cells в
+1 байт/пиксель и укладывает L19 в существующий слот без перекраивания RAM_G.
+
+Но цена `PALETTED4444` — скорость. На FT812 такой texel читается не как прямой
+цвет: сначала выбирается 8-bit индекс из bitmap, затем по индексу читается
+отдельная запись палитры `ARGB4444`, после чего пиксель ещё проходит alpha blend.
+То есть это минимум две выборки на texel плюс смешивание по альфе. По стоимости
+на пиксель это заметно дороже прямого непалитрового bitmap-чтения; по сравнению
+с непрозрачным форматом — тем более. У `ARGB4` тоже есть alpha на краях шара, но
+нет отдельной индирекции через palette.
+
+Именно поэтому глобальный перевод всех уровней на `PALETTED4444` ломает смысл
+оптимизации. На обычных уровнях задача обратная L19: не экономить RAM_G любой
+ценой, а обеспечить максимальную скорость строкового рендера. Особенно опасны
+горизонтальные участки цепи: десятки шаров лежат в одной Y-полосе, пересекают
+одни и те же scanline и частично перекрываются. Стоимость texel lookup
+умножается на overdraw, и серия подряд идущих тяжёлых строк может выбить
+строчный движок FT812 из бюджета. На экране это проявляется как рассинхрон или
+обрыв/срыв отрисовки именно в плотных горизонтальных рядах.
+
+Правило для текущей сборки:
+
+- все уровни кроме L19: `balls_native_*`, `ARGB4`, один проход, максимальная скорость;
+- L19: `balls_l19_pal4444_*`, `PALETTED4444`, baked angles, экономия RAM_G ради отключения runtime rotation;
+- `PALETTED4444` для balls atlas запрещён как глобальный default.
+
+#### 23.7.1 Почему этот этап позже заменили глобальным atlas 50-in-51
+
+Предыдущий вывод был правильным для той экспериментальной развилки: нельзя было
+просто взять старый `PALETTED4444` вариант и сделать его глобальным default.
+Но он не закрывал другой класс проблемы, который проявился позже на реальном
+железе после ускорения Z80: срыв строк на уровнях с тоннелями и большим числом
+шаров.
+
+Сначала естественная гипотеза была такая: виноваты тоннели, их верхние крышки
+или top-mask строки. Ошибка выглядела как проблема tunnel levels, поэтому
+подозрение шло в сторону дополнительного overdraw поверх шаров. Дальнейшие
+проверки эту гипотезу сняли. Разрыв был привязан не к самой крышке тоннеля, а
+к геометрии цепочки: длинный горизонтальный участок кладёт много шаров в одну
+и ту же Y-полосу. Тогда десятки ball sprites пересекают одни и те же scanline,
+и именно эти строки становятся худшим случаем для построчного рендера FT812.
+На диагональных и вертикальных участках те же шары размазаны по большему
+числу строк, поэтому такой пик нагрузки не возникает.
+
+Источник проблемы определяли не по одному признаку, а последовательным
+отсечением вариантов:
+
+1. **Phase/swap проверка.** Был сделан one-frame-late режим: сначала построить
+   кадр, потом дождаться нового `REG_FRAMES`, затем дождаться
+   `REG_DLSWAP == 0`, и только после этого слать `ZL_FT_CMD_Write_DMA` /
+   `FT_CMD_Write`. Если бы это была простая гонка submit/swap, такой режим
+   стабилизировал бы фазу и убрал tearing. На реальном железе он не помог.
+   Значит, причина не в том, что новый кадр отправляется до завершения
+   предыдущего `DLSWAP`.
+
+2. **DMA vs PIO проверка.** Первая грубая замена DMA на обычный `FT_CMD_Write`
+   дала чёрный экран, потому что нарушила gameplay/mid-flush контракт. После
+   этого был сделан корректный PIO sender: та же логика `mid-flush`, те же
+   chunk/reset границы, но payload отправляется CPU/`FT.WriteMem`, без
+   `DMA_RAM_SPI`. Разрыв строк остался. Это сняло версию, что root-cause в
+   TS-Config DMA или в конкретном RAM→SPI транспорте.
+
+3. **HCYCLE как диагностический микроскоп.** Для проверки line-budget увеличили
+   `REG_HCYCLE` с `1344` до `1536` при той же видимой области `1024×768` и том
+   же `PCLK=64 MHz`. Это не меняло display list, атласы, количество шаров,
+   top-mask или алгоритм submit-а; менялась только длина физической строки,
+   то есть число пиксельных тактов, доступных FT812 на одну scanline. На
+   гибком мониторе картинка держалась, а срыв строк ушёл. Это был решающий
+   эксперимент: если увеличение строчного бюджета убирает дефект без изменения
+   DL, значит проблема не в логике тоннелей и не в синхронизации Z80, а в
+   реальном per-line budget FT812 на худших строках.
+
+4. **Локализация по содержимому строки.** После HCYCLE-теста проверили, что
+   top-mask сам по себе не является обязательным условием. Общий знаменатель
+   оставался один: длинная горизонтальная цепочка шаров. Поэтому следующий
+   этап оптимизации был перенесён с "крышек тоннелей" на стоимость вывода
+   одного шара на тяжёлой scanline.
+
+5. **L19-only atlas как A/B тест.** Был сделан локальный эксперимент только для
+   проблемного уровня: `PALETTED4444`, 12 фаз вращения, ячейка `51×51`,
+   вывод в экранном размере без аппаратного масштабирования `32→51`, но с
+   аппаратным поворотом. На реальном FT812 строки перестали рваться. Это
+   подтвердило, что критической частью была не геометрия тоннеля, а старый
+   scaled ball path: маленький atlas-cell масштабировался до экранного шара и
+   создавал слишком дорогой случай на длинной горизонтальной полосе.
+
+После этого стало понятно, почему предыдущий `L19-only` этап надо заменить
+следующим: формат `PALETTED4444` сам по себе не был ответом. Ответом стал
+нативный экранный размер шара, при котором FT812 больше не делает bitmap scale
+для balls. Палитра нужна не "для скорости", а чтобы такой atlas поместился в
+старый RAM_G слот.
+
+Финальный вариант:
+
+```text
+6 цветов × 12 фаз × 51 × 51 × 1 байт = 187 272 байта
+12 страниц RAM_G = 196 608 байт
+palette ARGB4 = 512 байт
+```
+
+Структура atlas:
+
+- формат bitmap: `PALETTED4444`;
+- палитра: `ARGB4`, строго 512 байт;
+- страницы bitmap: `#43..#4E`;
+- страница palette: `#4F`;
+- cell: `color * 12 + spin12`;
+- source phases из HD-цикла 48 фаз: `0, 4, 8, ..., 44`;
+- runtime spin: 12 фаз, без попытки приблизить 48 фаз дробно;
+- draw cell: `51×51`;
+- визуальный шар: `50px` внутри `51×51`;
+- pivot/matrix center: `25.5`;
+- FT812 scale для шаров запрещён: `BITMAP_LAYOUT == BITMAP_SIZE == 51`.
+
+Отдельная мелкая, но важная правка: первый `51×51` вариант убрал tearing, но
+шары резались по сторонам. Причина была геометрическая: source artwork касался
+границ ячейки, и при повороте/ресэмплинге край попадал в border. Увеличить
+cell до `52×52` было бы простым решением, но оно увеличивает окно отрисовки на
+тяжёлой строке и давит на тот самый line-budget, который мы лечим. Поэтому
+выбран `50px` шар внутри `51×51`: прозрачный guard появляется без роста
+draw-window, без новых страниц RAM_G и без возврата аппаратного scale.
+
+Итоговое правило после проверки на железе:
+
+- старый `ARGB4 32px -> 51px scale` путь больше не является безопасным на
+  длинных горизонтальных цепочках;
+- tunnel caps/top-mask не считаются root-cause этого tearing;
+- глобальный balls atlas теперь `PALETTED4444 12 фаз, 50-in-51`;
+- аппаратный поворот остаётся, аппаратное масштабирование шаров не используется;
+- HCYCLE-тест остаётся диагностикой, но не решением: играться `HCYCLE` нельзя,
+  потому что не все мониторы держат нестандартную развёртку.
+
+### 23.8 Урок: «не работает» ≠ «формат не поддерживается»
 
 Из 4-х неудач легко сделать вывод «PALETTED unsupported». Прежде:
 
@@ -2888,15 +3185,6 @@ back) используют один FT_PaletteSource per frame.
 Если 3 пункта проверены и **всё равно** не работает — попробовать
 другой PALETTED-вариант (4444 vs 8 — оказалось решением). На разных
 chip revisions FT812 поведение PALETTED8 / 4444 различается.
-
-### Источники
-
-- `Source/OTHER/make_balls_atlas_paletted.py` — atlas + RGBA8 palette.
-- `Graphics/Converted/balls_palette_argb4.bin` — 512 байт ARGB4 LE.
-- `Source/ASM/{main.asm, MainLoop.asm, Bullet.asm, Frog.asm}` — 4 точки.
-- `releases/v025-2026-05-19-paletted4444-fix.spg` + sources в
-  `_baseline_v025_paletted4444_fix/`.
-
 
 ## Глава 24. Почему отказались от псевдо-DXT фона (2026-05-19)
 
@@ -2912,17 +3200,24 @@ bitmap-проход. Канарейка v028-эпохи (2026-05-19) подтв�
 
 ### Что делал псевдо-DXT (краткое напоминание)
 
-Из Глав 21–22:
-- Фон 640×480 раскладывался на три плоскости в формате DXT1-emulation:
-  - `c0` — RGB565 цвет «низкий» (160×120 пикс, 38 КБ)
-  - `c1` — RGB565 цвет «высокий» (160×120 пикс, 38 КБ)
-  - `mask` — L2 или L4 (2 или 4 бита/пикс, 80×60 или 160×120 пикс)
+Из глав 18–19:
+- Фон 640×480 раскладывался на три плоскости в pseudo-DXT:
+  - `c0` — RGB565 цвет «низкий» для блоков 4×4 (160×120 пикс, 38 400 Б)
+  - `c1` — RGB565 цвет «высокий» для блоков 4×4 (160×120 пикс, 38 400 Б)
+  - `mask` — полноэкранная маска 640×480: L2 = 76 800 Б или L4 = 153 600 Б
 - Display List на каждый кадр:
   1. Begin BITMAPS, source=c0, scale ×4, draw 640×480 full screen
   2. Source=c1, BLEND_FUNC = DST_ALPHA, draw 640×480
   3. Source=mask, sample as alpha mask, draw 640×480
 
 Три полноэкранных прохода. Каждый проход = один bitmap fetch per pixel.
+
+Именно здесь видно правило «считать или хранить». Псевдо-DXT экономил RAM_G:
+вместо полноценного фона хранились endpoints и mask. Но эта экономия покупалась
+ценой трёх проходов по каждой строке. Для FT812 это хуже, чем просто хранить
+больше готовых пикселей: RAM_G занималась меньше, но драгоценные pixel-clock
+такты тратились на двойную/тройную отрисовку одной и той же строки, и строка
+не успевала дорисоваться вовремя.
 
 ### Симптом на реале — «срыв строчной»
 
@@ -3058,15 +3353,6 @@ tearing = **переполнение бюджета строки**, и вино�
 **не убираются** — они заметно улучшают восприятие (решение пользователя).
 Поэтому дальнейшая tearing-оптимизация отложена: режем что угодно, кроме матриц
 шаров и читаемости фона.
-
-### Источники
-
-- Memory: `reference_zuma_vdac2_ft812_line_budget_command_walk` — уточнённая модель: доминирует проход по командам DL (HCYCLE≈832, 16 пикс/такт), ground-truth через RAM_DL.
-- Memory: `reference_zuma_vdac2_eve_emulator_dl_readback` — readback реального RAM_DL через EveApps (см. главу 25).
-- Memory: `reference_zuma_vdac2_baseline_2026-05-19_bg400_killzone88_real_hw_ok` — финальный baseline с 400×300 PALETTED4444 фоном, верифицирован на реале.
-- Чат.txt: `[2026-05-19 22:55] Codex -> BG 400x300 PALETTED4444 nearest upscale canary` — диагностика и переход.
-- Глава 18 (DXT1 L2) + Глава 19 (L4 апгрейд) — описание того что отказались делать.
-
 
 ## Глава 25. Bridgetek EveApps FT812 Emulator — настоящая эмуляция чипа (2026-05-19)
 
@@ -3269,7 +3555,7 @@ EveApps умеет и **interactive mode** — где C код напрямую 
 ### Readback реального RAM_DL — ground-truth аудит Display List (доводка)
 
 Главное, что дал этот эмулятор после первоначальной настройки, — **достоверный
-снимок настоящего Display List**. Наш Z80-код собирает кадр через co-processor
+снимок настоящего Display List**. Наш Z80-код собирает кадр через копроцессор
 (RAM_CMD FIFO); команды FIFO (`cmd_*`) — это НЕ готовый DL: копроцессор сам
 разворачивает их в реальные DL-команды. Поэтому «сколько команд в DL» по нашему
 cmd-потоку посчитать нельзя — нужно прочитать то, что копроцессор реально положил
@@ -3287,21 +3573,28 @@ DL-команды по типам. Так мы впервые увидели р�
 шаров. **Только этот путь** разворачивает FIFO-копроцессорные команды в настоящий
 DL — Unreal x64 и наши Python-эмуляторы этого не делают.
 
-### Что осталось сделать
+### Практический вывод
 
-- ✅ ~~Headless-режим для пакетного прогона~~ — сделано (DL-readback патч,
-  см. выше): эмулятор пишет дампы и выходит без удержания окна.
-- **Авто-скриншот пикселей (PNG)** — сейчас картинку снимаем вручную через
-  PowerShell `CopyFromScreen`; можно добавить `glReadPixels` → PNG в C-код.
-- **Diff-tests** — сравнивать скриншот/дамп DL с эталоном, fail если diff > N.
+EveApps playback нужен не как отдельная ветка разработки, а как проверка того,
+что FT812 действительно увидит после исполнения FIFO копроцессора. Для Zuma VDAC2
+он полезен в двух случаях:
+
+- проверить, во что разворачиваются `CMD_*`-команды и сколько настоящих DL-команд
+  получает кадр;
+- сверить readback `RAM_DL` с ожиданиями, когда Unreal x64 или Python-харнесс
+  показывают правдоподобную, но неполную картину.
+
+Скриншотный diff и автоматический PNG-output не стали частью обязательного
+пайплайна проекта: для этой игры ценность дала именно проверка `RAM_DL` и
+бюджета строки FT812.
 
 ### Ссылки
 
 - Setup guide: `Docs/ft812_emulator_setup_guide.md` (раннее общее планирование)
-- Source: `C:\Users\Администратор\Desktop\EveApps\SampleApp\ZumaPlayback\Src\ZumaPlayback.c`
-- Bundle exporter: `Source/OTHER/export_ft812_bundle.py`
-- Чат.txt: `[2026-05-19 13:42] Codex -> FT812 emulator playback harness ready` — Codex set-up note.
-- Чат.txt: `[2026-05-20 02:40] VDAC2 → VDC: v028 Game Over dialog` — описание bug который эмулятор нашёл.
+- Bridgetek EveApps: <https://github.com/Bridgetek/EveApps>
+- Bundle exporter: `Source/OTHER/export_ft812_bundle.py` в репозитории проекта.
+- [`Чат.txt`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/%D0%A7%D0%B0%D1%82.txt): `[2026-05-19 13:42] Codex -> FT812 emulator playback harness ready` — Codex set-up note.
+- [`Чат.txt`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/%D0%A7%D0%B0%D1%82.txt): `[2026-05-20 02:40] VDAC2 → VDC: v028 Game Over dialog` — описание bug который эмулятор нашёл.
 
 
 ## Глава 26. BITMAP_HANDLE binding ловушка FT812 (2026-05-20)
@@ -3408,7 +3701,7 @@ Unreal x64 эмулирует FT812 как «один глобальный bitma
 
 - v028 baseline: `releases/v028-2026-05-20-game-over-dialog.spg`
 - Memory: `reference_ft812_bitmap_handle_binding`
-- Чат.txt: `[2026-05-20 02:40]` bug section
+- [`Чат.txt`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/%D0%A7%D0%B0%D1%82.txt): `[2026-05-20 02:40]` bug section
 - FT81x Programmers Guide §4.30 BITMAP_HANDLE — описание slot binding (но не явно про порядок emit'а — нашли через эмулятор debugging).
 
 
@@ -3469,7 +3762,7 @@ CMD-цепочка (`LOADIDENTITY → 2x TRANSLATE → ROTATE → SETMATRIX`, 40
 
 Helper `ZL_EmitBallMatrixFromBRAD` (12 LOC) — LDIR 24 bytes из LUT в FT BufferPtr.
 
-Sign convention: эмпирически инвертировано `B=+sin, D=-sin` + C/F пересчитаны как `cx*(1-cos)-cy*sin / cx*sin+cy*(1-cos)`. Совпало с CMD_ROTATE coprocessor output.
+Sign convention: эмпирически инвертировано `B=+sin, D=-sin` + C/F пересчитаны как `cx*(1-cos)-cy*sin / cx*sin+cy*(1-cos)`. Совпало с результатом `CMD_ROTATE` у копроцессора.
 
 Применён в `Frog_DrawBallNow` — шар во рту лягушки крутится синхронно с frog aim.
 
@@ -3554,7 +3847,7 @@ F12 dump → парсер → результат:
 
 **Шаг 2.** Юзер указал на Wild Commander (показывает реальное время в Unreal). Значит RTC в эмуляторе работает. Бага в нашем коде.
 
-**Шаг 3.** Изучил ZiFi source (`C:\Users\Администратор\Desktop\WC\ZiFi\zifi.asm:4206`) — рабочее чтение GLUK:
+**Шаг 3.** Сравнение с рабочим кодом Wild Commander / ZiFi показало порядок чтения GLUK:
 
 ```asm
 write_rtc
@@ -3592,7 +3885,8 @@ BCD → binary: `value = (raw>>4)*10 + (raw&0xF)`.
 
 ### 28.5 Часы в нижней рамке
 
-`DrawDebugClock` в `MainLoop.asm:204`:
+`DrawDebugClock` в
+[`Source/ASM/MainLoop.asm`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/Source/ASM/MainLoop.asm):
 
 ```asm
 DrawDebugClock:
@@ -4541,19 +4835,34 @@ Platform_Init:
 
 Финальный признак правильного состояния: монитор больше не пишет «нет сигнала», на старте нет TS-Config шахматки/мусора, игра доходит до `Game_Init`/`Render_Frame`, а post-build проверка подтверждает RAM_G и DL.
 
-### 34.7. Открыто
+### 34.7. Warm reset и общий SPI latch
 
-Интермиттент «мусор/битый фон» при цикле игра→меню→игра — только на реале, в эмуляторе не воспроизводится. Главный подозреваемый — игнор CRC16 в `sd_zc` (молчаливая порча при глюке чтения на общей шине). Кандидаты на фикс: проверять CRC16 принятого сектора и перечитывать при несовпадении; убедиться, что прерывания отключены на всё время SD-фазы.
+В июне 2026 был real-only баг: после reset игра могла повторно не грузиться, а
+на L18 в конце трека шары иногда не становились в цепочку. Первичная гипотеза
+была про тихую порчу Track V2 page `#0F` и CRC16 SD-сектора, но она не закрывала
+картину полностью: штатные выходы `sd_read_sector` (`sd_csh`) и `FT.ReadMem` /
+`FT.WriteMem` (`FT_OFF`) были балансны.
+
+Подтверждённый root-cause: Z80 warm reset не очищал аппаратный latch
+Z-Controller `SPI_CTRL=#77`. Если reset попадал внутрь активной FT/SD
+транзакции, следующий старт начинался с выбранным устройством на общей шине.
+Эмулятор это не моделировал. Лечение — ранний `SpiBusIdle` перед любым FT/SD
+кодом: `#77=#03`, 16 idle clocks `#57=#FF`, снова `#77=#03` (см. §4.5.1).
+
+После добавления этого шага в `Init_Core` v085 на реальном железе подтвердил:
+повторная загрузка после reset восстановилась, и L18 collision в конце трека
+тоже восстановился. CRC/retry/readback могут оставаться отдельной robustness-
+темой, но не являются root-cause этого reset/L18 бага.
 
 
 ## Глава 35. Рефактор 640×480 → 1024×768: зачем, выигрыш и трудности апскейла ×1.6
 
 > **TL;DR.** Весь проект переведён с нативного 640×480 на 1024×768 — это **апскейл
 > ×1.6, а не HD**: ассеты не перерисовывались, координаты и размеры окон множатся
-> на 8/5, рендер — `NEAREST`. Переход продиктован **архитектурой FT812**, а не
-> монитором: у чипа нет framebuffer'а и глобального скейлера — готового кадра
-> 640×480, который можно одним аппаратным действием растянуть до 1024×768, в этой
-> архитектуре не существует (см. §35.1). Три класса грабель, на которые ушла бо́льшая часть
+> на 8/5, рендер — `NEAREST`. Главная причина перехода — выиграть **такты FT812
+> на строку**: 640×480@74 даёт 832 PCLK на строку, а рабочий 1024×768@59 —
+> 1344 PCLK (+61.5%). Это позволило не отключать анимацию цепочки шаров в двух
+> проблемных случаях: на двухцепочных уровнях и на уровнях с тоннелями. Три класса грабель, на которые ушла бо́льшая часть
 > отладки эпохи: (1) **`CMD_SCALE` с нецелым масштабом запрещён** — копроцессор
 > FT812 хранит *инверсную* матрицу с усечением (1/1.6 → 159/256 вместо 160/256 →
 > дрейф до +6 px), поэтому только **запечённые `BITMAP_TRANSFORM`-слова**
@@ -4561,58 +4870,100 @@ Platform_Init:
 > арифметике** — шорткат `cos·1.25` дал 158/256 и срезал лягушку; (3) **15-битные
 > `VERTEX2F` / 9-битные `VERTEX2II`** переполняются на больших координатах ×1.6.
 
-### 35.1. Зачем переходили — устройство FT812, а не монитор
+### 35.1. Зачем переходили — выиграть такты FT812 на строку
 
-Бытовая версия — «у монитора нативный VGA 1024×768, а 640 растягивался скейлером
-с потерей резкости, поэтому перешли на нативный режим» — **неверна**. Это ложная
-реконструкция: ради одной только чёткости не закладывают недели рефактора.
-Настоящая причина — в том, **как устроен FT812**.
+Причина перехода была практической: к этому моменту тяжёлые уровни подошли к
+пределу **pixel-clock budget строки FT812**. Нужны были дополнительные такты
+FT812 на строку, а не «HD-ремастер» и не замена игровой механики.
 
-FT812 (EVE) — **не framebuffer-GPU и не имеет глобального post-process-скейлера**.
-Он не рисует готовый кадр 640×480 в видеопамять, который потом одним аппаратным
-действием (регистром/скейлером) можно растянуть до 1024×768. Он собирает картинку
-из Display List **прямо во время scanout, построчно** — «готового кадра, который
-лежит и ждёт», в этой архитектуре просто нет. Поэтому схема «оставим игру в
-640×480, а на выводе FT812 сам увеличит весь экран до 1024×768»
-**архитектурно невозможна** — растягивать нечего.
+Срыв строки проявлялся в двух отдельных классах сцен: на уровнях с двумя
+цепочками и на уровнях с тоннелями/top-mask. В 640×480-режиме это уже заставляло
+выбирать: либо сохранять красивую анимацию цепочки шаров, либо
+упрощать/отключать её ради стабильного scanout. Проблема была не в игровой
+логике и не в мониторе, а в том, что FT812 должен успеть пройти нужные
+bitmap-pass'ы и команды Display List в пределах одной строки.
 
-Обходной путь через `CMD_SNAPSHOT2` (снять кадр в bitmap и вывести его
-масштабированным) тоже не годится: он **suspend'ит вывод на каждом кадре** и
-требует большого bitmap'а (~600 КБ RAM_G), а в геймплее RAM_G занят почти до
-конца (#100000).
+Переход на 1024×768@59 дал больше тактов на строку:
 
-Поэтому единственный рабочий путь:
+- 640×480@74: `HCYCLE=832`;
+- 1024×768@59: `HCYCLE=1344`;
+- прирост строки: `1344 - 832 = 512` PCLK, то есть **+61.5%**.
 
-1. Включить **реальный видеорежим 1024×768** (TSLib `VM_1024_768_59Hz`, PCLK 64 МГц).
-2. Оставить **игровую логику в прежнем 640×480-пространстве** — физика, коллизии,
-   скорость цепи не трогаются (см. §35.* про track LUT: позиции выходят в 1024
-   «бесплатно» через регенерацию LUT, без runtime-умножения на кадр).
-3. Перенести масштаб **×8/5 в presentation layer** — на уровень Display List:
-   track LUT, экранные координаты, радиусы, collision-пороги, bitmap-матрицы и UI
-   пересчитываются/масштабируются при выводе.
-4. Коэффициент строго ×1.6 = **8/5**, по возможности compile-time/LUT:
-   runtime-умножения и лишние байты в FIFO копроцессора не бесплатны.
+Именно этот запас был нужен, чтобы не выключать анимацию шаров в двух проблемных
+случаях: на двухцепочных уровнях и на уровнях с тоннелями. Это не HD-ремастер:
+исходные ассеты 640×480-эпохи остаются, а движок рисует их крупнее.
 
-Коротко: **не «1024 потому что монитор», а «1024 потому что на FT812 нет готового
-640-кадра и глобального скейлера — масштаб приходится встраивать в сам Display
-List».**
+Архитектура FT812 важна уже как ограничение реализации апскейла. EVE — не
+framebuffer-GPU и не имеет глобального post-process-скейлера: готового кадра
+640×480, который можно одним регистром растянуть до 1024×768, внутри нет.
+Картинка собирается из Display List во время scanout, построчно. Поэтому масштаб
+пришлось переносить в presentation layer: track LUT, экранные координаты,
+радиусы, collision-пороги, bitmap-матрицы и UI пересчитываются/масштабируются
+при выводе.
 
-Принципиально это **не «ремастер в HD»**, а апскейл: исходные ассеты (640×480-эпохи)
-остаются, а движок рисует их крупнее. Решение пользователя зафиксировано:
-«мы же апскейлим 640×480 в 1024×768, никакого HD» — ассеты не перегенерировать,
-коэффициент строго от оригинала (640·1.6 = 1024, 480·1.6 = 768), а не «от
-фонаря». Множитель **8/5 = 1.6** применяется к экранным координатам и размерам
-окон отрисовки, а UV-размеры битмапов (layout) остаются исходными.
+Коэффициент строго **8/5 = 1.6**: `640×1.6=1024`, `480×1.6=768`. Он применяется
+к экранным координатам и размерам окон отрисовки, а UV-размеры bitmap'ов
+(`BITMAP_LAYOUT`) остаются исходными. Runtime-умножения и лишние байты в FIFO
+копроцессора не бесплатны, поэтому где возможно масштаб запечён compile-time или
+через LUT.
 
 ### 35.2. Что выиграли
 
-- Крупная картинка на большом экране — **единственным способом, который допускает
-  архитектура FT812** (нативный 1024×768 + по-слойный масштаб в Display List),
-  а не неработающим «растянуть готовый 640-кадр».
-- Крупный, читаемый ROM-шрифт и спрайты на большом экране (отдельно поднимали
-  размер шрифта на boot-экране — мелкий ROM-шрифт нечитаем на 1024).
-- Единый множитель 8/5 — масштаб детерминирован, координаты пересчитываются
-  механически, без «подгона на глаз».
+Переход на 1024×768 не был «качественным HD-ремастером» и не был бесплатным
+улучшением. Это рабочий компромисс под реальный FT812:
+
+Формулы для таблицы ниже:
+
+- `HCYCLE = H_FPORCH + H_SYNC + H_BPORCH + H_VISIBLE` — PCLK на строку;
+- `VCYCLE = V_FPORCH + V_SYNC + V_BPORCH + V_VISIBLE` — строк на кадр;
+- `клоков/кадр = HCYCLE × VCYCLE`;
+- для VDAC2/TSLib здесь `PCLK = 8 МГц × F_MUL`.
+
+| Режим TSLib | PCLK | Видимое поле | HCYCLE, клоков/строка | VCYCLE, строк/кадр | Клоков/кадр | Refresh | Строка к 640×480@74 |
+|-------------|------|--------------|------------------------|--------------------|-------------|---------|---------------------|
+| `VM_640_480_57Hz` | 24 МГц | 640×480 | 800 | 524 | 419 200 | 57.25 Гц | 0.96× |
+| `VM_640_480_74Hz` | 32 МГц | 640×480 | 832 | 520 | 432 640 | 73.96 Гц | 1.00× |
+| `VM_640_480_76Hz` | 32 МГц | 640×480 | 800 | 524 | 419 200 | 76.34 Гц | 0.96× |
+| `VM_800_600_60Hz` | 40 МГц | 800×600 | 1056 | 628 | 663 168 | 60.32 Гц | 1.27× |
+| `VM_800_600_69Hz` | 48 МГц | 800×600 | 1040 | 666 | 692 640 | 69.30 Гц | 1.25× |
+| `VM_800_600_85Hz` | 56 МГц | 800×600 | 1048 | 631 | 661 288 | 84.68 Гц | 1.26× |
+| `VM_1024_768_59Hz` | 64 МГц | 1024×768 | 1344 | 806 | 1 083 264 | 59.08 Гц | **1.62×** |
+| `VM_1024_768_67Hz` | 72 МГц | 1024×768 | 1328 | 806 | 1 070 368 | 67.27 Гц | 1.60× |
+| `VM_1024_768_76Hz` | 80 МГц | 1024×768 | 1312 | 800 | 1 049 600 | 76.22 Гц | 1.58× |
+
+Практический вывод: важен не «кадр стал больше», а **строка стала длиннее по
+PCLK**. Для нашего перехода опорное сравнение — `832` против `1344` клоков на
+строку. Клоков на кадр тоже стало больше (`432 640` → `1 083 264`), но tearing
+на реальном FT812 проявлялся именно как переполнение бюджета отдельной строки.
+
+- **Выбран устойчивый режим вывода**: 1024×768@59 с PCLK 64 МГц, а не попытка
+  выжать проблемный 640×480@74. Важен не маркетинговый размер картинки, а то,
+  что конкретный режим держится на реальном VDAC2 и даёт предсказуемый scanout.
+- **Главный выигрыш — такты FT812 на строку.** В 640×480 тяжёлые варианты фона
+  и несколько bitmap-проходов съедали pixel-clock budget строки; строка сыпалась
+  в двух отдельных случаях — на двухцепочных уровнях и на уровнях с тоннелями.
+  Поэтому приходилось думать об отключении/упрощении анимации шаров. В рабочем
+  1024×768@59 фоне используется один дешёвый fullscreen-проход, а остальной
+  бюджет строки остаётся под шары, frog, тоннели и UI. Практический результат:
+  в обоих случаях можно не выключать анимацию шаров ради стабильности вывода.
+- **Игровая математика осталась в 640×480-логике**: физика, траектории,
+  коллизии и проверенные константы не переписывались заново. Масштаб уехал в
+  presentation layer: таблицы трека, координаты вывода, окна bitmap'ов и UI.
+  Это снизило риск сломать уже отлаженный gameplay.
+- **Коэффициент 8/5 полезен только как дисциплина пересчёта**, а не как
+  «выигрыш». Он даёт один понятный способ переносить координаты из старого
+  пространства в новое, но сам по себе создаёт проблемы: нецелый `NEAREST ×1.6`
+  рвёт тонкие детали, `CMD_SCALE ×1.6` даёт дрейф, а окна отрисовки требуют
+  аккуратного `ceil`.
+- **Шрифты не выиграли автоматически.** ROM-шрифты FT812 в нативном 1024×768
+  читаются нормально. Проблема была в верхнем меню игрового процесса: мелкий
+  игровой текст нельзя тянуть через ×1.6. Его заменили на нативный 1024×768
+  font atlas без апскейла, но грузим только реально используемые glyph/строки,
+  чтобы не занимать RAM_G полным набором символов.
+
+Итого: выигрыш — не «стало HD», а то, что проект получил рабочий видеорежим
+1024×768@59 и сохранил уже отлаженную 640×480 игровую модель. Цена — ручная
+дисциплина масштабирования и отдельные решения для тонкой графики.
 
 ### 35.3. Грабля №1: `CMD_SCALE` нецелый — дрейф из-за инверсной матрицы
 
@@ -4638,11 +4989,40 @@ List».**
                 DEFD #1A000000   ; F = 0
 ```
 
-(см. `shared_render.asm:Resident_EmitScale16` / `BootEmitScale16Transforms`).
+(см. [`Source/ASM/shared_render.asm`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/Source/ASM/shared_render.asm)
+`Resident_EmitScale16` и
+[`Source/ASM/loader_resident.asm`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/Source/ASM/loader_resident.asm)
+`BootEmitScale16Transforms`).
 **Целые масштабы инвертируются точно** — `×2.0` → 128/256, `×4.0` → 64/256,
 `×2.56` → 100/256 без потерь, поэтому для логотипа ZX Evolution применён честный
 `NEAREST ×2` запечённым блоком (A=E=128/256, см. `BootEmitScale2xTransforms`).
 Канон: **только запечённые матрицы; нецелый `CMD_SCALE` — никогда.**
+
+### 35.3.1. Нюанс апскейла pseudo-DXT
+
+pseudo-DXT-фон нельзя растянуть как один обычный bitmap. Это три слоя: маска
+`L2`/`L4` 640×480 и две цветовые плоскости `c0`/`c1` RGB565 160×120, где один
+цветовой пиксель описывает блок 4×4.
+
+При выводе в 1024×768 слои должны совпасть попиксельно:
+
+| Слой | Исходный размер | Масштаб вывода | Обратная матрица FT812 |
+|------|----------------:|---------------:|-----------------------:|
+| маска `L2`/`L4` | 640×480 | ×1.6 | `A=E=160/256` |
+| `c0`/`c1` RGB565 | 160×120 | ×6.4 | `A=E=40/256` |
+
+Если применить привычную растяжку одной матрицей или `CMD_SCALE(1.6)`, маска и
+цветовые блоки начинают выбирать разные пиксели. В нашем случае `CMD_SCALE(1.6)`
+давал 159/256 вместо 160/256, а цветовые плоскости шли через 40/256; рассинхрон
+накапливался вправо/вниз и выглядел как шум по фону.
+
+Рабочее правило из
+[`Чат.txt`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/%D0%A7%D0%B0%D1%82.txt)
+и кода
+[`DrawBootDxtBackground`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/Source/ASM/loader_resident.asm):
+маска тянется запечённой матрицей 160/256, `c0`/`c1` — 40/256; маска может быть
+`BILINEAR`, а цветовые плоскости лучше оставить `NEAREST`, чтобы не смешивать
+соседние 4×4-блоки до blend-прохода.
 
 ### 35.4. Грабля №2: точность не только формы, но и арифметики (срез лягушки)
 
@@ -4749,9 +5129,44 @@ upscale — там бар уже считается как `(W·8+4)/5` = ceil-�
   равномерно (каждый пиксель ровно в 2), линии чёткие. Целые масштабы и
   инвертируются точно (см. §35.3), и дублируются равномерно — двойная причина
   предпочесть их для тонкой графики.
-- **ROM-шрифт**: мелкий ROM-шрифт на 1024×768 и так нечитаем, а ×1.6 его ещё и
-  рвёт. На boot-экране размер ROM-шрифта подняли отдельно (решение пользователя:
-  «ROM-шрифты поднять только для экрана загрузки»), вместо апскейла мелкого.
+- **ROM-шрифты**: в нативном 1024×768 они читаются нормально. На boot-экране
+  ROM-шрифты увеличивали отдельно как элемент дизайна загрузочного экрана, а не
+  потому что они сами по себе нечитаемы. Нечитаемым был мелкий текст верхнего
+  меню игрового процесса после неудачного ×1.6; его заменили на нативный
+  1024×768 font atlas без апскейла.
+
+Для начинающего важно различать три варианта:
+
+- **`NEAREST` upscale** — берёт ближайший исходный пиксель. Дёшево по тактам,
+  хорошо для pixel-art и крупных ассетов, не даёт полупрозрачных краёв, но при
+  нецелом масштабе типа ×1.6 неравномерно дублирует пиксели.
+- **`BILINEAR` upscale** — смешивает соседние пиксели, картинка мягче. Но это
+  дороже по pixel-clock budget: для крупных bitmap на FT812 легко получить
+  переполнение строки. На стыках тайлов `BILINEAR+BORDER` даёт чёрную
+  вертикальную линию; это не лечится одной «правильной матрицей», нужен `NEAREST`
+  встык, `REPEAT` с подходящей геометрией или ассет с bleed/gutter.
+- **Native без апскейла** — лучший вариант по сэмплингу: один экранный пиксель
+  читает один исходный. Но он дорог по RAM_G. Полноэкранный 1024×768 RGB565
+  не помещается в 1 MB RAM_G, поэтому native используют только для маленьких
+  элементов или для подмножества ассетов текущей сцены.
+
+Со шрифтами поэтому решение отдельное. Тонкий игровой шрифт не надо тянуть
+через ×1.6: для читаемого текста лучше целый `NEAREST ×2`, либо native-атлас
+без масштабирования. Чтобы не съесть RAM_G, грузится не «весь шрифт на все
+случаи», а компактный набор нужных glyph/строк. В проекте `FONT_NATIVE_RAMG=#098000`,
+`FONT_NATIVE_NUM_PAGES=2`, `FONT_NATIVE_BYTES=30000`; level-select при показе
+названия уровня отдельно вызывает `LoadLevelSelectFontNative` и держит preview
+фон в `LS_PREVIEW_BG_RAMG=#0D4000`, в стороне от resident font.
+
+Ловушка про «затёртый ROM-шрифт» формулируется точнее так: ROM_FONT FT812 лежит
+в ROM-области и сам по себе не стирается. Но `CMD_ROMFONT`, `CMD_SETFONT` и
+`CMD_SETFONT2` привязывают font handle к ROM/custom font, а custom glyph/metrics
+лежат в RAM_G. Если спрайт или preview записать поверх этой RAM_G-области, на
+экране это выглядит как «сломался шрифт». Реальный баг проекта был таким:
+старый `LS_PREVIEW_BG_RAMG=#084000` занимал страницы до `#09C000` и перекрывал
+resident native font `#098000..#0A0000`; `LS_PREVIEW_NAME_RAMG=#0A4200`
+попадал в соседнюю font/asset-зону. Исправление — перенести preview в `#0D4000`,
+перезагружать native font в level-select и проверять RAM_G-карту перед релизом.
 
 Правило: **тонкую графику (шрифты, мелкие спрайты с 1-px элементами) при апскейле
 НЕ гнать нецелым `NEAREST ×1.6`** — либо целый масштаб (×2/×4, равномерное
@@ -4770,15 +5185,6 @@ upscale — там бар уже считается как `(W·8+4)/5` = ceil-�
 - Нецелый `NEAREST ×1.6` рвёт тонкие детали (шрифты, логотип) — целый ×2 или
   нативный кегль.
 - Множитель строго 8/5 от оригинала, ассеты не перегенерировать.
-
-### Источники
-
-- `Source/ASM/shared_render.asm` (`Resident_EmitScale16`, `BootEmitScale16Transforms`,
-  `BootEmitScale2xTransforms`), `Source/ASM/Frog.asm` (`Frog_EmitFrogMatrix`,
-  `Frog_Mul323Sh8`, `FROG_SPR_W`/`FROG_SPR_DRAW`), `loader_resident.asm:DrawLoadingScreen`.
-- Главы 12 (cmd_scale convention), 15.6 (FT81x cmd_scale хранит инверсию) — база, здесь углубление для 1024.
-- `Чат.txt`: записи про матрицы 160/256, 15-битные гранаты, BILINEAR-стык, frog `cos·323/256` (2026-06-12); память `res-1024x768-upscale-refactor`.
-
 
 ## Глава 36. Дисковая подсистема и цикл сборки паков: грабли рассинхрона table↔pack
 
@@ -4909,14 +5315,16 @@ def write_pack(blocks):        # --pack
    последней стадии загрузки» и «обрезанный трек уровня».
 
 **Почему именно код, а не данные, спровоцировал это.** Диагностика шла
-бисектом (методология SOP бинарной отрезки — глава 21/SOP в `Чат.txt`) и
+бисектом (методология SOP бинарной отрезки — глава 21/SOP в
+[`Чат.txt`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/%D0%A7%D0%B0%D1%82.txt)) и
 вскрыла нетривиальный нюанс: **нули сжимаются `zx7` почти до нуля, реальный код —
 нет**. Графические ассеты в проекте проходят через `zx7` (см. главу 30 о
 shared-asset ZX7). Когда меняешь «пустой» хвост — пак почти не растёт. А когда
 дописываешь живой код, который `zx7` не ужимает, бинарь честно пухнет и
 **перепрыгивает секторную границу** — пак вырастает на целый сектор/страницу,
 рассинхронизируя секторную арифметику. Поэтому баг выглядел как ложная
-«регрессия подтяжки»: правка геймплея (подтяжка цепи, §36.7 и записи `Чат.txt`
+«регрессия подтяжки»: правка геймплея (подтяжка цепи, §36.7 и записи
+[`Чат.txt`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/%D0%A7%D0%B0%D1%82.txt)
 за 2026-06-12) внешне «сломала загрузку уровня», хотя физика была ни при чём —
 сломалась *секторная раскладка пака* из-за роста кода.
 
@@ -5040,14 +5448,14 @@ PRELOAD_IDS = [9, 10, 26, 20, 12, 2, 1, 34, 38,
 # GS_SfxPreloadTable: DB id, sector_lo, sector_hi, full_secs, tail_lo, tail_hi
 ```
 
-> ⚠️ **«Звук молчит» (Чат.txt, 2026-06-13 15:30).** `GS_PlaySfx` играет сэмпл,
+> ⚠️ **«Звук молчит» ([`Чат.txt`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/%D0%A7%D0%B0%D1%82.txt), 2026-06-13 15:30).** `GS_PlaySfx` играет сэмпл,
 > только если он **предзагружен** в RAM GS. Не входящие в `PRELOAD_IDS` → handle
 > `#FF` → `GS_PlaySfx` молча выходит (`.done`). Добавили Win/Lose-звуки
 > (earthquake/warning1/pop/chant2/8/14) в код — на реале не слышно, потому что их
 > не было в `PRELOAD_IDS`. **Правило: добавил `CALL GS_PlaySfx` с новым `SND_X` —
 > обязательно внеси `X` в preload-список**, иначе тишина без ошибки.
 
-> ⚠️ **Layout-изоляция роста таблицы (Чат.txt, 2026-06-13).** Рост preload-списка
+> ⚠️ **Layout-изоляция роста таблицы ([`Чат.txt`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/%D0%A7%D0%B0%D1%82.txt), 2026-06-13).** Рост preload-списка
 > 19→25 раздул `sound_pak_size.inc` на +36 байт. Подозрение «win-аутро зависло от
 > сдвига layout» — **отвергнуто**: `GS_SfxPreloadTable` живёт в `ts-dos.asm` →
 > loader-оверлей (page `#40`, запас 4527 байт до `#10000`); win-код — в Core/Main0
@@ -5131,7 +5539,7 @@ PRELOAD_IDS = [9, 10, 26, 20, 12, 2, 1, 34, 38,
 - `Source/ASM/loader_resident.asm` — `VDC_ReadSampleAtHL`, `TRACK_PAGE2`,
   `TRACK_SPLIT_SAMPLE`; `Source/ASM/ts-dos.asm` — `.pageLoop` загрузки `ZUMAMAIN`;
   `Source/ASM/main_pak_table.inc` — авто-генерируемая таблица (207 страниц × 32 сектора).
-- `Чат.txt` — диагностика рассинхрона table↔pack (2026-06-12, вшито в
+- [`Чат.txt`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/%D0%A7%D0%B0%D1%82.txt) — диагностика рассинхрона table↔pack (2026-06-12, вшито в
   `build_wc_img.cmd`), preload-таблица GS (2026-06-13 15:30), layout-изоляция
   +36 байт (2026-06-13).
 
@@ -5233,7 +5641,8 @@ SFX-загрузки.
 Module» и командой включения; на реале её пришлось **увеличить с 20 до 40**
 (`GS_POSTLOAD_SETTLE_OUTER`), чтобы дать GS время. И «добивка хвоста сэмпла
 тишиной `0x80` до границы сектора» (глава 33) — чтобы «добор» GS при любой
-гранулярности FIFO попадал в тишину, а не в мусор. Все три факта — в `Чат.txt`
+гранулярности FIFO попадал в тишину, а не в мусор. Все три факта — в
+[`Чат.txt`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/%D0%A7%D0%B0%D1%82.txt)
 (порядок FIFO vs эталон WC `gsplayer`/PLUGGS.ASM; settle 20→40 перед `MODPLAY`).
 
 ### 37.6. Риск вечного ожидания без фолта
@@ -5251,16 +5660,6 @@ Module» и командой включения; на реале её пришл
 - Тики стрима музыки двигают бут-анимацию — без карты их нет (глава 38).
 - `GS_PlaySfx` без питча; для питча `GS_PlaySfxNote` (C=нота).
 - `WaitFlush` не ловит не-фолтовое вечное «занято» (недоданный `CMD_INFLATE`).
-
-### Источники
-
-- `Source/ASM/ts-dos.asm` (`GS_Detect`, `GS_LoadSfxPackWithTable`, `GS_LoadOneSfxFromPak`,
-  `GS_StreamAudioCacheToDevice`, `GS_StreamProgressTick`, `OVL_GS_InitAndStartMenuMusic`).
-- `loader_resident.asm` (`GS_PlaySfx`, `GS_PlaySfxNote`, `GS_SFX_NOTE=53`, `GS_WAIT_TIMEOUT`).
-- `Source/OTHER/make_sound_pack.py` (`PRELOAD_IDS`, формат `ZSPD`), `VDC.asm` (матч-3 звук),
-  `Sounds/Zuma Sounds VERIFIED.md`, память `sfx-audit`, `Чат.txt` (2026-06-13 preload-ловушка).
-- Глава 33 (введение GS MOD+SFX) — база, здесь практика и ловушки.
-
 
 ## Глава 38. Реал vs эмулятор — углубление: clear-on-read регистры, привязка к опциональным этапам, копроцессор-фолты
 
@@ -5367,18 +5766,6 @@ Z80-харнессы (`profile_dual_chain_perf.py`, `full_stack_trace.py`) вы�
 - FIFO 4 КБ — кадр > 4092 переполняет; size-guard не везде.
 - Харнесс и эмулятор не моделируют clear-on-read/фолты/тайминги.
 
-### Источники
-
-- `Source/ASM/MenuMain.asm` (`MenuSwapFrame` — `.wait_int`/`.wait_swap`),
-  `shared_render.asm` (`DrawBlackTransitionFrame`), `loader_resident.asm`
-  (`BootAnimAdvanceNoGs`, `GS_PlaySfx` таймаут), `ts-dos.asm`
-  (`OVL_GS_LoadGameplaySoundsMaybe`).
-- `Чат.txt`: 2026-06-12 (INT_FLAGS зависание переходов), 2026-06-13 19:35/19:45
-  (no-GS анимация по progress range — решение Codex), 2026-06-13 (preload).
-- Главы 26 (BITMAP_HANDLE «Unreal не видит баг»), 29 (эмулятор сам с багом), 34
-  (SPI/SD/GS/init расхождения) — база, здесь новые классы.
-
-
 ## Глава 39. Подтяжка сегментов цепи в slot-модели: PULL/CATCH-UP, дробный декей, Z80-ловушки
 
 > **TL;DR.** Механика «подтяжки» разорванной цепи снята с референса Zuma HD
@@ -5416,7 +5803,8 @@ Z80-харнессы (`profile_dual_chain_perf.py`, `full_stack_trace.py`) вы�
 ### 39.3. Пять дефектов квантованной модели (рывки)
 
 Модель «шаг −CELL базы + компенсация +CELL в offset + декей offset к нулю»
-квантована, и это дало пять источников рывков (все исправлены, см. `Чат.txt`
+квантована, и это дало пять источников рывков (все исправлены, см.
+[`Чат.txt`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/%D0%A7%D0%B0%D1%82.txt)
 2026-06-12):
 
 1. **Двойной ×2 темпа догона.** `speed_x100/5` в x10-единицах **уже** содержит
@@ -5441,7 +5829,7 @@ Z80-харнессы (`profile_dual_chain_perf.py`, `full_stack_trace.py`) вы�
    прыгал на недотаявшую компенсацию (до 32 px). Фикс — **обнуление offset
    перенесено в финализацию слот→маркер** (`.ac_explode`), когда слот уже невидим.
 
-Шестой, отдельный (`Чат.txt` 2026-06-12 22:53): **rear-comp обязан идти до КОНЦА
+Шестой, отдельный ([`Чат.txt`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/%D0%A7%D0%B0%D1%82.txt) 2026-06-12 22:53): **rear-comp обязан идти до КОНЦА
 цепи, а не до первого маркера.** Удаление слота телепортит `t` каждого слота за
 стыком; ранний выход компенсации на первом маркере оставлял сегменты за вторым
 гэпом с голым +CELL/шаг. В обычной игре дыра почти всегда одна (спавн зашивает
@@ -5493,18 +5881,6 @@ CP n / POP AF / JR C,save`. Это **сломано**: `POP AF` восстана
 - `POP AF` затирает флаги `CP` — не полагаться.
 - win тестировать при `gaugeFull=1`.
 
-### Источники
-
-- `Source/ASM/VDC.asm` (`VDC_AnimateChain` декей-пролог/каденция, `VDC_DoGapStep`,
-  `VDC_GapJunctionUpdate`/`GapRearComp`/`GapRearExists`/`GapMergeCheckRecoil`,
-  `VDC_TrySpawn_NoHsubGate`).
-- `Source/OTHER/test_gap_pull_z80.py` (сценарии A/B/C/D/E/M), `vdc_visual_emulator.py`
-  (зеркало 1:1), `Build/_probe_pull_trace.py`.
-- `Чат.txt`: 2026-06-12 (5 дефектов рывков, PUSH AF/POP AF, frog 323/256),
-  22:53 (rear-comp до конца), 2026-06-13 16:40 (доспавн/win, gaugeFull-гейт);
-  память `plan-gameplay`. Референс — `Zuma-Deluxe-HD-release-v010-ref/BallChain.c`.
-
-
 ## Глава 40. Свод граблей: чек-лист перед коммитом
 
 > **TL;DR.** Сводная памятка по всем классам ловушек, найденным за проект. Каждый
@@ -5532,7 +5908,7 @@ CP n / POP AF / JR C,save`. Это **сломано**: `POP AF` восстана
 - **Persistent DL state**: `Cell`, `BITMAP_HANDLE`, матрица наследуются между
   командами — явно сбрасывать/переустанавливать. → гл. 16, 26.
 
-### 40.2. Display List / co-processor
+### 40.2. Display List / копроцессор
 
 - **`BITMAP_HANDLE` binding**: неверная привязка handle → радужный шум. → гл. 26.
 - **`FT_Scissor` / `Cell` / `ColorA` клобают BC/DE** — координаты грузить ПОСЛЕ
@@ -5546,10 +5922,15 @@ CP n / POP AF / JR C,save`. Это **сломано**: `POP AF` восстана
 
 ### 40.3. SPI-шина (общая GS + SD + FT812)
 
+- **На старте обязательно `SpiBusIdle`**: до `FT_BOOT_UP`/`sd_init` записать
+  `#77=#03`, дать 16 idle clocks `#57=#FF`, снова `#77=#03`. Warm reset Z80 не
+  чистит latch Z-Controller, поэтому FT812/SD могут остаться выбранными после
+  предыдущей транзакции. → гл. 4.5.1, 34.7.
 - Release всех устройств и clock idle между транзакциями (`BootBusOwner`,
   `sd_csh`); FT-рисование (SPI) и GS-стрим (отдельная шина) не должны конфликтовать. → гл. 33, 37.3.
 - **CRC16 в `sd_zc` игнорируется** — риск тихой порчи сектора при глюке чтения на
-  реале (главный подозреваемый интермиттент-мусора). → гл. 34.7.
+  реале; это отдельная robustness-тема, но не root-cause подтверждённого
+  reset/L18 бага v085. → гл. 34.7.
 
 ### 40.4. Сборка паков
 
@@ -5557,8 +5938,9 @@ CP n / POP AF / JR C,save`. Это **сломано**: `POP AF` восстана
   ПРОШЛОЙ сборки → при изменении размера кода рассинхрон (мусорный `lba`,
   обрезанный трек). Лечение — **двойной проход** до фикспойнта (вшит в
   `build_wc_img.cmd`). → гл. 36.
-- **`spgbld` page-padding** затирает соседний RAM_G-регион при недостаточном
-  выравнивании. → гл. 12.6, 12.8.2.
+- **Нулевой хвост последней spgbld-страницы** затирает соседний RAM_G-регион,
+  если ресурсы лежат вплотную и загрузчик всегда копирует полные 16 КБ. → гл.
+  12.6, 12.8.2.
 - **Split Core**: `CMD_ADDRESS_PTR=#C000` молча затирает main1. → гл. 22.5.
 - **Дубль `EQU`** при правках констант → ошибка сборки `Duplicate label`.
 - **Юникод в python-принтах** под cp1251-консолью валит сборку из фонового
@@ -5608,7 +5990,37 @@ CP n / POP AF / JR C,save`. Это **сломано**: `POP AF` восстана
 - **Аппаратные баги (§40.7) харнесс не покажет** — их ловят на реале или анализом
   даташита; харнесс хорош для логики (физика, загрузка, бюджеты).
 
-### Источники
+## Источники и внешние ссылки
 
-- Все главы учебника (12, 16, 17, 20, 22, 26, 29, 33–39), `Чат.txt` (полный лог
-  находок), память проекта (`plan-gameplay`, `sfx-audit`, `res-1024x768-upscale-refactor`).
+Локальные копии лежат в `Docs/`; ссылки ведут на оригиналы.
+
+- **Репозиторий проекта Zuma Deluxe VDAC2/FT812** — исходники ASM, инструменты,
+  графика, пакеры и документация: <https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812>.
+- `VDAC2 #2 - Первые шаги.docx` — русскоязычный учебник #2 (порты ZX-Evo,
+  SPI-обвязка, Z80 asm-функции FT_RD/FT_WR). Железо VDAC2 —
+  [TS-Labs / ZX-Evolution](https://zx.andrew-lazarev.com/our-products/vdac2-videoreview-ru/).
+- `FT81x.pdf` — Bridgetek **FT81X Embedded Video Engine Datasheet**:
+  <https://brtchip.com/wp-content/uploads/Support/Documentation/Datasheets/ICs/EVE/DS_FT81x.pdf>.
+- `FT81X_Series_Programmer_Guide.pdf` — Bridgetek **FT81X Series Programmer Guide**:
+  <https://brtchip.com/wp-content/uploads/Support/Documentation/Programming_Guides/ICs/EVE/FT81X_Series_Programmer_Guide.pdf>.
+- `BRT_AN_033_BT81X-Series-Programming-Guide.pdf` — Bridgetek **BT81X Series
+  Programming Guide**: <https://brtchip.com/wp-content/uploads/2023/12/BT81X-Series-Programming-Guide.pdf>.
+- `AN_303 FT800 Image File Conversion.pdf` — конвертация изображений в FT-форматы
+  (Bridgetek App Notes): <https://brtchip.com/document/application-notes/>.
+- `The_Gameduino_2_Tutorial,_Reference_and_Cookbook` — J. Bowman, 2013; раздел
+  15.6 DXT1 описывает эмуляцию DXT1 через несколько bitmap-pass'ов и blend:
+  <https://excamera.com/files/gd2book_v0.pdf>, исходник книги
+  <https://github.com/jamesbowman/gd2-book>.
+- **TSLib** — asm-библиотека для ZX-Evo + FT812 (DeadlyKom):
+  <https://github.com/DeadlyKom/TSLib>; FT812-SDK для ZX-Evo:
+  <https://hype.retroscene.org/blog/734.html>; общий репозиторий ZX-Evolution:
+  <https://github.com/tslabs/zx-evo>.
+- **TS-Labs / pentevo** — аппаратная база ZX-Evo/TS-Config:
+  <https://github.com/tslabs/zx-evo/tree/master/pentevo>.
+- **Bridgetek EveApps** — официальные демо + эмулятор EVE:
+  <https://github.com/Bridgetek/EveApps>.
+- **Zilog Z80 CPU User Manual**: <https://www.zilog.com/docs/z80/um0080.pdf>.
+- **kosarev/z80** — Z80/i8080 emulator с Python 3 API:
+  <https://github.com/kosarev/z80>.
+- **Zuma-Deluxe-HD release v0.1.0** — референс поведения, координат и ассетов:
+  <https://github.com/GalaxyShad/Zuma-Deluxe-HD/tree/release-v0.1.0>.

@@ -26,6 +26,15 @@ sd_init:
                 call    sd_snb
                 ret
 
+; --- Опциональная проверка CRC16 принятого сектора (по умолчанию ВЫКЛ). ---
+; Карта всегда шлёт data-CRC16; sd_read_sector раньше его игнорировал. При
+; SD_CRC_CHECK=1 считаем CRC16-CCITT над 512 байтами и сверяем; несовпадение →
+; CF=1, и существующий RawPak_ReadOneLogicalIX_Retry перечитывает сектор. Это
+; ловит ТИХУЮ порчу данных (трек #0F на L18 и т.п.), а не только протокольный отказ.
+; ВНИМАНИЕ: включать ТОЛЬКО после проверки в эмуляторе — если его SD-модель шлёт
+; не настоящий CRC16, проверка завалит каждый сектор (3 ретрая → load error).
+SD_CRC_CHECK    EQU 0
+
 ;--- sd_read_sector: прочитать один 512-byte sector
 ;    Вход: HL = LBA (low 16), DE = LBA (high 16) [LBA is 32-bit]
 ;          IX = destination buffer (512 bytes)
@@ -42,11 +51,25 @@ sd_read_sector:
                 call    sd_wait_token
                 jr      c,.err
                 call    sd_reads                ; прочитать 512 bytes -> (HL), HL += 512
+                if SD_CRC_CHECK
+                ; Карта шлёт data-CRC16 (старший байт первым). Захватить и сверить.
+                in      a,(SD_DATA) : ld (sd_rx_crc_hi),a
+                in      a,(SD_DATA) : ld (sd_rx_crc_lo),a
+                push    ix : pop de             ; DE = начало 512-байтного буфера (IX не клобан)
+                call    sd_crc16_512            ; HL = вычисленный CRC16-CCITT
+                ld      a,(sd_rx_crc_hi) : cp h : jr nz,.crc_bad
+                ld      a,(sd_rx_crc_lo) : cp l : jr nz,.crc_bad
+                else
                 in      a,(SD_DATA)             ; CRC16 lo (ignored)
                 in      a,(SD_DATA)             ; CRC16 hi (ignored)
+                endif
                 call    sd_csh
                 or      a                       ; CF=0
                 ret
+                if SD_CRC_CHECK
+.crc_bad        ld      hl,(sd_crc_fail) : inc hl : ld (sd_crc_fail),hl  ; диагностика
+                jr      .err                    ; csh + scf → ретрай перечитает тихо-битый сектор
+                endif
 .err            call    sd_csh
                 scf
                 ret
@@ -198,3 +221,32 @@ sd_lba_in_range:
 sd_lba          ds      4
 sd_blkt         db      0
 sd_lba_max      ds      4               ; верхняя граница LBA тома (PartLba+TotSec32); 0=выключено
+
+                if SD_CRC_CHECK
+;--- CRC16-CCITT (poly #1021, init #0000) над 512 байтами [DE]. Out: HL=CRC.
+;    Битовый вариант; выполняется на ЗАГРУЗКЕ уровня (не покадрово) → цена приемлема.
+;    Клобает AF,BC,DE,HL. (При нужде ускорить — заменить на табличный.)
+sd_crc16_512:
+                ld      hl,0
+                ld      bc,512
+.crcbyte        ld      a,(de)
+                inc     de
+                xor     h
+                ld      h,a
+                push    bc
+                ld      b,8
+.crcbit         add     hl,hl
+                jr      nc,.crcnob
+                ld      a,h : xor #10 : ld h,a
+                ld      a,l : xor #21 : ld l,a
+.crcnob         djnz    .crcbit
+                pop     bc
+                dec     bc
+                ld      a,b : or c
+                jr      nz,.crcbyte
+                ret
+
+sd_rx_crc_hi    db      0
+sd_rx_crc_lo    db      0
+sd_crc_fail     dw      0               ; диагностика: число CRC-несовпадений (для дампа)
+                endif

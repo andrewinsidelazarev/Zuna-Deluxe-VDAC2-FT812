@@ -7,6 +7,28 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from zuma_z80_simulator import ZumaZ80Sim
 
 
+def max_slots(sim):
+    s = sim.sym
+    return s["Core.VDC_Offsets"] - s["Core.VDC_Slots"]
+
+
+def reset_gap_state(sim):
+    s = sim.sym
+    if "Core.VDC_GapAccum" in s:
+        sim.set_byte(s["Core.VDC_GapAccum"], 0)
+        sim.set_byte(s["Core.VDC_GapAccum"] + 1, 0)
+    for name in (
+        "Core.VDC_GapJunction",
+        "Core.VDC_GapDecAcc",
+        "Core.VDC_GapPosLeft",
+    ):
+        if name in s:
+            sim.set_byte(s[name], 0)
+    for name in ("Core.VDC_GapPullVp", "Core.VDC_GapTempo"):
+        if name in s:
+            sim.set_byte(s[name], 1)
+
+
 def clear_state(sim):
     s = sim.sym
     for base_name in (
@@ -17,7 +39,7 @@ def clear_state(sim):
         "Core.VDC_ExplodeMarker",
     ):
         base = s[base_name]
-        for i in range(240):
+        for i in range(max_slots(sim)):
             sim.set_byte(base + i, 0)
 
 
@@ -37,7 +59,7 @@ def setup_pair(sim):
     sim.set_byte(s["Core.VDC_TrackNumSlots"], 85)
     sim.set_byte(s["Core.VDC_TrackNumSlots"] + 1, 0)
     sim.set_byte(s["Core.VDC_ChainFreezeCnt"], 0)
-    sim.set_byte(s["Core.VDC_GapStepCnt"], 0)
+    reset_gap_state(sim)
     sim.set_byte(s["Core.VDC_MatchScanIdx"], 0)
     for name in ("Core.VDC_StatCombos", "Core.VDC_StatMaxCombo",
                  "Core.VDC_StatMaxChain", "Core.VDC_StatChainCount",

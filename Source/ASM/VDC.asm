@@ -25,9 +25,9 @@
 ;
 ; Все функции корраптят AF/BC/DE/HL; VDC_InsertAt also clobbers IX via
 ; VDC_ShiftRight_*.
-; TrackData layout (page 6 в slot 2 #8000):
-;   word LE NumSamples, затем NumSamples * (sword X, sword Y, byte tangent, byte flags),
-;   stride = 6 bytes per sample. flags: bit0=tunnel/no bullet hit, bit1=draw above top layer.
+; Track V2 layout (active pages selected by VDC_pTrackPages):
+;   pure 16K pages of 8-byte samples: Vx, Vy, tangent, flags, padding.
+;   NumSamples is loaded from the track metadata sector into VDC_ActiveTrackSamples.
 ; ============================================================================
 
 VDC_LEVEL_START_BALLS  EQU 35                            ; быстрая фаза: 35 шаров «поездом»
@@ -62,7 +62,7 @@ VDC_LEVEL_CHAIN_CHANCE EQU 50                            ; level setting: 50% ra
 VDC_PULL_ACCEL_X10     EQU 4                              ; BALL_DECC = 0.4
 VDC_PULL_MAX_X10       EQU 100                            ; BALL_MAX_BACK_SPEED = 10
 VDC_PULL_BASE_X10      EQU 10                             ; старт = 1 сэмпл/кадр
-VDC_GAP_ACCUM_STEP     EQU VDC_CELL_SIZE * 10             ; аккум ×10 на один слот
+VDC_GAP_ACCUM_STEP     EQU 256                            ; порог подтяжки: быстрее полного слота×10
 VDC_DM3_OFFSET_GAP_MAX EQU (VDC_CELL_SIZE / 2) + 2        ; разрешить fresh insert half-cell overlap, но блокировать full gap
 VDC_BALLS_TARGET       EQU VDC_MAX_SLOTS                 ; capacity ceiling; runtime spawn gate =
                                                           ; VDC_GaugeFull (level target score) + GameOver.
@@ -213,8 +213,8 @@ VDC_Init:
                 LD   (VDC_RtcNoTickFrames),    A
 
                 ; Запомнить TRACK_NUM_SLOTS (= NumSamples / CELL_SIZE - 1) —
-                ; используется как cap для HSA. NumSamples лежит в TrackData word.
-                LD   HL, (TrackData)                  ; HL = NumSamples
+                ; используется как cap для HSA. NumSamples берётся из Track V2 metadata.
+                LD   HL, (VDC_ActiveTrackSamples)      ; HL = NumSamples
                 LD   A, VDC_CELL_SIZE                 ; A = divisor; без него TrackNumSlots ломается.
                 CALL VDC_DivHLbyA                     ; HL = NumSamples / CELL_SIZE
                 LD   (VDC_TrackNumSlots), HL
@@ -317,7 +317,7 @@ VDC_InitSecondChainMaybe:
                 ; VDC_BallsSpawned и должны независимо пройти полную быструю фазу.
 
                 ; Скопировать freshly reset chain state во второй backing store,
-                ; затем заменить только TrackNumSlots из track page #0F.
+                ; затем заменить только TrackNumSlots из второго Track V2 path.
                 LD   HL, (VDC_pSlots)
                 LD   DE, VDC2_Slots
                 LD   BC, VDC_MAX_SLOTS * 5
@@ -334,7 +334,7 @@ VDC_InitSecondChainMaybe:
                 LDIR
 
                 CALL SetSecondTrackPage
-                LD   HL, (TrackData)
+                LD   HL, (VDC_ActiveTrackSamples)
                 LD   A, VDC_CELL_SIZE
                 CALL VDC_DivHLbyA
                 LD   DE, VDC2_ChainLocal + (VDC_TrackNumSlots - VDC_ChainLocalStart)
@@ -345,7 +345,7 @@ VDC_InitSecondChainMaybe:
                 LD   (DE), A
                 ; LevelStart цепочки 2 НЕ перетираем длиной её трека — она уже
                 ; унаследовала исходный lead-in из клона ChainLocal выше.
-                LD   HL, (TrackData)
+                LD   HL, (VDC_ActiveTrackSamples)
                 DEC  HL
                 CALL VDC_ReadSampleAtHL               ; BC=X, DE=Y on second track
                 PUSH DE
@@ -995,12 +995,12 @@ VDC_SnapshotWinChain:
                 
                 ; 4. Clamp t к NumSamples-1
                 PUSH HL
-                LD   DE, (TrackData)
+                LD   DE, (VDC_ActiveTrackSamples)
                 AND  A
                 SBC  HL, DE
                 POP  HL
                 JR   C, .t_in
-                LD   HL, (TrackData)
+                LD   HL, (VDC_ActiveTrackSamples)
                 DEC  HL
 .t_in:
                 ; 5. Обновляем максимум
@@ -1113,7 +1113,7 @@ VDC_SlotT:
                 RET
 
 ; ============================================================================
-; VDC_SlotPos — для A=i возвращает центр шара (X,Y) из TrackData[t].
+; VDC_SlotPos — для A=i возвращает центр шара (X,Y) из active Track V2 sample[t].
 ;   Out: BC = X (signed word), DE = Y (signed word), CF = 0 если рисуем,
 ;        CF = 1 если skip (gap или t<0).
 ;   AF, HL clobber.
@@ -1146,15 +1146,15 @@ VDC_SlotPosAllowGap:
 .t_nonneg:
                 ; t >= NumSamples → clamp to NumSamples-1
                 PUSH HL
-                LD   DE, (TrackData)                   ; NumSamples
+                LD   DE, (VDC_ActiveTrackSamples)      ; NumSamples
                 AND  A
                 SBC  HL, DE
                 POP  HL
                 JR   C, .t_in
-                LD   HL, (TrackData)
+                LD   HL, (VDC_ActiveTrackSamples)
                 DEC  HL
 .t_in:          ; HL = t (clamped). Читать sample через Core-resident helper:
-                ; там живёт 2-page track split, а этот hot path остаётся маленьким —
+                ; там живёт Track V2 page lookup, а этот hot path остаётся маленьким —
                 ; Main1/slot3 почти заполнен. Core всегда mapped в slot 1, поэтому
                 ; tail-call resolves at runtime. Helper: out BC=X, DE=Y, CF=0,
                 ; sets VDC_LastT / VDC_LastTangent.
@@ -1464,7 +1464,7 @@ VDC_AnimateChain:
                 LD   (VDC_GapPosLeft), A
 .ac_after_decay:
                 ; --- 2. Подтяжка (референс Zuma HD): тип стыка → темп → аккумулятор;
-                ; порог 320 (=слот×10) → DoGapStep. PULL: vp разгоняется 1→10
+                ; порог VDC_GAP_ACCUM_STEP → DoGapStep. PULL: vp разгоняется 1→10
                 ; сэмпл/кадр (+0.4/кадр²); CATCH-UP: темп = скорость цепи (фронт
                 ; «стоит», хвост догоняет); нет гэпов — сброс разгона.
                 CALL VDC_GapJunctionUpdate
@@ -3342,7 +3342,7 @@ VDC_HSA:           DEFB 0
 VDC_ChainFreezeCnt:DEFB 0
 VDC_LoseHoldCnt:   DEFB 0                  ; per-chain pause за два samples до KZ, пока settle завершается
 VDC_GapPullVp:     DEFB VDC_PULL_BASE_X10  ; скорость подтяжки ×10 (per-chain, в swap-блоке)
-VDC_GapAccum:      DEFW 0                  ; аккумулятор подтяжки ×10 (порог 320 = слот)
+VDC_GapAccum:      DEFW 0                  ; аккумулятор подтяжки ×10 (порог VDC_GAP_ACCUM_STEP)
 VDC_GapJunction:   DEFB 0                  ; 0=нет гэпов / 1=PULL / 2=CATCH-UP
 VDC_GapTempo:      DEFB VDC_PULL_BASE_X10  ; темп закрытия ×10 (vp у PULL / скорость цепи у догона)
 VDC_GapDecAcc:     DEFB 0                  ; дробный накопитель декея (остаток 0..9)

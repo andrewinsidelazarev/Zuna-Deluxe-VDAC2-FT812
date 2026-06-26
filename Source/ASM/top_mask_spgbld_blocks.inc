@@ -36,3 +36,6 @@ Block = #0000, #ED, Graphics/levels/Converted/top_masks/top_mask_page_ed.bin
 Block = #0000, #EE, Graphics/levels/Converted/top_masks/top_mask_page_ee.bin
 Block = #0000, #EF, Graphics/levels/Converted/top_masks/top_mask_page_ef.bin
 Block = #0000, #F0, Graphics/levels/Converted/top_masks/top_mask_page_f0.bin
+Block = #0000, #F1, Graphics/levels/Converted/top_masks/top_mask_page_f1.bin
+Block = #0000, #F2, Graphics/levels/Converted/top_masks/top_mask_page_f2.bin
+Block = #0000, #F3, Graphics/levels/Converted/top_masks/top_mask_page_f3.bin

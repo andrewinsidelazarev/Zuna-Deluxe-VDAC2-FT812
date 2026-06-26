@@ -10,8 +10,9 @@ Dump формат:
     addr == offset в файле для зон #4000..#7FFF).
 
 GameLog layout (см. MainLoop.asm EQU секцию):
-    GAMELOG_ADDR     = 0x4480  (2048 bytes, 256 entries × 8 bytes)
-    GAMELOG_IDX_ADDR = 0x4C80  (1 byte, write index 0..255)
+    GAMELOG_ADDR     = 0x4B80
+    GAMELOG_IDX_ADDR = 0x4C80
+    capacity         = (GAMELOG_IDX_ADDR - GAMELOG_ADDR) / 8 entries
 
 Entry формат (8 bytes):
     +0 type    (1 byte)  ; 0=empty, 1=SHOT_FIRED, 2=BBOX_HIT, 3=HEMI, 4=INSERT, 5=CASCADE
@@ -26,8 +27,10 @@ import struct
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-GAMELOG_ADDR     = 0x4480
+GAMELOG_ADDR     = 0x4B80
 GAMELOG_IDX_ADDR = 0x4C80
+ENTRY_SIZE       = 8
+ENTRY_COUNT      = (GAMELOG_IDX_ADDR - GAMELOG_ADDR) // ENTRY_SIZE
 
 EVT_NAMES = {
     1: "SHOT_FIRED",
@@ -46,12 +49,14 @@ def parse_dump(dump_bytes):
     print()
 
     entries = []
-    # Read in order: oldest → newest. Newest is at (idx-1) mod 256.
+    # Read in order: oldest → newest. Newest is at (idx-1) mod ENTRY_COUNT.
     # idx points to next-write = oldest entry currently in buffer.
-    for i in range(256):
-        real_idx = (idx + i) % 256
-        base = GAMELOG_ADDR + real_idx * 8
-        e = dump_bytes[base:base + 8]
+    if idx >= ENTRY_COUNT:
+        idx = 0
+    for i in range(ENTRY_COUNT):
+        real_idx = (idx + i) % ENTRY_COUNT
+        base = GAMELOG_ADDR + real_idx * ENTRY_SIZE
+        e = dump_bytes[base:base + ENTRY_SIZE]
         type_, ctx, frame, _ = e[0], e[1], e[2], e[3]
         d1 = e[4] | (e[5] << 8)
         d2 = e[6] | (e[7] << 8)

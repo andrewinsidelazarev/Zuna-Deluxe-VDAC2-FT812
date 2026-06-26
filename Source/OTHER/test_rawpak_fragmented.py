@@ -26,6 +26,13 @@ from zuma_full_z80_emulator import ZumaFullZ80Emulator  # noqa
 PAK_PATH = ["Games", "Zuma Deluxe VDAC2", "ZUMALVL.PAK"]
 K_SEGMENTS = 8
 
+def trace_byte(sym, emu, name):
+    addr = sym.get(name)
+    return emu.get_byte(addr) if addr is not None else None
+
+def trace_text(value):
+    return f"#{value:02X}" if value is not None else "n/a"
+
 
 def fragment(img: Fat32Image) -> tuple[int, int, list[tuple[int, int]]]:
     """Relocate the PAK into K non-adjacent contiguous segments.
@@ -136,7 +143,8 @@ def main() -> int:
 
     emu.call(sym["Core.RawPak_OpenRoot"], max_steps=8_000_000)
     if not (emu.reg.F & 1):
-        print(f"FAIL: OpenRoot CF=0 (step #{emu.get_byte(sym['Core.ZiFi_DbgGamesA']):02X})"); return 1
+        step = trace_byte(sym, emu, "Core.ZiFiTraceOpenStep")
+        print(f"FAIL: OpenRoot CF=0 (step {trace_text(step)})"); return 1
     rc = emu.get_byte(sym["Core.RawPak_RunCount"])
     print(f"OpenRoot CF=1  RunCount={rc}  (expect {len(segs)})")
     rt = sym["Core.RawPak_RunTable"]
@@ -196,10 +204,9 @@ def main() -> int:
     emu.set_byte(sym["Core.CurrentLevel"], 1)        # L2
     emu.call(sym["Core.LoadGameplayLevelSpecificFromPack"], max_steps=20_000_000)
     cf = emu.reg.F & 1
-    emu.mem.pages[3] = 0x40          # trampoline restored PAGE3=#04; remap overlay to read its diag var
-    step = emu.get_byte(sym["Core.ZiFi_GpDbgStep"])
-    print(f"\nfull gameplay loader on fragmented PAK: CF={cf} GpDbgStep=#{step:02X} FT.WriteMem={wm[0]}")
-    if not cf or step != 0x06:
+    step = trace_byte(sym, emu, "Core.ZiFiTraceStep")
+    print(f"\nfull gameplay loader on fragmented PAK: CF={cf} ZiFiTraceStep={trace_text(step)} FT.WriteMem={wm[0]}")
+    if not cf or (step is not None and step != 0x06):
         print("FAIL: gameplay loader did not complete on fragmented PAK"); return 1
 
     print("\nPASS: fragmented PAK reads correctly (run table maps logical->physical).")

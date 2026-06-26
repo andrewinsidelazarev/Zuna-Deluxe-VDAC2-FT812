@@ -6,9 +6,9 @@ import sys, struct
 
 A = {
     'BOOT_CANARY': 0x5044,
-    'ZiFi_GpDbgStep': 0x6215,
-    'ZiFi_DbgGamesA': 0x621A,      # RawPak open granular step
-    'ZiFi_DbgGamesFound': 0x621B,  # FindInCurrentDir call counter
+    'ZiFiTraceStep': 0x6215,
+    'ZiFiTraceOpenStep': 0x621A,   # RawPak open granular step
+    'ZiFiTraceDirsVisited': 0x621B,  # FindInCurrentDir call counter
     'RawPak_Spc': 0x6633,
     'RawPak_TargetName': 0x6639,   # 64-byte buffer (uppercased name searched)
     'RawPak_FoundAttr': 0x66BA,
@@ -18,11 +18,11 @@ A = {
     'RawPak_RootClus': 0x66C7,
     'RawPak_FileStartClus': 0x66CB,
     'RawPak_CurClus': 0x66CF,
-    'Dbg_DriverState': 0x69C2,     # +0 BPB(64B), +64 dir sector(96B)
+    'TraceDriverState': 0x69C2,    # +0 BPB(64B), +64 dir sector(96B)
     'CurrentLevel': 0x6DC4,
     'ZiFi_LevelTOC': 0x68DE,       # 20-byte loaded TOC entry
-    'ZiFi_GpDbgBgOff': 0x6216,
-    'ZiFi_GpDbgBgSize': 0x6218,
+    'ZiFiTraceBgOff': 0x6216,
+    'ZiFiTraceBgSize': 0x6218,
 }
 
 OPEN_STEP = {
@@ -55,8 +55,8 @@ def main():
     print(f"\nBOOT canary #5044 = {' '.join('%02X'%x for x in d[A['BOOT_CANARY']:A['BOOT_CANARY']+4])} = \"{can}\""
           + ('   <-- Core ran' if can == 'BOOT' else '   <-- MISSING: Core not in slot1 / boot hang'))
 
-    gp = b(A['ZiFi_GpDbgStep']); op = b(A['ZiFi_DbgGamesA']); wk = b(A['ZiFi_DbgGamesFound'])
-    print(f"\nZiFi_GpDbgStep  #6215 = #{gp:02X}  {GP_STEP.get(gp,'?')}")
+    gp = b(A['ZiFiTraceStep']); op = b(A['ZiFiTraceOpenStep']); wk = b(A['ZiFiTraceDirsVisited'])
+    print(f"\nZiFiTraceStep   #6215 = #{gp:02X}  {GP_STEP.get(gp,'?')}")
     print(f"RawPak openStep #621A = #{op:02X}  {OPEN_STEP.get(op,'?')}")
     print(f"FindInDir calls #621B = {wk}  (1=root/GAMES, 2=GAMES/ZUMA, 3=ZUMA/PAK)")
     print(f"CurrentLevel    #6A2A = #{b(A['CurrentLevel']):02X}")
@@ -73,10 +73,10 @@ def main():
                   'track_size','title_off','title_size','prev_off','prev_size')
         print("\n--- ZiFi_LevelTOC (loaded entry for CurrentLevel) ---")
         print('  ' + '  '.join(f'{labels[i]}={w(t+i*2)}' for i in range(10)))
-        print(f"  GpDbgBgOff={w(A['ZiFi_GpDbgBgOff'])}  GpDbgBgSize={w(A['ZiFi_GpDbgBgSize'])}")
+        print(f"  ZiFiTraceBgOff={w(A['ZiFiTraceBgOff'])}  ZiFiTraceBgSize={w(A['ZiFiTraceBgSize'])}")
 
-    base = A['Dbg_DriverState']
-    print("\n--- Dbg_DriverState+0: BPB sector 0 (what CMD17 returned) ---")
+    base = A['TraceDriverState']
+    print("\n--- TraceDriverState+0: BPB sector 0 (what CMD17 returned) ---")
     print('  hex :', ' '.join('%02X'%x for x in d[base:base+32]))
     print('  asc :', asc(base, 32))
     print(f"  OEM           = {d[base+3:base+11]!r}")
@@ -88,7 +88,7 @@ def main():
     print(f"  root cluster  = {dw(base+44)}")
 
     dbase = base + 64
-    print("\n--- Dbg_DriverState+64: directory sector (last dir scanned) ---")
+    print("\n--- TraceDriverState+64: directory sector (last dir scanned) ---")
     print('  hex :', ' '.join('%02X'%x for x in d[dbase:dbase+32]))
     for i in range(3):
         e = dbase + i*32

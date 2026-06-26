@@ -77,7 +77,11 @@ def main() -> int:
         print(f"FAIL palette first diff at #{diff:03X}: got #{actual_pal[diff]:02X}, want #{want_pal[diff]:02X}")
         ok = False
 
-    print(f"ZiFi_GpDbgStep=#{fs.emu.mem.read(fs.sym['Core.ZiFi_GpDbgStep']):02X}")
+    trace_step = fs.sym.get("Core.ZiFiTraceStep")
+    if trace_step is not None:
+        print(f"ZiFiTraceStep=#{fs.emu.mem.read(trace_step):02X}")
+    else:
+        print("ZiFiTraceStep=n/a")
     print(f"CurrentLevel=#{fs.emu.mem.read(fs.sym['Core.CurrentLevel']):02X}")
     print(f"Carry={'set' if fs.emu.reg.F & 0x01 else 'clear'}")
     return 0 if ok else 1

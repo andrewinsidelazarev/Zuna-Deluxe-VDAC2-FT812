@@ -88,11 +88,19 @@ class Harness:
     def _install_fast_step(self) -> None:
         e = self.e
         S = self.S
+        sd_hook_pcs = set(
+            x
+            for x in (
+                S.get(n)
+                for n in ("Core.sd_init", "Core.sd_read_sector")
+            )
+            if x is not None
+        )
         hook_pcs = set(
             x
             for x in (
                 S.get(n)
-                for n in ("Core.sd_init", "Core.sd_read_sector", "FT.Coprocessor.Inflate", "FT.WriteMem")
+                for n in ("FT.Coprocessor.Inflate", "FT.WriteMem")
             )
             if x is not None
         )
@@ -134,6 +142,8 @@ class Harness:
                 e.reg.E = d & 0xFF
                 self._ret_now(0)
                 self.zx7_calls += 1
+                return 0
+            if pc in sd_hook_pcs and e.mem.pages[3] != 0x04 and hook_pc(pc):
                 return 0
             if pc in hook_pcs and hook_pc(pc):
                 return 0
@@ -177,6 +187,11 @@ class Harness:
         self.call("Core.Init_Core")
         self.sb("Core.CurrentLevel", self.level)
         self.call("Core.LoadGameplayAssets")
+        self.e.mem.pages[3] = 0x04
+        if "Core.CurrentCodePage" in self.S:
+            self.sb("Core.CurrentCodePage", 0x04)
+        if "CurrentCodePage" in self.S:
+            self.sb("CurrentCodePage", 0x04)
         self.allow_zx7_hook = False
 
     def run_play_frames(self, frames: int) -> None:

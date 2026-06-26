@@ -18,6 +18,13 @@ from zuma_full_z80_emulator import ZumaFullZ80Emulator  # noqa
 PART_LBA = 2048           # partition starts here (typical)
 SECTOR = 512
 
+def trace_byte(sym, emu, name):
+    addr = sym.get(name)
+    return emu.get_byte(addr) if addr is not None else None
+
+def trace_text(value):
+    return f"#{value:02X}" if value is not None else "n/a"
+
 
 def build_partitioned(superfloppy: bytes) -> bytes:
     mbr = bytearray(512)
@@ -64,7 +71,8 @@ def main() -> int:
 
     emu.call(sym["Core.RawPak_OpenRoot"], max_steps=8_000_000)
     if not (emu.reg.F & 1):
-        print(f"FAIL: OpenRoot CF=0 (step #{emu.get_byte(sym['Core.ZiFi_DbgGamesA']):02X})"); return 1
+        step = trace_byte(sym, emu, "Core.ZiFiTraceOpenStep")
+        print(f"FAIL: OpenRoot CF=0 (step {trace_text(step)})"); return 1
     part = struct.unpack("<I", emu.get_memory(sym["Core.RawPak_PartLba"], 4))[0]
     fatstart = struct.unpack("<I", emu.get_memory(sym["Core.RawPak_FatStart"], 4))[0]
     datastart = struct.unpack("<I", emu.get_memory(sym["Core.RawPak_DataStart"], 4))[0]

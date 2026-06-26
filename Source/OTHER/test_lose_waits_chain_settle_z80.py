@@ -4,7 +4,8 @@
 The test drives Core.VDC_CheckKillzone directly with the head already at the
 kill-zone boundary. ABSORB may start only when the active chain and, on dual
 levels, the inactive chain have no gap markers, destroy frames, pending Shot2,
-or unsettled offsets. While blocked, the head is held two samples before KZ.
+or unsettled offsets. While blocked, the head is held at rem=65, just before
+the kill-zone opening window starts at rem<=64.
 """
 from __future__ import annotations
 
@@ -16,7 +17,9 @@ sys.path.insert(0, str(HERE))
 
 from zuma_z80_simulator import ZumaZ80Sim  # noqa: E402
 
-MAX_SLOTS = 128
+
+def max_slots(sim: ZumaZ80Sim) -> int:
+    return sim.sym["Core.VDC_Offsets"] - sim.sym["Core.VDC_Slots"]
 
 
 def sb(sim: ZumaZ80Sim, name: str, value: int) -> None:
@@ -30,7 +33,7 @@ def sw(sim: ZumaZ80Sim, name: str, value: int) -> None:
 
 def clear_array(sim: ZumaZ80Sim, name: str) -> None:
     base = sim.sym[name]
-    for i in range(MAX_SLOTS):
+    for i in range(max_slots(sim)):
         sim.set_byte(base + i, 0)
 
 
@@ -89,22 +92,30 @@ def run_case(
     expected_state: int,
     expected_hsub: int | None = None,
     expected_hsa: int | None = None,
+    move_after_check: bool = False,
+    expected_freeze: int | None = None,
 ) -> bool:
     sim = make_sim()
     setup(sim)
     state = check_killzone(sim)
+    if move_after_check:
+        sim.call(sim.sym["Core.VDC_MoveChain"], max_steps=5_000_000)
     hsa = sim.get_byte(sim.sym["Core.VDC_HSA"])
     hsub = sim.get_byte(sim.sym["Core.VDC_HSub"])
+    freeze = sim.get_byte(sim.sym["Core.VDC_ChainFreezeCnt"])
     ok = (
         state == expected_state
         and (expected_hsub is None or hsub == expected_hsub)
         and (expected_hsa is None or hsa == expected_hsa)
+        and (expected_freeze is None or freeze == expected_freeze)
     )
     print(
         f"{'PASS' if ok else 'FAIL'}: {name}: "
         f"state={state}, expected={expected_state}; "
         f"hsa={hsa}, expected_hsa={expected_hsa if expected_hsa is not None else '*'}; "
         f"hsub={hsub}, expected_hsub={expected_hsub if expected_hsub is not None else '*'}"
+        f"; freeze={freeze}, expected_freeze={expected_freeze if expected_freeze is not None else '*'}"
+        f"{'; after MoveChain' if move_after_check else ''}"
     )
     return ok
 
@@ -116,56 +127,97 @@ def main() -> int:
             "active destroy frame blocks absorb",
             lambda sim: sim.set_byte(sim.sym["Core.VDC_ExplodeFrame"] + 1, 1),
             0,
-            29,
+            30,
+            8,
         ),
         (
             "active gap marker blocks absorb",
             lambda sim: sim.set_byte(sim.sym["Core.VDC_Slots"] + 1, 0xFE),
             0,
-            29,
+            30,
+            8,
         ),
         (
             "active unsettled offset blocks absorb",
             lambda sim: sim.set_byte(sim.sym["Core.VDC_Offsets"] + 1, 1),
             0,
-            29,
+            30,
+            8,
         ),
         (
             "active pending Shot2 blocks absorb",
             lambda sim: sim.set_byte(sim.sym["Core.VDC_Shot2"] + 1, 1),
             0,
-            29,
+            30,
+            8,
         ),
         (
-            "active destroy frame repositions from one to two samples before KZ",
+            "active destroy frame repositions before KZ opening",
             lambda sim: (
                 sb(sim, "Core.VDC_HSub", 30),
                 sim.set_byte(sim.sym["Core.VDC_ExplodeFrame"] + 1, 1),
             ),
             0,
-            29,
+            30,
+            8,
         ),
         (
-            "active destroy frame wraps two-sample hold at KzEndSub=1",
+            "active destroy frame blocks next move before KZ opening",
+            lambda sim: (
+                sb(sim, "Core.VDC_HSub", 29),
+                sim.set_byte(sim.sym["Core.VDC_ExplodeFrame"] + 1, 1),
+            ),
+            0,
+            30,
+            8,
+            True,
+        ),
+        (
+            "active chain freeze ticks while held before KZ opening",
+            lambda sim: (
+                sb(sim, "Core.VDC_HSub", 29),
+                sb(sim, "Core.VDC_ChainFreezeCnt", 1),
+            ),
+            0,
+            30,
+            8,
+            True,
+            0,
+        ),
+        (
+            "active destroy frame wraps pre-KZ hold at KzEndSub=1",
             lambda sim: (
                 sb(sim, "Core.VDC_KzEndSub", 1),
                 sb(sim, "Core.VDC_HSub", 1),
                 sim.set_byte(sim.sym["Core.VDC_ExplodeFrame"] + 1, 1),
             ),
             0,
-            31,
-            9,
+            0,
+            8,
         ),
         (
-            "active destroy frame wraps two-sample hold at KzEndSub=0",
+            "active destroy frame blocks next wrapped move before KZ",
+            lambda sim: (
+                sb(sim, "Core.VDC_KzEndSub", 1),
+                sb(sim, "Core.VDC_HSA", 9),
+                sb(sim, "Core.VDC_HSub", 31),
+                sim.set_byte(sim.sym["Core.VDC_ExplodeFrame"] + 1, 1),
+            ),
+            0,
+            0,
+            8,
+            True,
+        ),
+        (
+            "active destroy frame wraps pre-KZ hold at KzEndSub=0",
             lambda sim: (
                 sb(sim, "Core.VDC_KzEndSub", 0),
                 sb(sim, "Core.VDC_HSub", 0),
                 sim.set_byte(sim.sym["Core.VDC_ExplodeFrame"] + 1, 1),
             ),
             0,
-            30,
-            9,
+            31,
+            7,
         ),
         (
             "dual inactive destroy frame blocks absorb",
@@ -174,7 +226,20 @@ def main() -> int:
                 sim.set_byte(sim.sym["Core.VDC2_ExplodeFrame"] + 1, 1),
             ),
             0,
-            29,
+            30,
+            8,
+        ),
+        (
+            "dual inactive destroy frame blocks next move before KZ",
+            lambda sim: (
+                sb(sim, "Core.VDC_HasSecondChain", 1),
+                sb(sim, "Core.VDC_HSub", 29),
+                sim.set_byte(sim.sym["Core.VDC2_ExplodeFrame"] + 1, 1),
+            ),
+            0,
+            30,
+            8,
+            True,
         ),
         (
             "dual both ready starts absorb",

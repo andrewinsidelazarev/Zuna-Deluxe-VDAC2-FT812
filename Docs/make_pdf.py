@@ -9,6 +9,7 @@
 Output: uchebnik_tsconf_vdac2.html, uchebnik_tsconf_vdac2.pdf.
 """
 import os
+import re
 import subprocess
 import markdown
 
@@ -224,16 +225,66 @@ strong {
 """
 
 
+_BLOCK_START_RE = re.compile(r'^(?:[-+*]\s+|\d+\.\s+|\|.*\|\s*$)')
+
+
+def _is_fence(line: str) -> bool:
+    stripped = line.lstrip()
+    return stripped.startswith('```') or stripped.startswith('~~~')
+
+
+def _is_block_start(line: str) -> bool:
+    if not line or line[0].isspace():
+        return False
+    return _BLOCK_START_RE.match(line) is not None
+
+
+def _block_kind(line: str) -> str:
+    if line.startswith('|') and line.rstrip().endswith('|'):
+        return 'table'
+    if re.match(r'^\d+\.\s+', line):
+        return 'ordered'
+    if re.match(r'^[-+*]\s+', line):
+        return 'unordered'
+    return ''
+
+
+def normalize_markdown_blocks(md_text: str) -> str:
+    """Make Python-Markdown parse lists/tables that follow prose without a blank line."""
+    out = []
+    in_fence = False
+    prev_nonblank = ''
+
+    for line in md_text.splitlines():
+        if _is_fence(line):
+            in_fence = not in_fence
+
+        if not in_fence and _is_block_start(line) and prev_nonblank:
+            prev_kind = _block_kind(prev_nonblank)
+            curr_kind = _block_kind(line)
+            if prev_kind != curr_kind:
+                out.append('')
+
+        out.append(line)
+        if line.strip():
+            prev_nonblank = line
+        else:
+            prev_nonblank = ''
+
+    return '\n'.join(out) + '\n'
+
+
 def main():
     print(f'Reading {SRC}')
     with open(SRC, 'r', encoding='utf-8') as f:
         md_text = f.read()
+    md_text = normalize_markdown_blocks(md_text)
 
     md = markdown.Markdown(extensions=['fenced_code', 'tables', 'toc', 'codehilite'],
                            extension_configs={
                                'codehilite': {'css_class': 'codehilite',
                                                'guess_lang': False},
-                               'toc': {'title': 'Содержание', 'toc_depth': '2-3'},
+                               'toc': {'title': 'Оглавление', 'toc_depth': '2-3'},
                            })
     body_html = md.convert(md_text)
     toc_html = md.toc
@@ -242,11 +293,11 @@ def main():
     title_html = '''
     <div class="title-page">
         <h1>Zuma VDAC2</h1>
-        <div class="subtitle">Порт под FT812 / 640×480<br>Учебник по разработке</div>
+        <div class="subtitle">Порт под FT812 / 1024×768@59<br>Учебник по разработке</div>
         <div class="meta">
             ZX-Evo · TS-Conf · Z80 · FT81x<br>
-            Сквозной пример: классическая Zuma на нативном железе<br>
-            Версия: baseline v041 (2026-05-26) · 31 глава
+            Сквозной пример: игра класса Zuma на реальном железе<br>
+            FT812 · TS-Config · SD-Card · General Sound
         </div>
     </div>
     '''
@@ -260,15 +311,16 @@ def main():
 </head>
 <body>
 {title_html}
-<h1 style="page-break-before: avoid">Содержание</h1>
+<h1 style="page-break-before: avoid">Оглавление</h1>
 {toc_html}
 {body_html}
 </body>
 </html>
 '''
+    full_html = '\n'.join(line.rstrip() for line in full_html.splitlines()) + '\n'
 
     print(f'Writing {OUT_HTML}')
-    with open(OUT_HTML, 'w', encoding='utf-8') as f:
+    with open(OUT_HTML, 'w', encoding='utf-8', newline='\n') as f:
         f.write(full_html)
 
     # Render PDF via Microsoft Edge headless (Chromium).
@@ -291,7 +343,7 @@ def main():
         file_url,
     ]
     print('  ', ' '.join(cmd))
-    subprocess.run(cmd, check=True, timeout=120)
+    subprocess.run(cmd, check=True, timeout=300)
     print(f'Done. PDF size: {os.path.getsize(OUT_PDF)} bytes')
 
 

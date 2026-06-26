@@ -22,6 +22,8 @@ print = functools.partial(print, flush=True)
 
 GAP_STOP = 0xFE
 CELL = 32
+GAP_ACCUM_STEP = 256
+MAX_VIS_STEP = 10
 
 
 class Rig:
@@ -154,7 +156,7 @@ def main() -> int:
     # глобальным ×2). 2 гэп-слота = 2×GAP_ACCUM_STEP аккума.
     speed = rig.h.gb("Core.VDC_LevelSpeed")
     tempo = speed // 5
-    expected = -(-2 * CELL * 10 // tempo)  # ceil(640/tempo)
+    expected = -(-2 * GAP_ACCUM_STEP // tempo)
     print(f"B: CATCH-UP 2 гэп-слота закрыты за {frames} кадров "
           f"(ожид. ~{expected} при speed={speed}); "
           f"HSA {hsa0}→{hsa1} (ожид. без изменений — фронт стоит)")
@@ -183,7 +185,7 @@ def main() -> int:
         if rig.h.gb("Core.VDC_ChainFreezeCnt") > 0:
             froze = True
     speed = rig.h.gb("Core.VDC_LevelSpeed")
-    expected = -(-2 * CELL * 10 // (speed // 5))
+    expected = -(-2 * GAP_ACCUM_STEP // (speed // 5))
     final_len = rig.h.gb("Core.VDC_SlotsLen")
     hsa_d = rig.h.gb("Core.VDC_HSA")
     print(f"D: 2 концевых маркера убраны за {frames} кадров (ожид. ~{expected}); "
@@ -194,8 +196,9 @@ def main() -> int:
     rig.h.sb("Core.VDC_GaugeFull", 0)
 
     # --- E: НЕСКОЛЬКО гэпов одновременно (зелёная фаза) ----------------------
-    # Инвариант плавности ВСЕХ шаров: ни один не прыгает вперёд (>+3px/кадр) и
-    # не дёргается назад (<-12). Ловит телепорт +32 дальних сегментов
+    # Инвариант плавности ВСЕХ шаров: ни один не прыгает вперёд быстрее
+    # оригинального предела подтяжки (>+10px/кадр) и не дёргается назад (<-12).
+    # Ловит телепорт +32 дальних сегментов
     # (rear-комп обязан идти до КОНЦА цепи, не до первого маркера).
     rig.build_chain([0, 0, GAP_STOP, GAP_STOP, 1, 1, GAP_STOP, 2, 2], hsa=150)
     rig.h.sb("Core.VDC_GaugeFull", 1)
@@ -228,9 +231,9 @@ def main() -> int:
             break
     print(f"E: мультигэп закрыт+дотаял за {frames} кадров; шаров={len(prev)} "
           f"(ожид. 6); дельты всех шаров [{worst_back}..{worst_fwd}] "
-          f"(ожид. в [-12..+3])")
+          f"(ожид. в [-12..+{MAX_VIS_STEP}])")
     ok &= rig.gaps() == 0 and len(prev) == 6
-    ok &= worst_fwd <= 3 and worst_back >= -12
+    ok &= worst_fwd <= MAX_VIS_STEP and worst_back >= -12
     rig.h.sb("Core.VDC_GaugeFull", 0)
 
     # --- M: матч в win-фазе (gaugeFull=1) опустошает цепь корректно ----------

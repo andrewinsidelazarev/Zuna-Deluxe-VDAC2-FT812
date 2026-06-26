@@ -49,7 +49,7 @@ def main() -> None:
     draw_frame = block(ml, "ZL_DrawFrame:", "ZL_DrawActiveChain:")
     bg_end = draw_frame.index("FT_Vertex2ii 0, 0, ZL_BG_HANDLE, 0")
     stars = draw_frame.index("CALL ZL_DrawSpaceStarsMaybe")
-    bitmaps = draw_frame.index("; One bitmap primitive for the remaining bitmap layers.")
+    bitmaps = draw_frame.index("FT_Begin FT_BITMAPS", stars)
     require(bg_end < stars < bitmaps,
             "Space stars must be drawn after background and before gameplay bitmaps")
 
@@ -61,7 +61,7 @@ def main() -> None:
     require("JP   FT.Coprocessor.ColorRGB" in maybe and "LD   E, 255" in maybe,
             "Space starfield must restore white/opaque color state")
 
-    layer = block(ml, "ZL_DrawSpaceStarLayer:", "ZL_ReduceHLMod640:")
+    layer = block(ml, "ZL_DrawSpaceStarLayer:", "ZL_ReduceHLMod1024:")
     require("FT_Begin FT_POINTS" in layer, "Star layer must use FT_POINTS")
     require("FT_End" in layer, "Star layer must close FT_POINTS before returning")
     require("CALL FT.Coprocessor.Vertex2f" in layer, "Star layer must emit vertices")

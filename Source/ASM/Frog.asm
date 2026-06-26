@@ -63,6 +63,7 @@ Frog_Init:        XOR  A
                   LD   (Frog_Angle), A
                   LD   (Frog_RecoilTick), A
                   LD   (Frog_IsFire), A
+                  LD   (Frog_MatrixCacheValid), A
                   LD   (FROG_RTC_MIX_CNT_ADDR), A      ; slot 1 free RAM counter: F12 reset его не чистит
                   LD   (FROG_RTC_MIX_FLAG_ADDR), A     ; pending RTC mix flag
                   DEC  A                                ; A = #FF
@@ -113,14 +114,20 @@ Frog_Update:      LD   A, (ZL_MouseMoved)
                   JR   NZ, .fu_skip_refilter
                   CALL Frog_RefilterCurrent
 .fu_skip_refilter:
+                  CALL Frog_HandleKeyboardFire
                   CALL Frog_HandleMouse
                   JP   Frog_TickRecoil
 
 
-; ----------------------------------------------------------------------------
-; Frog_ComputeAngle — Frog_Angle = atan2(SmoothY-PosStartY, SmoothX-PosStartX).
-; 8-октантная схема + AtanTable[129] + hybrid slow/fast follow.
-; ----------------------------------------------------------------------------
+Frog_HandleKeyboardFire:
+                  CALL Input_FireKey
+                  JR   NZ, .fhk_pressed
+                  XOR  A
+                  LD   (Frog_KeySpacePrev), A
+                  RET
+.fhk_pressed:    JP   Frog_FireKeyboard
+
+
 ; Frog_FireKeyboard — keyboard path для fire; основная ЛКМ-ветка ниже.
 Frog_FireKeyboard:
                   LD   A, (Frog_KeySpacePrev)
@@ -371,8 +378,7 @@ Frog_Mul8x8u:     LD   A, D
 ; Frog_DrawPlate — handle 4, без rotation, на текущем pos с recoil offset.
 ; Ставит scale-only matrix для ×1.6 и выводит plate под body.
 ; ----------------------------------------------------------------------------
-Frog_DrawPlate:   XOR  A
-                  CALL Frog_EmitFrogMatrix              ; scale-only matrix (угол 0 = без вращения) для ×1.6
+Frog_DrawPlate:   CALL Frog_EmitFrogPlateMatrix          ; scale-only matrix (угол 0 = без вращения) для ×1.6
                   FT_BitmapHandle 4
                   if !FROG_ARGB4_ENABLED
                   FT_PaletteSource PLATE_PALETTE_RAMG
@@ -522,6 +528,21 @@ Frog_DrawFaceOverlay:
 
 
 ; ----------------------------------------------------------------------------
+; Frog_EmitFrogPlateMatrix — статический angle=0 block для тарелки. Не трогает
+; rotate-cache тела, чтобы plate не сбивала hit на body/tongue/overlay.
+; ----------------------------------------------------------------------------
+Frog_EmitFrogPlateMatrix:
+                  LD   HL, Frog_PlateMatrixBlock
+                  JP   Frog_EmitMatrixBlock
+
+Frog_PlateMatrixBlock:
+                  DEFD #150000A0                        ; A = 160/256
+                  DEFD #16000000                        ; B = 0
+                  DEFD #17FFFFFB                        ; C = 15616 - 127*123 = -5
+                  DEFD #18000000                        ; D = 0
+                  DEFD #190000A0                        ; E = 160/256
+                  DEFD #1AFFFFFB                        ; F = -5
+
 ; Frog_EmitFrogMatrix — эмитит ЗАПЕЧЁННУЮ BITMAP_TRANSFORM A..F (scale 0.6256
 ; + rotate вокруг центра, pivot 61). cmd_scale НЕ компонуется в цепочке
 ; translate+scale+rotate (cyan-кайма), поэтому матрицу строим напрямую как ball
@@ -531,6 +552,19 @@ Frog_DrawFaceOverlay:
 ;   In: A = angle BRAD, вызывающий уже добавил face-offset.
 ; ----------------------------------------------------------------------------
 Frog_EmitFrogMatrix:
+                  LD   C, A
+                  LD   A, (Frog_MatrixCacheValid)
+                  OR   A
+                  JR   Z, .miss
+                  LD   A, (Frog_MatrixCacheAngle)
+                  CP   C
+                  JR   Z, Frog_EmitCachedFrogMatrix
+.miss:            LD   A, 1
+                  LD   (Frog_MatrixCacheValid), A
+                  LD   A, C
+                  LD   (Frog_MatrixCacheAngle), A
+                  LD   HL, Frog_MatrixCacheBuf
+                  LD   (Frog_MatrixCacheWPtr), HL
                   LD   (Frog_TmpRotByte), A
                   CALL Frog_LookupSin                  ; sin127, signed 256-entry table
                   LD   (Frog_TmpSin), A
@@ -543,13 +577,13 @@ Frog_EmitFrogMatrix:
                   CALL Frog_Mul323Sh8                  ; HL = scaled cos
                   LD   (Frog_TmpAE), HL
                   LD   A, #15
-                  CALL Frog_EmitX17
+                  CALL Frog_StoreX17
                   ; B (op #16) = (sin·323)>>8
                   LD   A, (Frog_TmpSin)
                   CALL Frog_Mul323Sh8
                   LD   (Frog_TmpB), HL
                   LD   A, #16
-                  CALL Frog_EmitX17
+                  CALL Frog_StoreX17
                   ; C (op #17) = 15616 - (cos+sin)·123
                   LD   A, (Frog_TmpSin)
                   CALL Frog_SignExtendA_HL
@@ -558,18 +592,18 @@ Frog_EmitFrogMatrix:
                   CALL Frog_SignExtendA_HL             ; HL = cos
                   ADD  HL, DE                          ; HL = cos+sin
                   LD   A, #17
-                  CALL Frog_EmitCF
+                  CALL Frog_StoreCF
                   ; D (op #18) = -B
                   LD   HL, (Frog_TmpB)
                   LD   A, L : CPL : LD L, A
                   LD   A, H : CPL : LD H, A
                   INC  HL                              ; HL = -B
                   LD   A, #18
-                  CALL Frog_EmitX17
+                  CALL Frog_StoreX17
                   ; E (op #19) = A
                   LD   HL, (Frog_TmpAE)
                   LD   A, #19
-                  CALL Frog_EmitX17
+                  CALL Frog_StoreX17
                   ; F (op #1A) = 15616 - (cos-sin)·123
                   LD   A, (Frog_TmpSin)
                   CALL Frog_SignExtendA_HL
@@ -579,7 +613,16 @@ Frog_EmitFrogMatrix:
                   AND  A
                   SBC  HL, DE                          ; HL = cos-sin
                   LD   A, #1A
-                  JP   Frog_EmitCF
+                  CALL Frog_StoreCF
+Frog_EmitCachedFrogMatrix:
+                  LD   HL, Frog_MatrixCacheBuf
+
+Frog_EmitMatrixBlock:
+                  LD   DE, (FT.Coprocessor.BufferPtr)
+                  LD   BC, 24
+                  LDIR
+                  LD   (FT.Coprocessor.BufferPtr), DE
+                  RET
 
 ; Frog_Mul323Sh8 — In A=signed(-127..127), Out HL=signed A·323/256 (точно).
 ; 323/256 = 1.2617 ≈ 160/127: при cos=127 даёт РОВНО 160 (канон 1/1.6 = 160/256).
@@ -607,24 +650,35 @@ Frog_Mul323Sh8:   LD   C, A                            ; C = исходное si
                   LD   H, A                            ; HL = -magnitude
                   RET
 
-; Frog_EmitX17 — In A=opcode, HL=signed value → append (op<<24)|(val&0x1FFFF).
-Frog_EmitX17:     LD   B, A
+; Frog_StoreX17 — In A=opcode, HL=signed value → cache (op<<24)|(val&0x1FFFF).
+Frog_StoreX17:    LD   B, A
                   LD   C, 0
-                  BIT  7, H : JR Z, .x17p
-                  LD   C, 1                            ; bit16 = sign
-.x17p:            EX   DE, HL                          ; DE = value low16
-                  JP   FT.Coprocessor.Command_BCDE
+                  BIT  7, H : JR Z, .sx17p
+                  LD   C, 1
+.sx17p:           EX   DE, HL                          ; DE = value low16
+                  JP   Frog_StoreMatrixWord
 
-; Frog_EmitCF — In A=opcode, HL=(cos±sin) signed → C24 = 15616 - HL·123, append.
-Frog_EmitCF:      LD   (Frog_TmpOp), A
+; Frog_StoreCF — In A=opcode, HL=(cos±sin) signed.
+; Stores C/F = 15616 - HL*123 as op<<24 | signed24.
+Frog_StoreCF:     LD   (Frog_TmpOp), A
                   CALL Frog_Mul123                     ; HL = HL·123
                   LD   A, H : ADD A, A : SBC A, A      ; A = sign byte of HL (0x00/0xFF)
                   LD   B, A                            ; B = sext byte
                   XOR  A : SUB L : LD E, A             ; byte0 = 0-L, CF=borrow0
                   LD   A, #3D : SBC A, H : LD D, A     ; byte1 = 0x3D - H - borrow0
                   LD   A, #00 : SBC A, B : LD C, A     ; byte2 = 0 - sext - borrow1
-                  LD   A, (Frog_TmpOp) : LD B, A       ; B = opcode
-                  JP   FT.Coprocessor.Command_BCDE     ; word = op<<24 | byte2<<16 | byte1<<8 | byte0
+                  LD   A, (Frog_TmpOp) : LD B, A
+                  JP   Frog_StoreMatrixWord
+
+; Frog_StoreMatrixWord — In BCDE = command word, appends to Frog_MatrixCacheWPtr.
+Frog_StoreMatrixWord:
+                  LD   HL, (Frog_MatrixCacheWPtr)
+                  LD   (HL), E : INC HL
+                  LD   (HL), D : INC HL
+                  LD   (HL), C : INC HL
+                  LD   (HL), B : INC HL
+                  LD   (Frog_MatrixCacheWPtr), HL
+                  RET
 
 ; Frog_Mul123 — In HL=signed, Out HL=HL·123 (= 128·HL - 5·HL).
 Frog_Mul123:      LD   D, H : LD E, L                  ; DE = x
@@ -662,8 +716,9 @@ Frog_EmitVertex2f_PosCentered:
 
 
 ; ----------------------------------------------------------------------------
-; Frog_DrawBallNow — handle 0 (chain atlas), при pos + ballExpand·dir.
-; ballExpand = 24 idle, при выстреле 0 → восстанавливается.  Cell = ballColor*16.
+; Frog_DrawBallNow — chain atlas, при pos + ballExpand·dir.
+; ballExpand = 24 idle, при выстреле 0 → восстанавливается.
+; L19 PALETTED atlas: cell = color*12, hardware rotation matrix.
 ; ----------------------------------------------------------------------------
 Frog_DrawBallNow:
                   ; offsetX = (cos · ballExpand) / 128
@@ -694,32 +749,13 @@ Frog_DrawBallNow:
                   LD   A, (Frog_Angle)
                   CALL ZL_EmitBallMatrixFromBRAD
 
-                  ; Balls atlas: ARGB4 canary использует один 16-phase handle;
-                  ; baseline PALETTED4444 использует dual handle.
-                  if BALLS_ARGB4_ENABLED
-                  XOR  A
-                  else
                   LD   A, (Frog_BallColor)
-                  CP   4
-                  LD   A, 0
-                  JR   C, .fbm_h
-                  LD   A, 9
-                  endif
+                  CALL ZL_BallHandleFromColor
 .fbm_h:           CALL ZL_EmitBallHandle
-                  if BALLS_ARGB4_ENABLED
-                  FT_BitmapLayout FT_ARGB4, FROG_BALL_W * 2, FROG_BALL_W
-                  else
-                  FT_PaletteSource BALLS_PALETTE_RAMG
-                  FT_BitmapLayout FT_PALETTED4444, FROG_BALL_W, FROG_BALL_W
-                  endif
+                  CALL ZL_EmitBallLayoutCurrent
                   FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, FROG_BALL_DST_W, FROG_BALL_DST_W
                   LD   A, (Frog_BallColor)
-                  if BALLS_ARGB4_ENABLED
-                  ADD  A, A : ADD A, A : ADD A, A : ADD A, A              ; *16 = local cell
-                  else
-                  AND  3
-                  ADD  A, A : ADD A, A : ADD A, A : ADD A, A : ADD A, A    ; *32 = local cell
-                  endif
+                  CALL ZL_BallNeutralCellFromColor
                   CALL FT.Coprocessor.Cell
                   CALL Frog_EmitVertex2f_Tmp_BallCentred
                   ; (reset матрицы убран: следующий слой ставит свою; экономит Main1)
@@ -727,7 +763,7 @@ Frog_DrawBallNow:
 
 
 ; ----------------------------------------------------------------------------
-; Frog_DrawNextBall — handle 0, на спине frog: pos - 39·dir.
+; Frog_DrawNextBall — current balls atlas, на спине frog: pos - 39·dir.
 ; Dark-spot в native body на (61,22) = 39 px над centre; после rotation
 ; он оказывается в -dir, то есть на screen-спине лягушки.
 ; ----------------------------------------------------------------------------
@@ -757,35 +793,15 @@ Frog_DrawNextBall:
                   ADD  HL, DE
                   LD   (Frog_TmpY), HL
 
-                  ; 1024×768: своя scale(1.6)-матрица — без неё next ball наследует
-                  ; scale+rotate матрицу языка (pivot 61) и рисуется криво/мелко.
-                  CALL ZL_EmitScale16Matrix
-                  ; Balls atlas: ARGB4 canary использует один 16-phase handle;
-                  ; baseline PALETTED4444 использует dual handle.
-                  if BALLS_ARGB4_ENABLED
-                  XOR  A
-                  else
+                  ; 1024×768: normal atlas needs scale(1.6); L19 native 51px uses identity.
+                  CALL ZL_EmitBallStaticMatrixCurrent
                   LD   A, (Frog_NextBallColor)
-                  CP   4
-                  LD   A, 0
-                  JR   C, .fbn_h
-                  LD   A, 9
-                  endif
+                  CALL ZL_BallHandleFromColor
 .fbn_h:           CALL ZL_EmitBallHandle
-                  if BALLS_ARGB4_ENABLED
-                  FT_BitmapLayout FT_ARGB4, FROG_BALL_W * 2, FROG_BALL_W
-                  else
-                  FT_PaletteSource BALLS_PALETTE_RAMG
-                  FT_BitmapLayout FT_PALETTED4444, FROG_BALL_W, FROG_BALL_W
-                  endif
+                  CALL ZL_EmitBallLayoutCurrent
                   FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, FROG_BALL_DST_W, FROG_BALL_DST_W
                   LD   A, (Frog_NextBallColor)
-                  if BALLS_ARGB4_ENABLED
-                  ADD  A, A : ADD A, A : ADD A, A : ADD A, A              ; *16 = local cell
-                  else
-                  AND  3
-                  ADD  A, A : ADD A, A : ADD A, A : ADD A, A : ADD A, A    ; *32 = local cell
-                  endif
+                  CALL ZL_BallNeutralCellFromColor
                   CALL FT.Coprocessor.Cell
                   CALL Frog_EmitVertex2f_Tmp_BallCentred
                   RET
@@ -851,6 +867,10 @@ Frog_TmpCos:       DEFB 0                               ; cos127 signed
 Frog_TmpOp:        DEFB 0                               ; opcode для Frog_EmitCF
 Frog_TmpAE:        DEFW 0                               ; matrix A=E, scaled cos
 Frog_TmpB:         DEFW 0                               ; matrix B, scaled sin
+Frog_MatrixCacheValid: DEFB 0
+Frog_MatrixCacheAngle: DEFB 0                           ; last rotate matrix angle; plate uses static block
+Frog_MatrixCacheWPtr:  DEFW 0
+Frog_MatrixCacheBuf:   DEFS 24                          ; six BITMAP_TRANSFORM command words
 ; Frog_BallColor и Frog_NextBallColor живут в loader_resident.asm (resident Core).
 Frog_PosX:         DEFW FROG_DEFAULT_X
 Frog_PosY:         DEFW FROG_DEFAULT_Y

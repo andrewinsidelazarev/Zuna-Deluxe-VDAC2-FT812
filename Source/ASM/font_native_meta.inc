@@ -7,7 +7,12 @@ FONT_NATIVE_STRIDE  EQU 1000    ; bytes per row (ARGB4 = 2 bytes/pixel)
 FONT_NATIVE_BYTES   EQU 30000
 
 font_native_glyph_x:
-    DEFW 0, 0, 0, 0, 0, 0, 0, 0     ; chars   0..7
+L19SecondKillzoneGate:
+    LD   A, (CurrentLevel)
+    CP   18
+    RET  Z
+    JP   DrawSecondKillzoneDual
+    DEFB 0, 0, 0, 0, 0, 0, 0        ; chars   0..7 tail
     DEFW 0, 0, 0, 0, 0, 0, 0, 0     ; chars   8..15
     DEFW 0, 0, 0, 0, 0, 0, 0, 0     ; chars  16..23
     DEFW 0, 0, 0, 0, 0, 0, 0, 0     ; chars  24..31

@@ -193,7 +193,7 @@ def chain_budget_frame(h: Harness) -> bytes:
     ptr = write_u32(e, ptr, dl_vertex2ii(0, 0, 1, 0))
     ptr = write_u32(e, ptr, (0x21 << 24))               # END
 
-    # Ball atlas: current build has BALLS_ARGB4_ENABLED=1.
+    # Ball atlas. Format depends on BALLS_ARGB4_ENABLED in Source/ASM/main.asm.
     ptr = write_u32(e, ptr, (0x1F << 24) | 1)           # BEGIN(BITMAPS)
     ptr = write_u32(e, ptr, (0x05 << 24) | 0)           # BITMAP_HANDLE(0)
     ptr = write_u32(e, ptr, (0x01 << 24) | 0x050000)    # BITMAP_SOURCE(BALLS_RAMG_ADDR)

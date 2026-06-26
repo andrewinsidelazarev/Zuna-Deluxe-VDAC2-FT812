@@ -68,7 +68,9 @@ Bullet_Spawn:       LD   A, (VDC_DialogState)
                     LD   HL, (Frog_PosStartY)
                     LD   (Bullet_Y), HL
 
-                    CALL LogShotFired                 ; событие SHOT_FIRED
+                    if RUNTIME_DIAGNOSTICS_ENABLED
+                    CALL LogShotFired
+                    endif
                     LD   A, SND_FIREBALL1
                     CALL GS_PlaySfx
 
@@ -250,14 +252,18 @@ Bullet_CheckCollision:
                     CP   255
                     JP   Z, VDC_UpdateBulletGapTracking  ; нет hit → проверить близость gap
 
+                    if RUNTIME_DIAGNOSTICS_ENABLED
                     CALL LogBboxHit                    ; in: A=best_hit_idx (preserved)
+                    endif
                     LD   A, SND_BALLCLICK2
                     CALL GS_PlaySfx
                     LD   A, (Bullet_TmpHit)
 
                     LD   (Bullet_TmpHit), A            ; сохранить hit для hemisphere-target
                     CALL Bullet_HemisphereTarget       ; A = target_idx
+                    if RUNTIME_DIAGNOSTICS_ENABLED
                     CALL LogHemi                       ; in: A=target_idx (preserved)
+                    endif
 
                     LD   C, A                          ; сохранить target
                     LD   A, (Bullet_Color)
@@ -439,8 +445,9 @@ Bullet_SignExtendA_HL:
 
 
 ; ----------------------------------------------------------------------------
-; Bullet_Draw — вывод sprite пули в DL. handle 0 chain atlas.
-; Cell = Bullet_Color * 16 (без spin — один кадр). Matrix должна быть identity.
+; Bullet_Draw — вывод sprite пули в DL. Current level selects ARGB4 or L19 PALETTED atlas.
+; PALETTED L19 atlas uses local cell = color*12 (neutral phase).
+; Matrix должна быть identity/scale-only.
 ; ----------------------------------------------------------------------------
 Bullet_Draw:        LD   A, (Bullet_Active)
                     OR   A
@@ -449,39 +456,16 @@ Bullet_Draw:        LD   A, (Bullet_Active)
                     ; Гарантируем identity matrix
                     ; перед draw — иначе если matrix унаследована от tongue/body
                     ; rotation, bullet sprite рисуется в неправильном месте экрана.
-                    ; 1024×768: scale 32px atlas → 51px screen (cmd_scale 51/32),
-                    ; без вращения (пуля не крутится).
-                    CALL ZL_EmitLoadId
-                    FT_CMD_BUF FT_CMD_SCALE
-                    FT_CMD_BUF BULLET_DRAW_SCALE
-                    FT_CMD_BUF BULLET_DRAW_SCALE
-                    CALL ZL_EmitSetMatrix
+                    ; 1024×768: normal atlas needs 32px→51px scale; L19 native 51px uses identity.
+                    CALL ZL_EmitBallStaticMatrixCurrent
 
-                    ; PALETTED4444 dual handle: color<4 → handle 0, color>=4 → handle 9.
-                    if BALLS_ARGB4_ENABLED
-                    XOR  A
-                    else
                     LD   A, (Bullet_Color)
-                    CP   4
-                    LD   A, 0
-                    JR   C, .bullet_h
-                    LD   A, 9
-                    endif
+                    CALL ZL_BallHandleFromColor
 .bullet_h:          CALL ZL_EmitBallHandle
-                    if BALLS_ARGB4_ENABLED
-                    FT_BitmapLayout FT_ARGB4, 64, 32
-                    else
-                    FT_PaletteSource BALLS_PALETTE_RAMG
-                    FT_BitmapLayout FT_PALETTED4444, 32, 32
-                    endif
+                    CALL ZL_EmitBallLayoutCurrent
                     FT_BitmapSize   FT_BILINEAR, FT_BORDER, FT_BORDER, BULLET_DRAW, BULLET_DRAW
                     LD   A, (Bullet_Color)                ; перечитать: макросы портят B/C/D/E
-                    if BALLS_ARGB4_ENABLED
-                    ADD  A, A : ADD A, A : ADD A, A : ADD A, A             ; *16 = local cell
-                    else
-                    AND  3                                ; local color (0..3)
-                    ADD  A, A : ADD A, A : ADD A, A : ADD A, A : ADD A, A   ; *32 = local cell (spin 0)
-                    endif
+                    CALL ZL_BallNeutralCellFromColor
                     CALL FT.Coprocessor.Cell
                     ; Vertex2f((X - 28) * 16, (Y - 28) * 16)
                     LD   HL, (Bullet_X)

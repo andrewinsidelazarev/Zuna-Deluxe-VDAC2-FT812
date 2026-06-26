@@ -1,8 +1,8 @@
-; More Games room, menu quit path и system-wide fire input state.
-; Хранится в UI overlay (#41): экран вызывается только из меню, а slot0 держим
-; свободным для resident helpers.
+; Экран More Games, путь выхода из меню и глобальное состояние кнопки огня.
+; Хранится в UI-оверлее (#41): экран вызывается только из меню, а slot0 держим
+; свободным для резидентных помощников.
 
-; Standalone SPG exit path → грузим Wild Commander сами (boot.$C HOBETA с SD).
+; Автономный выход из SPG: сами грузим Wild Commander (boot.$C HOBETA с SD).
 ; MEMCONFIG=0+JP#0000 (Service ROM) НЕ грузит boot.$ (даёт пустой ZX-экран), поэтому
 ; используем свой HOBETA-загрузчик: найти BOOT.$C → стаб в #4000 (bank5, ниже #6011)
 ; → режим WC без LCK128 (MemConfig=#01; slot1=bank5/slot2=bank2/slot3=bank0) → JP
@@ -10,22 +10,28 @@
 ; Эталон живого WC со скрина: VConfig=#24, SusConfig=#06, MemConfig=#01, INTMASK=0.
 MenuQuitToWC:
                 DI
+                if RUNTIME_DIAGNOSTICS_ENABLED
                 LD   A, #10
-                LD   (Core.Quit_DbgStage), A
+                LD   (Core.QuitTraceStage), A
+                endif
                 CALL Core.ProbeBootHobeta               ; найти BOOT.$C и первый сектор через старый DFS
                 LD   A, (Core.Boot_Found)
                 OR   A
                 JP   Z, .qFallback
 
+                if RUNTIME_DIAGNOSTICS_ENABLED
                 LD   A, #20
-                LD   (Core.Quit_DbgStage), A
+                LD   (Core.QuitTraceStage), A
+                endif
                 LD   HL, Core.QuitStub_Image            ; стаб уже лежит в Core/page5, копируем ниже BOOT.$C
                 LD   DE, #4000
                 LD   BC, Core.QuitStub_Len
                 LDIR
 
+                if RUNTIME_DIAGNOSTICS_ENABLED
                 LD   A, #30
-                LD   (Core.Quit_DbgStage), A
+                LD   (Core.QuitTraceStage), A
+                endif
                 LD   HL, (Core.Boot_StartLba + 0)
                 LD   (Core.QS_Lba + 0), HL
                 LD   HL, (Core.Boot_StartLba + 2)
@@ -36,13 +42,17 @@ MenuQuitToWC:
                 LD   (Core.QS_Blkt), A
 
                 CALL .qResetHw                          ; сбросить FT812 до ухода из Zuma
+                if RUNTIME_DIAGNOSTICS_ENABLED
                 LD   A, #40
-                LD   (Core.Quit_DbgStage), A
+                LD   (Core.QuitTraceStage), A
+                endif
                 JP   #4000                              ; дальше стаб сам выставляет память и читает BOOT.$C
 
 .qFallback:     CALL .qResetHw                          ; BOOT.$C нет → reset HW + вход TR-DOS
+                if RUNTIME_DIAGNOSTICS_ENABLED
                 LD   A, #F0
-                LD   (Core.Quit_DbgStage), A
+                LD   (Core.QuitTraceStage), A
+                endif
                 LD   BC, MEMCONFIG
                 LD   A, MEM_ROM128
                 OUT  (C), A
@@ -88,9 +98,15 @@ MORE_GAMES_Z4_SIZE    EQU 37533
 
 MoreGames:
                 CALL LoadMoreGamesAssets
-                CALL FadeInMoreGames
+                ; More Games — статичный экран на сырых командах DL. Здесь обходим
+                ; путь перехода через FIFO сопроцессора: при повторном входе он мог
+                ; оставить активным чёрный DL перехода, пока CPU уже опрашивал ввод.
+                XOR  A
+                LD   (FadeAlpha), A
+                CALL MoreGamesBuildFrame
+                CALL MoreGamesSwapFrameDirect
                 CALL MoreGamesPrimeInputPrev
-.loop:          CALL Core.Input_Scan                       ; static screen: poll input as fast as possible
+.loop:          CALL Core.Input_Scan                       ; статичный экран: опрашиваем ввод как можно чаще
                 CALL MoreGamesExitPressed                  ; A=1 на фронте Огонь|ЛКМ|ESC
                 OR   A
                 JP   NZ, FadeMoreGamesToMenu
@@ -108,13 +124,13 @@ LoadMoreGamesAssets:
                 LD   DE, MORE_GAMES_PAL_RAMG & #FFFF
                 CALL FT.WriteMem
                 SetPage2 6
-                SetPage3 UI_OVL_PAGE                    ; More Games работает в UI context (#41): restore его, не #04
-                                                         ; раньше #04 оставлял MenuSwapFrame/MenuInflate на wrong page → black screen
+                SetPage3 UI_OVL_PAGE                    ; More Games работает в UI-контексте (#41): восстановить его, а не #04
+                                                         ; раньше #04 оставлял MenuSwapFrame/MenuInflate на неверной странице → чёрный экран
                 RET
 
 MoreGamesPrimeInputPrev:
-                ; Прайм после fade текущим состоянием, а не hard-coded pressed.
-                ; Иначе первый ЛКМ мог съедаться, если первый scan ещё видел stale/held down.
+                ; Прайм после перехода текущим состоянием, а не жёстко заданным «нажато».
+                ; Иначе первый ЛКМ мог съедаться, если первый опрос ещё видел старое/удержанное состояние.
                 CALL Core.Input_Scan
                 CALL Core.Input_FireKey
                 LD   HL, MoreGamesFirePrev
@@ -137,7 +153,7 @@ MoreGamesBuildFrame:
                 FT_VertexFormat 4
                 FT_ClearColorRGB32 0x000000
                 FT_ClearAll
-                ; 1024×768: scale(1.6)-матрица кадра + окно ×8/5 — как фон level-select
+                ; 1024×768: матрица масштаба 1.6 для кадра + окно ×8/5 — как фон выбора уровней
                 CALL Core.Resident_EmitScale16
                 FT_Begin FT_BITMAPS
                 FT_PaletteSource MORE_GAMES_PAL_RAMG
@@ -152,6 +168,35 @@ MoreGamesBuildFrame:
                 FT_End
                 FT_Display
                 FT_CMD_Count
+                RET
+
+; More Games после CMD_DLSTART использует только сырые слова списка отображения.
+; Если путь FIFO сопроцессора FT812 застрял за чёрным DL перехода, пишем этот
+; DL напрямую в RAM_DL и запрашиваем переключение кадра, полностью обходя RAM_CMD.
+MoreGamesSwapFrameDirect:
+                FT_CMD_Count                            ; BC = CMD_DLSTART + байты DL
+                LD   A, C
+                SUB  4                                  ; пропустить CMD_DLSTART
+                LD   C, A
+                JR   NC, .count_ok
+                DEC  B
+.count_ok:      LD   A, B
+                OR   C
+                RET  Z
+                LD   HL, CMD_ADDRESS_PTR + 4
+                LD   DE, 0
+                CALL FT.WriteDL
+                FT_WR_REG8 FT_REG_DLSWAP, FT_DLSWAP_FRAME
+.wait_done_outer:
+                LD   H, 16
+.wait_done_mid: LD   L, 0
+.wait_done:     FT_RD_REG8 FT_REG_DLSWAP
+                AND  3
+                RET  Z
+                DEC  L
+                JR   NZ, .wait_done
+                DEC  H
+                JR   NZ, .wait_done_mid
                 RET
 
                 macro MoreGamesInflateAsset Destination?, Page?, Size?
@@ -172,7 +217,7 @@ MoreGamesInflateAssetsEnd:
 MoreGamesInflateAssetsCount EQU (MoreGamesInflateAssetsEnd - MoreGamesInflateAssets) / 6
 
 ; MoreGamesExitPressed — выход из экрана More Games. Возвращает A=1 на действии:
-; огонь-КЛАВИША/ESC по press edge, ЛКМ по press edge ИЛИ release edge.
+; огонь-клавиша/ESC по фронту нажатия, ЛКМ по фронту нажатия ИЛИ отпускания.
 ; 🔴 ВАЖНО: огонь-клавиша и ЛКМ — ОТДЕЛЬНЫЕ фронт-детекторы (НЕ через Input_Fire,
 ; который их ИЛИ-объединяет). Иначе залипшая/фантомно-нажатая ЛКМ (на этом стенде
 ; мышиные/Kempston-биты порой читаются «нажато» постоянно — см. Frog.asm) держит
@@ -181,17 +226,17 @@ MoreGamesInflateAssetsCount EQU (MoreGamesInflateAssetsEnd - MoreGamesInflateAss
 ; Input_EdgeZ обязан идти СРАЗУ после опроса — промежуточный LD HL,addr флаги не
 ; трогает, поэтому Z доходит до EdgeZ целым.
 MoreGamesExitPressed:
-                CALL Core.Input_FireKey                    ; Space|Enter|Kempston (БЕЗ ЛКМ)
+                CALL Core.Input_FireKey                    ; Пробел|Enter|Kempston (БЕЗ ЛКМ)
                 LD   HL, MoreGamesFirePrev
                 CALL Core.Input_EdgeZ                      ; NZ=фронт, обновляет (HL)
                 JR   NZ, .yes
-                CALL Core.Input_MouseLMB                   ; ЛКМ — press/release click
+                CALL Core.Input_MouseLMB                   ; ЛКМ — клик по нажатию/отпусканию
                 LD   HL, MoreGamesLmbPrev
                 JR   Z, .lmb_released
                 LD   A, (HL)
                 LD   (HL), 1
                 OR   A
-                JR   Z, .yes                              ; released->pressed
+                JR   Z, .yes                              ; отпущено→нажато
                 JR   .check_esc
 .lmb_released:  LD   A, (HL)
                 LD   (HL), 0

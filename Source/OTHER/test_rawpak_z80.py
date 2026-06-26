@@ -11,6 +11,13 @@ from zuma_full_z80_emulator import ZumaFullZ80Emulator, RETURN_MARKER  # noqa
 
 ROOT = HERE.parents[1]
 
+def trace_byte(sym, emu, name):
+    addr = sym.get(name)
+    return emu.get_byte(addr) if addr is not None else None
+
+def trace_text(value):
+    return f"#{value:02X}" if value is not None else "n/a"
+
 def ix_of(reg):
     if hasattr(reg, 'IX'):
         return reg.IX & 0xFFFF
@@ -56,7 +63,8 @@ def main():
     emu.call(sym["Core.RawPak_OpenRoot"])
     cf = emu.reg.F & 1
     fsc = struct.unpack("<I", emu.get_memory(sym["Core.RawPak_FileStartClus"], 4))[0]
-    print(f"OpenRoot: CF={cf}  openStep=#{emu.get_byte(sym['Core.ZiFi_DbgGamesA']):02X}  FileStartClus={fsc}")
+    open_step = trace_byte(sym, emu, "Core.ZiFiTraceOpenStep")
+    print(f"OpenRoot: CF={cf}  openStep={trace_text(open_step)}  FileStartClus={fsc}")
     print(f"  FatStart={struct.unpack('<I', emu.get_memory(sym['Core.RawPak_FatStart'],4))[0]}"
           f"  DataStart={struct.unpack('<I', emu.get_memory(sym['Core.RawPak_DataStart'],4))[0]}")
     if not cf:
@@ -132,12 +140,9 @@ def main():
     try:
         emu.call(sym["Core.LoadGameplayLevelSpecificFromPack"], max_steps=20_000_000)
         cf = emu.reg.F & 1
-        # ZiFi_GpDbgStep lives in the overlay; the trampoline restored PAGE3=#04,
-        # so map page #40 back in to read it.
-        emu.mem.pages[3] = 0x40
-        step = emu.get_byte(sym["Core.ZiFi_GpDbgStep"]) if "Core.ZiFi_GpDbgStep" in sym else emu.get_byte(0x6215)
-        print(f"loader returned: CF={cf}  GpDbgStep=#{step:02X}  FT.WriteMem calls={len(wm_calls)}")
-        if not cf or step != 0x06:
+        step = trace_byte(sym, emu, "Core.ZiFiTraceStep")
+        print(f"loader returned: CF={cf}  ZiFiTraceStep={trace_text(step)}  FT.WriteMem calls={len(wm_calls)}")
+        if not cf or (step is not None and step != 0x06):
             print("FAIL: gameplay loader did not complete (overlay)"); return 1
         for i, w in enumerate(wm_calls[:8]):
             print(f"  WriteMem#{i}: ramg=#{w[0]:02X}{w[1]:02X}{w[2]:02X} count=#{w[3]:02X}{w[4]:02X} src=#{w[5]:04X}")

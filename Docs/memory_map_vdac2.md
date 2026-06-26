@@ -56,10 +56,14 @@ Boot SPG в поставке: **347136 байт** (`ZUMA_VD2.SPG` / `Build/zuma_
 
 | Адрес | Владелец | Назначение |
 |---:|---|---|
-| `#4800..#5007` | log | circular F12/debug log. |
-| `#5009..#500B` | frog randomizer | RTC mix/exclude flags. |
-| `#5010` | FT command buffer pointer | `CMD_ADDRESS_PTR`; нельзя возвращать на `#6000`. |
-| `#5020..#5040` | build canary | `ZVDAC2 ...`, пишется в `Init_Core`. |
+| `#4100..#463F` | render prepass cache 1 | `VDC_MAX_SLOTS * 7`, сейчас 192 слота. |
+| `#4640..#4B7F` | render prepass cache 2 | второй cache для top-mask under/over без повторного prepass. |
+| `#4B80..#4C87` | log | circular F12/debug log: 32 записи по 8 байт + служебные байты. |
+| `#4C88` | VDC entropy diag | raw RTC second snapshot. |
+| `#4C89..#4C8B` | frog randomizer | RTC mix/exclude flags. |
+| `#4C8C..#4CAC` | build canary | `ZVDAC2 ...`, пишется в `Init_Core`. |
+| `#4CAD..#4CAF` | VDC entropy diag | final seed word + raw R register, до CMD-буфера. |
+| `#4CB0` | FT command buffer pointer | `CMD_ADDRESS_PTR`; нельзя возвращать на `#6000`. |
 | `#5044..#5047` | boot canary | `"BOOT"`, пишется ПЕРВОЙ инструкцией `Start` (#5C00). НЕНАДЁЖНА: затирается в геймплее; «нет канарейки» ≠ boot hang. |
 | `#612E..#6130` | Core | `BgRamL/BgRamH`. |
 | `#6481..#6482` | Core | `PauseFadeTimer`, `VDC_PauseAlpha` (пауза fade-out, state 4). |

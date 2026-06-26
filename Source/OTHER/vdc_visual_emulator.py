@@ -23,7 +23,7 @@ CELL_SIZE          = 32          # = VDC_CELL_SIZE в asm. 1 sample ≈ 1.08 px 
 DECAY_NEG_PER_FRAME = 2          # negative offsets (insert head slide / rear comp) -> 0 быстро.
 # positive offsets тают со скоростью vp/10 px/кадр (визуальная скорость подтяжки).
 NUM_BALL_COLORS    = 6           # = VDC_NUM_COLORS
-MAX_SLOTS          = 240         # = VDC_MAX_SLOTS
+MAX_SLOTS          = 192         # = VDC_MAX_SLOTS
 LEVEL_START_BALLS  = 35          # = VDC_LEVEL_START_BALLS
 FAST_ADVANCE       = 12          # = VDC_FAST_ADVANCE
 MOVE_STEP          = 2           # = VDC_MOVE_STEP
@@ -32,7 +32,7 @@ SPAWN_FRAME_MASK   = 63          # normal phase: VDC_TrySpawn only when frame&63
 PULL_ACCEL_X10     = 4           # = VDC_PULL_ACCEL_X10 (BALL_DECC 0.4 сэмпл/кадр²)
 PULL_MAX_X10       = 100         # = VDC_PULL_MAX_X10 (10 сэмпл/кадр)
 PULL_BASE_X10      = 10          # = VDC_PULL_BASE_X10 (1 сэмпл/кадр)
-GAP_ACCUM_STEP     = CELL_SIZE * 10  # = VDC_GAP_ACCUM_STEP (порог шага = слот ×10)
+GAP_ACCUM_STEP     = 256         # = VDC_GAP_ACCUM_STEP (ускоренный порог подтяжки)
 GAP_STOP           = 0xFE
 GAP_CASCADE        = 0xFD
 SHOT_SPEED         = 6           # px/frame (= MainLoop bullet step, 360×288 baseline)

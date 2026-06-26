@@ -192,7 +192,13 @@ def main():
         f.write(f'\n')
         # font_native_glyph_x: word table indexed by ASCII code
         f.write(f'font_native_glyph_x:\n')
-        for c in range(0, 128, 8):
+        f.write(f'L19SecondKillzoneGate:\n')
+        f.write(f'    LD   A, (CurrentLevel)\n')
+        f.write(f'    CP   18\n')
+        f.write(f'    RET  Z\n')
+        f.write(f'    JP   DrawSecondKillzoneDual\n')
+        f.write(f'    DEFB 0, 0, 0, 0, 0, 0, 0        ; chars   0..7 tail\n')
+        for c in range(8, 128, 8):
             row = ', '.join(str(glyph_x[c+i]) for i in range(8))
             f.write(f'    DEFW {row}     ; chars {c:3d}..{c+7}\n')
         f.write(f'\n')

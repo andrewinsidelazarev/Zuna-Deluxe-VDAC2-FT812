@@ -29,6 +29,7 @@ from pathlib import Path
 
 ROOT = Path(r'C:\Users\Администратор\Desktop\Zuma Deluxe VDAC2')
 OUT = ROOT / 'Graphics' / 'Converted' / 'chain_matrix_lut.bin'
+L19_OUT = ROOT / 'Graphics' / 'Converted' / 'chain_matrix_lut_l19_51.bin'
 
 BALL_HALF = 16     # atlas cell half (32×32 atlas) — UV pivot
 BALL_DRAW = 51     # 1024×768 port: on-screen draw size = round(32 × 8/5)
@@ -122,6 +123,9 @@ def main():
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_bytes(out)
     print(f'  saved {OUT.name}: {len(out)} bytes ({NUM_BUCKETS}×24)')
+
+    # L19 experiment: PALETTED4444 balls are native 51x51, so rotation keeps UV scale 1:1.
+    build_lut(L19_OUT, 25.5, 51, buckets=NUM_BUCKETS)
 
     # 1024×768: frog-маркер превью level-select — атлас 58×58, draw 58*8//5=92.
     # 256 бакетов = ПОЛНАЯ точность BRAD (1 запись на каждый угол, без квантования).

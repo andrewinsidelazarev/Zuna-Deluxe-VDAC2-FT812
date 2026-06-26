@@ -77,11 +77,7 @@ Frog_ComputeAngle:
                   OR   A
                   JR   Z, .cfa_done                    ; курсор в frog center → не менять угол
                   ; t = E*128 / C
-                  LD   H, 0
-                  LD   L, E
-                  ADD  HL, HL : ADD HL, HL : ADD HL, HL
-                  ADD  HL, HL : ADD HL, HL : ADD HL, HL : ADD HL, HL
-                  CALL Frog_Div16by8                   ; A = HL / C
+                  CALL Frog_Div16by8                   ; A = floor(E*128 / C)
                   CP   129
                   JR   C, .lookup
                   LD   A, 128
@@ -135,25 +131,49 @@ Frog_ComputeAngle:
 
 
 ; ----------------------------------------------------------------------------
-; Frog_Div16by8 — HL / C → A (assumed quotient ≤ 129).
+; Frog_Div16by8 — floor(E*128 / C) → A, for Frog_ComputeAngle ratio.
+;   In:  E = min(|dx|,|dy|), C = max(|dx|,|dy|), C > 0, E <= C.
+;   Out: A = 0..128. Preserves B (quadrant flags) and C.
+;   Fixed 7-step fractional division; avoids old subtract-loop worst case.
 ; ----------------------------------------------------------------------------
-Frog_Div16by8:    XOR  A
-                  LD   D, 0
-.d8_loop:         LD   E, C
-                  AND  A
-                  SBC  HL, DE
-                  JR   C, .d8_restore
+Frog_Div16by8:    LD   A, E
+                  OR   A
+                  RET  Z
+                  CP   C
+                  JR   NZ, .d8_not_full
+                  LD   A, 128
+                  RET
+.d8_not_full:     LD   H, 0                            ; 9-bit remainder high byte
+                  XOR  A                              ; quotient
+                  LD   D, 7
+.d8_loop:         SLA  E                              ; remainder <<= 1
+                  RL   H
+                  ADD  A, A                           ; quotient <<= 1
+                  LD   L, A
+                  LD   A, H
+                  OR   A
+                  JR   NZ, .d8_sub
+                  LD   A, E
+                  CP   C
+                  JR   C, .d8_no_sub
+.d8_sub:          LD   A, E
+                  SUB  C
+                  LD   E, A
+                  LD   A, H
+                  SBC  A, 0
+                  LD   H, A
+                  LD   A, L
                   INC  A
-                  CP   130
-                  JR   C, .d8_loop
-                  RET
-.d8_restore:      ADD  HL, DE
+                  JR   .d8_next
+.d8_no_sub:       LD   A, L
+.d8_next:         DEC  D
+                  JR   NZ, .d8_loop
                   RET
 
 
 ; ----------------------------------------------------------------------------
-; (Тело Frog_FireKeyboard — в Frog.asm. Вызывается ZL_AimUpdate после того, как
-; ГЛОБАЛЬНЫЙ Input_FireKey вернул «нажато»; порт #7FFE напрямую больше не читается.
+; (Тело Frog_FireKeyboard — в Frog.asm. Вызывается из Frog_Update после выбора
+; активной живой цепочки; порт #7FFE напрямую больше не читается.
 ; Свой debounce через Frog_KeySpacePrev — независимо от LMB edge-rise в
 ; Frog_HandleMouse, чтобы зажатый огонь не повторял выстрел.)
 ; ----------------------------------------------------------------------------
@@ -277,17 +297,24 @@ DrawBlackTransitionFrame:
                 FT_ClearColorRGB32 0x000000
                 FT_ClearAll
                 FT_Display
+                CALL ClearRamDlForShortUiFrame
                 FT_CMD_Count
                 CALL MenuSwapFrame
-                ; MenuSwapFrame только СТАВИТ свап в очередь (исполнится на vsync).
-                ; Ждём REG_DLSWAP==0 = display engine забрал чёрный DL на границе
-                ; кадра → старый DL (со ссылками на перезаписываемые битмапы)
-                ; больше не активен. INT_FLAGS тут НЕЛЬЗЯ: на реальном FT812 он
-                ; clear-on-read — это чтение съедало событие следующего
-                ; MenuSwapFrame → вечный спин (зависание всех переходов на реале).
+                ; MenuSwapFrame сам синхронизируется по INT_SWAP и ставит black
+                ; swap в очередь. Здесь ждём только REG_DLSWAP==0: display engine
+                ; забрал чёрный DL на границе кадра, значит старый DL со ссылками
+                ; на перезаписываемые битмапы больше не активен. INT_FLAGS здесь
+                ; не читать: на реальном FT812 это clear-on-read, второй poll мог
+                ; бы съесть событие следующего MenuSwapFrame.
+                ; Wait bounded: if Unreal/FT misses the edge, do not hang forever
+                ; on a black transition frame.
+                LD   L, 64
 .wait_black:    FT_RD_REG8 FT_REG_DLSWAP
                 AND  3
+                JR   Z, .done
+                DEC  L
                 JR   NZ, .wait_black
+.done:
                 RET
 
 ; ----------------------------------------------------------------------------
@@ -374,6 +401,22 @@ ZL_FT_CMD_Write_DMA:
 
 ZL_CmdDmaWordsHi: DEFB 0
 ZL_CmdDmaWordsLo: DEFB 0
+
+; ----------------------------------------------------------------------------
+; ZL_FT_CMD_Write_PIO — diagnostic non-DMA sender for the same host CMD buffer.
+; Same caller contract as ZL_FT_CMD_Write_DMA: previous chunk/frame is drained,
+; CMD_ADDRESS_PTR..BufferPtr fits in FT812 command FIFO. Difference: bytes go
+; through CPU OTIR/FT.WriteMem instead of TS-Config DMA_RAM_SPI.
+; ----------------------------------------------------------------------------
+ZL_FT_CMD_Write_PIO:
+                FT_CMD_Count                            ; BC = byte count
+                LD   A, B
+                OR   C
+                RET  Z
+                LD   HL, CMD_ADDRESS_PTR
+                LD   A, (FT_REG_CMDB_WRITE >> 16) & #FF
+                LD   DE, FT_REG_CMDB_WRITE & #FFFF
+                JP   FT.WriteMem
 
 ; ----------------------------------------------------------------------------
 ; ZL_AimUpdate — детектирует mouse motion (с threshold для подавления Hyper-V

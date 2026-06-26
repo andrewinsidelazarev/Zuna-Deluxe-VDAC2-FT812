@@ -59,7 +59,7 @@ def hx(value: int, width: int = 6) -> str:
 
 
 def parse_spg_blocks() -> list[SpgBlock]:
-    path = ROOT / "spgbld_vdac2.ini"
+    path = ROOT / "spgbld_boot.ini"
     blocks: list[SpgBlock] = []
     rx = re.compile(r"Block\s*=\s*#([0-9A-Fa-f]+)\s*,\s*#([0-9A-Fa-f]{2})\s*,\s*(.+)")
     for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
@@ -155,7 +155,7 @@ def ramg_ranges() -> list[Range]:
         Range("gameplay", "BG_PALETTE", 0x02D500, 0x02D700),
         Range("gameplay", "DIALOG_OK", 0x02D800, 0x030000),
         Range("gameplay", "FROG_ARGB4", 0x030000, 0x050000),
-        Range("gameplay", "BALLS_ARGB4", 0x050000, 0x080000),
+        Range("gameplay", "BALLS_ATLAS", 0x050000, 0x080000),
         Range("gameplay", "BALLS_PALETTE_SLOT", 0x080000, 0x080200),
         Range("gameplay", "FRAME_PALETTE", 0x080200, 0x080400),
         Range("gameplay", "FRAME_STRIPS", 0x084000, 0x098000),
@@ -186,8 +186,9 @@ def ramg_ranges() -> list[Range]:
         Range("level_select", "LS_SKY_PAL", 0x0ABA60, 0x0ABC60),
         Range("level_select", "LS_UI_PAL", 0x0ABC60, 0x0ABE60),
         Range("level_select", "LS_CURSOR_REUSE", 0x0AC000, 0x0AD200),
-        Range("level_select", "LS_MARKERS", 0x0B0000, 0x0B20B2),
-        Range("level_select", "LS_PREVIEW_BG", 0x0D4000, 0x0F4000),
+        Range("level_select", "LS_MARKERS", 0x0B0000, 0x0B2810),
+        Range("level_select", "LS_PREVIEW_BG_B", 0x0B3000, 0x0D3000, "inactive ping-pong preview buffer"),
+        Range("level_select", "LS_PREVIEW_BG_A", 0x0D4000, 0x0F4000, "active/default ping-pong preview buffer"),
         # More Games profile.
         Range("more_games", "MORE_GAMES_BG", 0x000000, 0x04B000),
         Range("more_games", "MORE_GAMES_PAL", 0x0ABC60, 0x0ABE60),
@@ -221,7 +222,8 @@ def check_ramg(errors: list[str]) -> None:
         print(f"[ramg] {profile}: {len(rows)} ranges, max end {hx(max_end)}")
 
     cross_notes = [
-        ("level_select", "LS_PREVIEW_BG", "gameplay", "KILLZONE_DESTROY_UPLOAD"),
+        ("level_select", "LS_PREVIEW_BG_A", "gameplay", "KILLZONE_DESTROY_UPLOAD"),
+        ("level_select", "LS_PREVIEW_BG_B", "gameplay", "DIALOG_FRAME"),
         ("main_menu", "MENU_CURSOR", "gameplay", "DIALOG_FRAME"),
         ("level_select", "LS_CURSOR_REUSE", "gameplay", "DIALOG_FRAME"),
     ]

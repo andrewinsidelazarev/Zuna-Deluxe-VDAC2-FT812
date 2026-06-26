@@ -170,6 +170,8 @@ MenuMain:
 .start_adventure:
                 JP   FadeMenuToAdventure
 .start_gauntlet:
+                LD   A, 1
+                LD   (CurrentGameMode), A
                 JP   FadeMenuToLevelSelect
 .show_more:     JP   FadeMenuToMoreGames
 
@@ -415,14 +417,18 @@ MenuKeyboardNav:
                 LD   A, (MenuSelection)
                 OR   A
                 JR   NZ, .not_adv
-                LD   A, 1 : LD (MenuAdventureClick), A : RET
+                LD   A, 1 : LD (MenuAdventureClick), A : JP MenuButtonSfx
 .not_adv:       CP   1
                 JR   NZ, .not_gaunt
-                LD   A, 1 : LD (MenuGauntletClick), A : RET
+                LD   A, 1 : LD (MenuGauntletClick), A : JP MenuButtonSfx
 .not_gaunt:     CP   2
                 RET  NZ
                 LD   A, 1 : LD (MenuMoreClick), A
-                RET
+                JP   MenuButtonSfx
+
+MenuButtonSfx:
+                LD   A, SND_BUTTON1
+                JP   GS_PlaySfx
 
 ; Подсветить клавиатурный выбор только если мышь не на кнопке.
 ; Если любой MenuButtonState* != 0 — мышь активна, keyboard hover не показываем.
@@ -491,21 +497,55 @@ MenuDrawCredit:
 .txt:           DB   "Italy, 2026", 0                  ; 11+NUL = 12 байт — ровно 3 CMD-слова
 
 MenuSwapFrame:
-                ; 1024×768: (1) vsync-пейсинг по REG_DLSWAP: ждём, пока display
-                ; engine заберёт ПРЕДЫДУЩИЙ своп на границе кадра — это тот же
-                ; момент, что INT_SWAP, но level-based и идемпотентный.
-                ; REG_INT_FLAGS в сценах ЗАПРЕЩЁН: на реальном FT812 он
-                ; clear-on-read (чтение в любой другой петле съедает событие →
-                ; вечный спин; запись-очистка — no-op, она работает только в
-                ; эмуляторе) — это вешало ВСЕ переходы между экранами на реале.
-                ; (2) отправка кадра DMA-путём (резидентный ZL_FT_CMD_Write_DMA)
-                ; вместо медленного OTIR.
+                ; UI frame pacing: build frame first, then submit immediately
+                ; after the next FT812 swap event when the edge is available.
+                ; The wait is bounded: after a static screen (More Games) or a
+                ; lost clear-on-read INT edge, an infinite wait here freezes the
+                ; transition. Fallback to DLSWAP==0 keeps the old safe path.
+                ;
+                ; Keep INT_FLAGS reads centralized here. On real FT812 the read
+                ; clears the flag; the write below is for Unreal, where clear is
+                ; write-based. DrawBlackTransitionFrame waits only on DLSWAP, so
+                ; it does not consume a second INT_SWAP event.
+.wait_int_init:
+                LD   L, 64
+.wait_int:      FT_RD_REG8 FT_REG_INT_FLAGS
+                AND  FT_INT_SWAP
+                JR   NZ, .got_int
+                DEC  L
+                JR   NZ, .wait_int
+                JR   .wait_swap_init
+.got_int:
+                FT_WR_REG8 FT_REG_INT_FLAGS, FT_INT_SWAP
+.wait_swap_init:
+                LD   L, 64
 .wait_swap:     FT_RD_REG8 FT_REG_DLSWAP
                 AND  3
+                JR   Z, .submit
+                DEC  L
                 JR   NZ, .wait_swap
+.submit:
                 CALL Core.ZL_FT_CMD_Write_DMA
                 CALL FT.Coprocessor.WaitFlush
                 FT_WR_REG8 FT_REG_DLSWAP, FT_DLSWAP_FRAME
+                RET
+
+; ----------------------------------------------------------------------------
+; ClearRamDlForShortUiFrame — короткие статичные DL оставляют хвост RAM_DL от
+; предыдущего длинного кадра. FT812 останавливается на DISPLAY, но валидатор
+; Unreal читает дальше и может попасть на старый CALL/JUMP. Перед short-DL
+; переходом затираем весь RAM_DL прямой SPI-записью; после этого coprocessor
+; перезапишет начало новым кадром, а хвост останется DISPLAY(0).
+; ----------------------------------------------------------------------------
+ClearRamDlForShortUiFrame:
+                LD   DE, 0
+                LD   B, 8                              ; 8192 / 1024
+.clear_loop:    PUSH BC
+                LD   HL, Core.ClearRamGZeroBuf
+                LD   BC, 1024
+                CALL FT.WriteDL                        ; advances RAM_DL offset in DE
+                POP  BC
+                DJNZ .clear_loop
                 RET
 
 MenuDrawSky:

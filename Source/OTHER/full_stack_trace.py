@@ -276,6 +276,9 @@ class FullStackTrace:
         if self.real_inflate and pc == self.sym.get("FT.Coprocessor.Write"):
             self._hook_copro_write()
             return True
+        if pc == self.sym.get("FT.ReadMem"):
+            self._hook_read_mem()
+            return True
         if pc == self.sym.get("FT.WriteMem"):
             self._hook_write_mem()
             return True
@@ -322,6 +325,16 @@ class FullStackTrace:
             data = bytes(self.emu.mem.read((src + i) & 0xFFFF) for i in range(size))
             end = min(dest + size, len(self.emu.ft.ram_g))
             self.emu.ft.ram_g[dest:end] = data[: end - dest]
+        ret_from_hook(self.emu, carry=False)
+
+    def _hook_read_mem(self) -> None:
+        src = (self.emu.reg.A << 16) | (self.emu.reg.D << 8) | self.emu.reg.E
+        dest = (self.emu.reg.H << 8) | self.emu.reg.L
+        size = (self.emu.reg.B << 8) | self.emu.reg.C
+        self.event(f"READMEM src={hx(src,6)} dest={hx(dest)} size={size} pages={tuple(self.emu.mem.pages)}")
+        for i in range(size):
+            value = self.emu._read_ft_addr((src + i) & 0x3FFFFF)
+            self.emu.mem.write((dest + i) & 0xFFFF, value)
         ret_from_hook(self.emu, carry=False)
 
     def _hook_copro_write(self) -> None:
@@ -443,7 +456,7 @@ class FullStackTrace:
         self.emu.mem.write(log_addr + 1, next_sector >> 8)
         self.zifi_calls.append(f"Core.RawPak_ReadOneLogicalIX(sec={sector}, ix={hx(ix)})")
         self.event(f"RawPak_ReadOneLogicalIX sector={sector} -> IX={hx(ix)}")
-        ret_from_hook(self.emu, carry=True)
+        ret_from_hook(self.emu, carry=False)
 
     def call(self, sym_name: str, max_steps: int = 10_000_000) -> None:
         addr = self.sym[sym_name]
@@ -491,7 +504,7 @@ class FullStackTrace:
         print("ZiFi calls:")
         for line in self.zifi_calls[-32:]:
             print("  " + line)
-        for name in ("Core.ZiFi_GpDbgStep", "Core.CurrentLevel", "Core.CurrentDifficulty", "Core.FadeAlpha", "Core.ZiFi_BgDstPage"):
+        for name in ("Core.ZiFiTraceStep", "Core.CurrentLevel", "Core.CurrentDifficulty", "Core.FadeAlpha", "Core.ZiFi_BgDstPage"):
             addr = self.sym.get(name)
             if addr is not None:
                 print(f"{name}@{hx(addr)}={hx(emu.mem.read(addr),2)}")
@@ -540,7 +553,9 @@ class FullStackTrace:
         print("=== RAWPAK 16K BOUNDARY TEST ===")
         self.call("Core.RawPak_OpenRoot", 2_000_000)
         if not (self.emu.reg.F & 1):
-            print(f"FAIL: RawPak_OpenRoot CF=0 openStep={hx(self.emu.mem.read(self.sym['Core.ZiFi_DbgGamesA']),2)}")
+            open_step = self.sym.get("Core.ZiFiTraceOpenStep")
+            step_text = hx(self.emu.mem.read(open_step), 2) if open_step is not None else "n/a"
+            print(f"FAIL: RawPak_OpenRoot CF=0 openStep={step_text}")
             return 1
         self.call("Core.RawPak_Seek0", 100_000)
         self.emu.reg.B = 4
@@ -588,13 +603,16 @@ def diagnose_dump(root: Path, dump_path: Path) -> int:
 
     print("=== DUMP DIAGNOSE ===")
     print(f"dump={dump_path} bytes={len(data)}")
-    boot_addr = sym.get("BOOT_CANARY_ADDR", 0x5044)
-    boot = data[boot_addr : boot_addr + 4]
-    print(f"BOOT canary @{hx(boot_addr)} = {boot.hex(' ')} \"{asc(boot)}\"")
-    if boot != b"BOOT":
-        print("verdict: Core.Start did not run, or page #05 is not visible in slot1 in this dump")
+    boot_addr = sym.get("BOOT_CANARY_ADDR")
+    if boot_addr is not None:
+        boot = data[boot_addr : boot_addr + 4]
+        print(f"BOOT canary @{hx(boot_addr)} = {boot.hex(' ')} \"{asc(boot)}\"")
+        if boot != b"BOOT":
+            print("verdict: Core.Start did not run, or page #05 is not visible in slot1 in this dump")
+        else:
+            print("verdict: Core.Start ran")
     else:
-        print("verdict: Core.Start ran")
+        print("BOOT canary: n/a")
 
     core_path = root / "Build" / "Core.bin"
     if core_path.exists():
@@ -606,7 +624,7 @@ def diagnose_dump(root: Path, dump_path: Path) -> int:
                 same_prefix += 1
             print(f"Core.bin prefix at {hx(base)}: {same_prefix}/{min(n, 64)} first bytes")
 
-    for name in ("Core.ZiFi_GpDbgStep", "Core.ZiFi_DbgGamesA", "Core.ZiFi_DbgGamesFound", "Core.CurrentLevel"):
+    for name in ("Core.ZiFiTraceStep", "Core.ZiFiTraceOpenStep", "Core.ZiFiTraceDirsVisited", "Core.CurrentLevel"):
         if name in sym:
             print(f"{name}@{hx(sym[name])}={hx(sb(name),2)}")
     for name in ("Core.RawPak_Spc", "Core.RawPak_FatStart", "Core.RawPak_DataStart", "Core.RawPak_RootClus",
@@ -619,16 +637,16 @@ def diagnose_dump(root: Path, dump_path: Path) -> int:
             else:
                 print(f"{name}@{hx(sym[name])}={sdw(name)}")
 
-    base = sym.get("Core.Dbg_DriverState")
+    base = sym.get("Core.TraceDriverState")
     if base is not None and base + 96 <= len(data):
         bpb = data[base : base + 64]
-        print("Dbg_DriverState BPB:")
+        print("TraceDriverState BPB:")
         print(f"  hex={bpb[:32].hex(' ')}")
         print(f"  asc={asc(bpb[:32])}")
         print(f"  bps={u16(data, base+11)} spc={data[base+13]} reserved={u16(data, base+14)} fats={data[base+16]} "
               f"fatsz={u32(data, base+36)} root={u32(data, base+44)}")
         dbase = base + 64
-        print("Dbg_DriverState dir entries:")
+        print("TraceDriverState dir entries:")
         for idx in range(3):
             e = dbase + idx * 32
             print(f"  {idx}: name=\"{asc(data[e:e+11])}\" attr={hx(data[e+11],2)} "
