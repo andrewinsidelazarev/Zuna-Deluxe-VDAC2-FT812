@@ -67,6 +67,7 @@ Source/OTHER/_*.log
 Source/OTHER/_*.err
 Source/OTHER/_*.out
 Source/OTHER/_*.py
+Source/OTHER/Build/
 Source/OTHER/_replay_logs/
 Source/OTHER/_q_tiny_out/
 Source/OTHER/_z80_lib_cburbridge/
