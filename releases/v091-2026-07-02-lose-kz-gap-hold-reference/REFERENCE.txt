@@ -1,36 +1,40 @@
 v091-2026-07-02-lose-kz-gap-hold-reference
 
-Release contents:
-1. Keeps the L12/Snake Pit spawn-boundary fix: the tail spawn is tied to the
-   actual HSub 31->0 boundary through VDC_SpawnDue / VDC_TrySpawnBoundaryAware.
-2. Fixes lose-state hold before kill-zone: VDC_CheckKillzone checks
-   VDC_LoseStartReady early at rem<=66 and holds the head at rem=65 while
-   gap/explode work is pending.
-3. Dual-chain lose blocker is verified: gap marker or pending explode in the
-   inactive chain blocks ABSORB and prevents the active head from moving into KZ.
-4. Current build also includes the ZBT1 bullet trajectory event reader used by
-   the project build pipeline.
+Состав релиза:
+1. Сохранён фикс L12/Snake Pit: спавн хвоста привязан к реальному переходу
+   HSub 31->0 через VDC_SpawnDue / VDC_TrySpawnBoundaryAware. Это исправляет
+   недорисовку хвоста цепи при большом числе шаров.
+2. Исправлено ожидание lose-state ДО kill-zone: VDC_CheckKillzone заранее
+   проверяет VDC_LoseStartReady при rem<=66 и удерживает голову на rem=65,
+   пока в цепочке ещё есть gap/explode work.
+3. Проверен dual-chain случай: gap marker или pending explode во второй,
+   неактивной цепочке блокирует ABSORB и не даёт активной голове пройти в KZ.
+4. Текущая сборка также включает ZBT1 bullet trajectory event reader, который
+   используется текущим project build pipeline.
 
-GitHub release contents:
+Состав GitHub release-папки:
 - v091-2026-07-02-lose-kz-gap-hold-reference.spg
 - v091-2026-07-02-lose-kz-gap-hold-reference.zumamain.pak
 - v091-2026-07-02-lose-kz-gap-hold-reference.zumalvl.pak
 - v091-2026-07-02-lose-kz-gap-hold-reference.zumaaud.pak
 - v091-2026-07-02-lose-kz-gap-hold-reference.zumasnd.pak
 
-Not included:
-- Unreal emulator runtime, wc.img, dumps, Build/, full source snapshot, and
-  third-party applications.
+Не включено:
+- Unreal emulator runtime;
+- wc.img;
+- дампы;
+- Build/;
+- сторонние приложения.
 
-Verification:
-- .\build.cmd PASS
-- sjasmplus: 0 errors
-- python -u Source\OTHER\test_lose_waits_chain_settle_z80.py PASS
-- python -u Source\OTHER\test_bullet_traj_dual_chain_insert_z80.py PASS
-- python -u Source\OTHER\test_bullet_traj_draw_above_nohit.py PASS
-- python -u Source\OTHER\test_gap_bonus_event_rule.py PASS
+Проверка:
+- .\build.cmd PASS;
+- sjasmplus: 0 errors;
+- python -u Source\OTHER\test_lose_waits_chain_settle_z80.py PASS;
+- python -u Source\OTHER\test_bullet_traj_dual_chain_insert_z80.py PASS;
+- python -u Source\OTHER\test_bullet_traj_draw_above_nohit.py PASS;
+- python -u Source\OTHER\test_gap_bonus_event_rule.py PASS.
 
-Build artifacts:
+Артефакты сборки:
 - v091-2026-07-02-lose-kz-gap-hold-reference.spg
   SHA256 9C6F4943C54FED0909C4EAEF11AA2626C92BBC9B8AE07E3C1ABB4FBD59E652F2
 - v091-2026-07-02-lose-kz-gap-hold-reference.zumamain.pak
