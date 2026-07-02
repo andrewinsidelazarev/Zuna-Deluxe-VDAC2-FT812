@@ -1,16 +1,130 @@
 v091-2026-07-02-lose-kz-gap-hold-reference
 
-Состав релиза:
-1. Сохранён фикс L12/Snake Pit: спавн хвоста привязан к реальному переходу
-   HSub 31->0 через VDC_SpawnDue / VDC_TrySpawnBoundaryAware. Это исправляет
-   недорисовку хвоста цепи при большом числе шаров.
-2. Исправлено ожидание lose-state ДО kill-zone: VDC_CheckKillzone заранее
-   проверяет VDC_LoseStartReady при rem<=66 и удерживает голову на rem=65,
-   пока в цепочке ещё есть gap/explode work.
-3. Проверен dual-chain случай: gap marker или pending explode во второй,
-   неактивной цепочке блокирует ABSORB и не даёт активной голове пройти в KZ.
-4. Текущая сборка также включает ZBT1 bullet trajectory event reader, который
-   используется текущим project build pipeline.
+Это единый релиз v091 относительно GitHub-релиза v074
+releases/v074-2026-06-16-more-games-mouse-reference.
+
+Исходники этой версии находятся в корневом дереве репозитория:
+- Source/ASM/
+- Source/OTHER/
+- Graphics/
+- Docs/
+
+Папка releases/v091-2026-07-02-lose-kz-gap-hold-reference содержит только
+опорные бинарные артефакты сборки и этот файл описания. Исходники не
+дублируются внутри release-папки, потому что формат старых GitHub-релизов
+в этом репозитории такой же: release-папка хранит артефакты, а исходники
+лежат в общем дереве репозитория на этом же коммите.
+
+Основные изменения с v074:
+
+1. L12 / Snake Pit: исправлена недорисовка хвоста цепи при большом числе шаров.
+   Причина была не в FT812 и не в top-mask, а в Z80-логике спавна: при
+   VDC_GLOBAL_SPEED_FACTOR=2 кадр мог перескочить HSub 31->0, а старый спавн
+   смотрел только точное состояние HSub==0. В результате хвост в dual-chain
+   уровне иногда оставался короче реальной цепи на несколько шаров.
+
+   Исправление:
+   - добавлен флаг VDC_SpawnDue;
+   - добавлен boundary-aware путь VDC_TrySpawnBoundaryAware;
+   - спавн хвоста теперь привязан к реальному переходу HSub 31->0, а не к
+     случайному попаданию кадра ровно в HSub==0.
+
+2. Lose-state теперь удерживает шары ДО kill-zone, а не на самой kill-zone.
+   VDC_CheckKillzone заранее проверяет VDC_LoseStartReady при rem <= 66 и
+   удерживает голову на rem=65, пока цепочка ещё не готова к ABSORB.
+
+   Готовность блокируется, если в любой цепочке есть:
+   - gap marker;
+   - pending explode / неотработанная match-3 анимация;
+   - незавершённая работа цепи, из-за которой нельзя запускать lose absorb.
+
+3. Проверен и исправлен dual-chain случай lose-state.
+   VDC_LoseStartReady проверяет не только активную цепь, но и вторую цепь
+   через VDC_SwapChains / VDC_LoseChainBusy. Если gap или explode work остались
+   во второй, неактивной цепочке, активная голова не проходит в kill-zone.
+
+4. Добавлен ZBT1 bullet trajectory pipeline.
+   Траектории выстрела теперь собираются в отдельную страницу данных ZBT1,
+   упаковываются в Track V2 через make_level_pack.py и читаются загрузчиком.
+   Bullet.asm использует BulletTraj.asm / event reader вместо тяжёлого полного
+   прохода по Slots на каждый кадр выстрела.
+
+5. Исправления bullet / collision / dual-chain insertion:
+   - обработка попадания во вторую цепочку;
+   - no-hit / DRAW_ABOVE случаи на мостах и тоннельных участках;
+   - правило gap bonus event;
+   - сохранение корректного состояния pending shot / match после вставки.
+
+6. Обновлены loader, PAK и RAWPAK-инфраструктура:
+   - ZUMALVL.PAK теперь включает расширенные Track V2 данные с ZBT1;
+   - pak_size.inc обновлён под текущий размер ZUMALVL.PAK;
+   - ts-dos / loader_resident читают новые данные уровня;
+   - inject_zuma_to_wc_img.py очищает stale-записи перед записью нового пакета.
+
+7. Новый формат шаров.
+   Шары переведены с ARGB4-атласа на global PALETTED4444 формат:
+   - BALLS_ARGB4_ENABLED=0;
+   - 50px визуальный шар в 51x51 guarded cell;
+   - 6 цветов x 12 spin phases;
+   - 12 страниц данных шаров + отдельная ARGB4 palette page;
+   - BALLS_RAMG_ADDR=#050000, BALLS_PALETTE_RAMG=#080000;
+   - runtime cell index: color*12 + spin12.
+
+   Для нового формата добавлены/обновлены:
+   - make_balls_l19_pal4444.py;
+   - генерация PALETTED4444 данных шаров для текущих PAK/сборочных артефактов;
+   - chain_matrix_lut_l19_51.bin для корректного 51px BITMAP_TRANSFORM;
+   - константы ZL_BALL_L19_* и PALETTED4444 путь в MainLoop.asm.
+
+8. Графика, маски и рендер:
+   - обновлены top-mask overlay данные и Serpents mask;
+   - обновлён track_640.bin;
+   - исправлен KZ particle spawn;
+   - оптимизирован WinSnap;
+   - обновлены диагностические tunnel frame материалы.
+
+9. Z80-оптимизация MainLoop / VDC.
+   В v091 сохранён набор оптимизаций, который разгружает Z80 на тяжёлых
+   уровнях с длинными цепями:
+   - per-ball cache для chain1/chain2: tangent, cell, Vx, Vy, flags по 7 байт;
+   - cache строится один раз, затем under/above draw-pass рисуют из cache без
+     повторного пересчёта VDC_SlotPos;
+   - inline render-sample reader в MainLoop.asm вместо resident trampoline в
+     горячем per-ball цикле;
+   - runtime Spin12 LUT для быстрого выбора фазы шара;
+   - chain_matrix_lut.bin и chain_matrix_lut_l19_51.bin вместо тяжёлой
+     CMD_LOADIDENTITY/CMD_TRANSLATE/CMD_ROTATE/CMD_SETMATRIX цепочки на каждый шар;
+   - ZBT1 bullet trajectory event reader убирает полный Z80-скан Slots из
+     каждого кадра летящего шара;
+   - ball-cache ужат под текущий максимум слотов, чтобы не раздувать Core за
+     границы памяти.
+
+10. MainLoop / VDC синхронизация и диагностика:
+    - сохранены правки wait / DLSWAP / INT_SWAP из текущей рабочей ветки;
+    - добавлена runtime diagnostic инфраструктура для проверки кадровых состояний.
+
+11. UI / загрузка / переходы уровней:
+   - обновлены LevelSelect, MenuMain и MoreGamesSlot0;
+   - исправлены сценарии win transition и загрузки следующего уровня;
+   - добавлены проверки ошибок загрузчика и preview stream.
+
+12. Документация и методика отладки:
+    - обновлены Docs/uchebnik_tsconf_vdac2.md/html/pdf;
+    - обновлена карта памяти VDAC2;
+    - добавлен PATCHED_UNREAL_ZPROF.md;
+    - добавлен Source/OTHER/DEBUG_METHODOLOGY.md;
+    - Чат.txt дополнен расследованием L12, ZBT1 и lose-state.
+
+13. Тесты:
+    Добавлены и обновлены Z80/python проверки для lose-state, dual-chain,
+    bullet trajectory, win transition, loader, level select, frog angle,
+    gap/cascade/match и RAWPAK сценариев.
+
+14. Очистка репозитория:
+    - удалены ошибочно попавшие Source/OTHER/Build артефакты;
+    - Source/OTHER/Build/ добавлен в .gitignore;
+    - сторонний софт, emulator runtime, wc.img, дампы и временный Build/
+      в GitHub-релиз не включаются.
 
 Состав GitHub release-папки:
 - v091-2026-07-02-lose-kz-gap-hold-reference.spg
