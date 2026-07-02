@@ -1,0 +1,88 @@
+v094-2026-07-02-frog-colors-stable-reference
+
+Локальная опорная версия проекта по текущему build после серии правок
+2026-07-02: TRANSFORM-LUT для PALETTED ball matrix, lose/match-3/KZ
+follow-up fixes и стабилизация цветов шаров лягушки без выстрела.
+
+Формат повторяет локальные reference-папки:
+- сохранены Source/, Graphics/, Docs/;
+- сохранены корневые build/config/docs файлы;
+- сохранены Чат.txt, PATCHED_UNREAL_ZPROF.md, ZL_DRAWFRAME_OPTIMIZATION.md;
+- сохранены готовые runtime-артефакты сборки с префиксом v094.
+
+База: v093-2026-07-02-explodeframe-gate-reference.
+
+Основные изменения после v093:
+
+1. TRANSFORM-LUT для PALETTED ball matrix
+   - Source/OTHER/make_chain_matrix_lut.py генерирует
+     Graphics/Converted/chain_matrix_lut_l19_51_16.bin.
+   - Source/ASM/MainLoop.asm переключён с runtime-команд FT812
+     LOADIDENTITY/TRANSLATE/ROTATE/TRANSLATE/SETMATRIX на запись готовых
+     BITMAP_TRANSFORM_A..F DL-слов из 16-bucket LUT.
+   - Runtime test подтвердил совпадение CMD-буфера с LUT для 16 bucket'ов.
+
+2. Lose state не стартует поверх активной match-3 анимации
+   - Source/ASM/VDC.asm: VDC_LoseChainBusy учитывает VDC_ExplodeActive.
+   - VDC_LoseHoldBeforeKillzone держит VDC_KzFrame=1, пока explode/gap
+     реально busy, чтобы KZ warning не начинался поверх match-3.
+   - ABSORB path через VDC_UpdateAbsorbOrRush анимирует pending explode/gap
+     и не сдвигает цепь, пока match-3 не завершён.
+
+3. Выстрелы при входе в kill-zone
+   - Source/ASM/Bullet.asm: новый shot блокируется только на поздней фазе
+     KZ warning, VDC_KzFrame>=9 или VDC2_KzFrame>=9.
+   - При фактическом входе в ABSORB активная пуля/recoil гасятся.
+
+4. Стабилизация цветов лягушки
+   - Source/ASM/main.asm: Frog_RefilterCurrent теперь только sanitizer.
+     Валидные Frog_BallColor и Frog_NextBallColor не меняются без выстрела:
+     ни при переходе intro/preview -> PLAY, ни после cascade/match-3.
+   - Refilter по live chain mask вызывается только для invalid/memory-corrupt
+     значений (>= VDC_NUM_COLORS).
+   - Source/ASM/Frog.asm: при реальном выстреле цвет пули остаётся тем,
+     который был виден во рту; после успешного shot promote next -> current
+     фильтруется через активную цепь, а новый next выбирается через
+     Frog_NewNextColor.
+
+Ключевые тесты текущей серии:
+- .\build.cmd PASS (Main1=15810);
+- python -u Source\OTHER\test_frog_refilter_zero_mask_z80.py PASS;
+- python -u Source\OTHER\test_win_transition_z80.py PASS;
+- python -u Source\OTHER\test_lose_blocks_shots_z80.py PASS;
+- python -u Source\OTHER\test_lose_waits_chain_settle_z80.py PASS.
+
+Доставка текущего build:
+- Прямые runtime-файлы скопированы в
+  C:\Users\Администратор\Desktop\unreal_x64 для SPG-direct ярлыка.
+- Host \\tsclient\D\Работа.Андрей\unreal_x64\wc.img обновлён in-place
+  через inject_zuma_to_wc_img.py.
+- Local C:\Users\Администратор\Desktop\unreal_x64\wc.img обновлён in-place.
+- check_host_wc_img.py для host и local PASS: SPGBLD.INI, ZUMA_VD2.SPG,
+  ZUMA.SYM, ZUMAMAIN.PAK, ZUMALVL.PAK, ZUMAAUD.PAK, ZUMASND.PAK внутри
+  образов имеют size_match=True и hash_match=True.
+
+Артефакты сборки:
+- v094-2026-07-02-frog-colors-stable-reference.spg
+  SHA256 75CD04B3D6CFA52594EACDB0617DCC02705A93847763D24B496549FD643F8FDF
+- v094-2026-07-02-frog-colors-stable-reference.zuma.sym
+  SHA256 7C207D440D313C7BEF5D8C4F79FA167876A79E8B8627C1F7A14117A1A91AA668
+- v094-2026-07-02-frog-colors-stable-reference.zumamain.pak
+  SHA256 B6DD45FDF755084261F3393CA8F7B56E40E08C21D0E19A236ED0734FF4490A40
+- v094-2026-07-02-frog-colors-stable-reference.zumalvl.pak
+  SHA256 938E0C57D0CBC6351279E3234858ACDAD03F02FE90BE336CAC525E944F95E122
+- v094-2026-07-02-frog-colors-stable-reference.zumaaud.pak
+  SHA256 72EF97514A816962D725193DC27C3232373505C859362784C469A8CF057FB017
+- v094-2026-07-02-frog-colors-stable-reference.zumasnd.pak
+  SHA256 8393DB5BB8EC2FDA98C970A3303C43BDEF86A5CA5B4CF09FF09F8FC0C53409DA
+
+Проверка сохранения:
+- Все сохранённые v094 runtime-артефакты совпадают с текущими Build/*
+  по SHA256.
+
+Не включено:
+- Unreal runtime;
+- wc.img;
+- Build/ целиком;
+- Sounds/ исходное дерево (runtime audio зафиксирован в ZUMAAUD.PAK и
+  ZUMASND.PAK).
