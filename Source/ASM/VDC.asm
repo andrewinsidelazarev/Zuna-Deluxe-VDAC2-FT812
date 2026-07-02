@@ -34,7 +34,7 @@ VDC_LEVEL_START_BALLS  EQU 35                            ; быстрая фаз
 VDC_FAST_ADVANCE       EQU 12                            ; MoveChain ×12 за tick в fast-фазе
 VDC_ABSORB_ADVANCE     EQU 8                             ; absorb chain advance: 8 px/tick (32/8=4 ticks/cell)
 VDC_CELL_SIZE          EQU 32                            ; sample-units на slot.
-VDC_GLOBAL_SPEED_FACTOR EQU 2                            ; supported: 1 or 2. Multiplies fast phase and normal-phase SpeedAdvance calls.
+VDC_GLOBAL_SPEED_FACTOR EQU 2                            ; поддерживается 1 или 2; множитель fast-фазы и normal-вызовов SpeedAdvance.
                 ASSERT VDC_GLOBAL_SPEED_FACTOR >= 1
                 ASSERT VDC_GLOBAL_SPEED_FACTOR <= 2
 VDC_DECAY_NEG          EQU 2                             ; insert head slide (neg→0) быстро.
@@ -125,6 +125,7 @@ VDC_Init:
                 LD   (VDC_GapDecAcc),          A
                 LD   (VDC_GapPosLeft),         A
                 LD   (VDC_BallsSpawned),       A
+                LD   (VDC_SpawnDue),           A
                 ; Cluster RNG state: remaining=0 принудит первый roll на старте.
                 ; Color sentinel #FF — пока remaining=0, color не используется.
                 LD   (VDC_SpawnClusterRem),    A
@@ -603,18 +604,18 @@ VDC_Update:
                 RET
 .upd_play:
                 CALL VDC_UpdateRtcElapsed
-                ; Tick game-time counter (frames). Используется для TIME M:SS в dialog.
+                ; Тик счётчика игрового времени (кадры). Используется для TIME M:SS в dialog.
                 LD   HL, (VDC_StatTimeFrames)
                 INC  HL
                 LD   (VDC_StatTimeFrames), HL
                 CALL VDC_CheckKillzone
                 LD   A, (VDC_BallsSpawned)
-                LD   HL, VDC_LevelStart                 ; per-level lead-in count
+                LD   HL, VDC_LevelStart                 ; lead-in count текущего уровня
                 CP   (HL)
                 JR   NC, .upd_normal
-                ; Fast phase: VDC_FAST_ADVANCE × VDC_GLOBAL_SPEED_FACTOR MoveChain/тик.
-                ; В fast phase spawn без hsub-gate — иначе при wrap-частоте
-                ; редкие spawns ломают fast phase.
+                ; Fast-фаза: VDC_FAST_ADVANCE × VDC_GLOBAL_SPEED_FACTOR MoveChain/тик.
+                ; В fast-фазе spawn без hsub-gate — иначе при wrap-частоте
+                ; редкие spawn'ы ломают fast-фазу.
                 LD   B, VDC_FAST_ADVANCE * VDC_GLOBAL_SPEED_FACTOR
 .upd_fast:      PUSH BC
                 CALL VDC_MoveChain
@@ -630,16 +631,18 @@ VDC_Update:
                 LD   (VDC_RollingActive), A
                 LD   A, SND_SILENCE
                 CALL GS_PlaySfx
-.upd_normal_go: ; Normal phase: VDC_GLOBAL_SPEED_FACTOR × SpeedAdvance тиков/кадр.
+.upd_normal_go: ; Нормальная фаза: VDC_GLOBAL_SPEED_FACTOR × SpeedAdvance тиков/кадр.
                 ; accum += speed_x100 за тик; ≥100 → один MoveChain (шаг=1, плавно).
-                ; Вынесено в Core — Main1/slot3 почти полон. VDC_TrySpawn gate'ится HSub==0.
+                ; Спавн привязан к переходу через границу клетки: при ×2 speed второй
+                ; тик может сразу увести HSub с 0, поэтому одного финального HSub-гейта мало.
+                XOR  A
+                LD   (VDC_SpawnDue), A
                 CALL VDC_SpeedAdvance
                 IF VDC_GLOBAL_SPEED_FACTOR >= 2
                 CALL VDC_SpeedAdvance                   ; дополнительный тик для ×2
                 ENDIF
                 CALL VDC_AnimateChain
-                CALL VDC_TrySpawn
-                RET
+                JP   VDC_TrySpawnBoundaryAware
 
 VDC_UpdateAllChains:
                 ; WIN-снимок позиций/цветов шаров ДО апдейта (только в PLAY), пока
@@ -934,13 +937,14 @@ VDC_UpdateActiveChainPlayOnly:
                 CALL VDC_AnimateChain
                 CALL VDC_TrySpawn_NoHsubGate
                 RET
-.upd2_normal:   CALL VDC_SpeedAdvance
+.upd2_normal:   XOR  A
+                LD   (VDC_SpawnDue), A
+                CALL VDC_SpeedAdvance
                 IF VDC_GLOBAL_SPEED_FACTOR >= 2
                 CALL VDC_SpeedAdvance                   ; дополнительный тик для ×2
                 ENDIF
                 CALL VDC_AnimateChain
-                CALL VDC_TrySpawn
-                RET
+                JP   VDC_TrySpawnBoundaryAware
 
 ; ============================================================================
 ; WIN-снимок: сэмпл ГОЛОВНОГО шара (ближайшего к килл-зоне) каждой цепочки.
@@ -1123,7 +1127,7 @@ VDC_SlotT:
 ; bullet'а до пустоты в цепи).
 ; ============================================================================
 VDC_SlotPos:
-                ; --- skip if gap ---
+                ; --- пропуск gap-ячейки ---
                 LD   C, A
                 LD   H, 0 : LD L, A
                 LD   DE, (VDC_pSlots)
@@ -1136,7 +1140,7 @@ VDC_SlotPos:
 .not_gap:
                 LD   A, C
 VDC_SlotPosAllowGap:
-                ; entry без gap-skip. Caller обязан передать A=i.
+                ; вход без пропуска gap-ячейки. Вызывающий обязан передать A=i.
                 CALL VDC_SlotT                         ; HL = t
                 ; t < 0 → skip
                 BIT  7, H
@@ -1144,7 +1148,7 @@ VDC_SlotPosAllowGap:
                 SCF
                 RET
 .t_nonneg:
-                ; t >= NumSamples → clamp to NumSamples-1
+                ; t >= NumSamples → прижать к NumSamples-1
                 PUSH HL
                 LD   DE, (VDC_ActiveTrackSamples)      ; NumSamples
                 AND  A
@@ -1165,14 +1169,14 @@ VDC_SlotPosAllowGap:
 ;   Условия: SlotsLen<MAX, BallsSpawned<TARGET, HSA>=SlotsLen, HSub==0.
 ; ============================================================================
 VDC_TrySpawn:
-                ; Public entry: с HSub==0 gate (sync с Python try_spawn).
-                ; Fast phase обходит gate через VDC_TrySpawn_NoHsubGate.
+                ; Публичный вход: с gate HSub==0 (синхронно с Python try_spawn).
+                ; Fast-фаза обходит gate через VDC_TrySpawn_NoHsubGate.
                 LD   A, (VDC_HSub)
                 OR   A
                 RET  NZ
                 ; fallthrough
 VDC_TrySpawn_NoHsubGate:
-                ; Zuma bar full → spawn gate OFF (per wiki/manual).
+                ; Zuma bar full → spawn gate OFF (по wiki/manual).
                 ; Хвост перестаёт прирастать, остаётся доедать уже спавненные шары.
                 LD   A, (VDC_GaugeFull)
                 OR   A
@@ -1205,10 +1209,11 @@ VDC_TrySpawn_NoHsubGate:
                 JR   Z, .spawn_no_tail_check
                 RET  P                                 ; положительный → ждём settle
 .spawn_no_tail_check:
-                ; --- Level RNG:
-                ; RTC seconds seed only at VDC_Init. Runtime uses deterministic LFSR.
-                ; Per level setting: 50% single random color OR 50% same-color
-                ; chain of random color and random length 1..VDC_NUM_COLORS-1.
+                ; --- RNG уровня:
+                ; RTC seconds seed используется только в VDC_Init.
+                ; Runtime дальше идёт через детерминированный LFSR.
+                ; Правило уровня: 50% одиночный случайный цвет ИЛИ 50% серия
+                ; одного случайного цвета длиной 1..VDC_NUM_COLORS-1.
                 LD   A, (VDC_SpawnClusterRem)
                 OR   A
                 JR   Z, .spawn_roll_new
@@ -1218,39 +1223,39 @@ VDC_TrySpawn_NoHsubGate:
                 LD   B, A
                 JR   .spawn_color_ready
 .spawn_roll_new:
-                CALL VDC_RandomColor                   ; A = gate roll 0..NUM-1
-                BIT  0, A                              ; odd/even ≈ 50/50 for NUM=6
-                JR   Z, .spawn_single_random           ; 50% single random ball
-                ; cluster path — reroll color until != предыдущий cluster.
-                ; (VDC_SpawnClusterColor) = previous color (или sentinel #FF на init).
+                CALL VDC_RandomColor                   ; A = бросок gate 0..NUM-1
+                BIT  0, A                              ; нечёт/чёт ≈ 50/50 при NUM=6
+                JR   Z, .spawn_single_random           ; 50% одиночный случайный шар
+                ; путь cluster'а — переброс цвета, пока он == предыдущему cluster'у.
+                ; (VDC_SpawnClusterColor) = предыдущий цвет (или сторожевое #FF на init).
 .cluster_color_reroll:
-                CALL VDC_RandomColor                   ; chain color candidate
+                CALL VDC_RandomColor                   ; кандидат цвета серии
                 LD   HL, VDC_SpawnClusterColor
-                CP   (HL)                              ; == previous?
-                JR   Z, .cluster_color_reroll          ; → reroll
-                LD   (HL), A                           ; commit color
-                CALL VDC_RandomClusterLength           ; A = total length 1..NUM-1
-                                                       ; (NB: ZL_Mul16x8 clobs B/C —
+                CP   (HL)                              ; == предыдущему?
+                JR   Z, .cluster_color_reroll          ; → переброс
+                LD   (HL), A                           ; принять цвет
+                CALL VDC_RandomClusterLength           ; A = полная длина 1..NUM-1
+                                                       ; (важно: ZL_Mul16x8 портит B/C —
                                                        ; читаем color из памяти ниже)
-                DEC  A                                 ; current spawn — первый ball
+                DEC  A                                 ; текущий spawn — первый шар
                 LD   (VDC_SpawnClusterRem), A
                 JR   .spawn_color_ready
 .spawn_single_random:
-                ; single path — тоже reroll, чтобы два соседних кластера/single
+                ; одиночный путь — тоже переброс, чтобы два соседних cluster/single
                 ; никогда не были одного цвета.
 .single_color_reroll:
                 CALL VDC_RandomColor
                 LD   HL, VDC_SpawnClusterColor
                 CP   (HL)
                 JR   Z, .single_color_reroll
-                LD   (HL), A                           ; commit color
+                LD   (HL), A                           ; принять цвет
                 XOR  A
                 LD   (VDC_SpawnClusterRem), A
 .spawn_color_ready:
-                LD   A, (VDC_SpawnClusterColor)        ; перечитать color из memory
+                LD   A, (VDC_SpawnClusterColor)        ; перечитать цвет из памяти
                                                        ; (B клобан RandomColor/Mul16x8)
                 LD   B, A
-                ; B = chosen color. Не режем 3+ одинаковых на spawn: в оригинальной
+                ; B = выбранный цвет. Не режем 3+ одинаковых на spawn: в оригинальной
                 ; Zuma цепь может иметь длинные серии, а match запускается только
                 ; от выстрела или физического закрытия gap через Shot2/cascade.
                 LD   A, B
@@ -1262,7 +1267,7 @@ VDC_TrySpawn_NoHsubGate:
                 ADD  HL, DE
                 LD   (HL), B
 
-                ; --- offsets[SlotsLen] = (SlotsLen>0) ? offsets[SlotsLen-1] : 0 ---
+                ; --- offsets[SlotsLen] = offsets[SlotsLen-1], если SlotsLen>0, иначе 0 ---
                 LD   A, (VDC_SlotsLen)
                 OR   A
                 JR   Z, .spawn_off_zero
@@ -1283,7 +1288,7 @@ VDC_TrySpawn_NoHsubGate:
 
                 ; --- Shot2[SlotsLen] = 0 ---
                 ; Не ставим Shot2 на spawn — иначе cluster RNG с 50% repeat создаёт
-                ; 3+ same color и моментально auto-match'ит → chain не растёт.
+                ; 3+ одного цвета и моментально auto-match'ит → цепь не растёт.
                 ; В оригинальной Zuma spawn НЕ триггерит match — match только на
                 ; player insert или DoGapStep adjacency.
                 LD   A, (VDC_SlotsLen)
@@ -1298,15 +1303,25 @@ VDC_TrySpawn_NoHsubGate:
                 LD   HL, VDC_BallsSpawned
                 INC  (HL)
                 JR   NZ, .spawn_done
-                DEC  (HL)                              ; saturate at 255; не wrap в fast phase
+                DEC  (HL)                              ; насыщение на 255; без wrap в fast-фазе
 .spawn_done:
-                RET                                    ; single-shot per tick (= Python коллеги).
-                                                       ; Множественный spawn даёт instant chain growth = дёрганость.
+                RET                                    ; один spawn на тик (= Python коллеги).
+                                                       ; Множественный spawn даёт мгновенный рост цепи = дёрганость.
+
+; Нормальная фаза: если в этом кадре уже был переход HSub 31→0, разрешаем
+; spawn без повторной проверки текущего HSub. Иначе используем обычный gate.
+VDC_TrySpawnBoundaryAware:
+                LD   A, (VDC_SpawnDue)
+                OR   A
+                JP   Z, VDC_TrySpawn
+                XOR  A
+                LD   (VDC_SpawnDue), A
+                JP   VDC_TrySpawn_NoHsubGate
 
 ; ============================================================================
-; VDC_MoveChain — HSub += 1 (1 sample) если chain не frozen; wrap → HSA++.
+; VDC_MoveChain — HSub += 1 (1 sample), если цепь не frozen; wrap → HSA++.
 ; Шаг всегда 1 — плавное движение. Скорость регулируется частотой вызовов
-; (VDC_GLOBAL_SPEED_FACTOR × SpeedAdvance тиков/кадр + fast-phase multiplier).
+; (VDC_GLOBAL_SPEED_FACTOR × SpeedAdvance тиков/кадр + множитель fast-фазы).
 ; ============================================================================
 VDC_MoveChain:
                 LD   A, (VDC_LoseHoldCnt)
@@ -1334,6 +1349,8 @@ VDC_MoveChain:
                 JR   C, .mc_save_sub
                 XOR  A
                 LD   (VDC_HSub), A
+                INC  A
+                LD   (VDC_SpawnDue), A
                 ; HSA++ с cap по TrackNumSlots-1
                 LD   HL, (VDC_TrackNumSlots)           ; max
                 LD   A, (VDC_HSA)
@@ -3348,8 +3365,9 @@ VDC_GapTempo:      DEFB VDC_PULL_BASE_X10  ; темп закрытия ×10 (vp 
 VDC_GapDecAcc:     DEFB 0                  ; дробный накопитель декея (остаток 0..9)
 VDC_GapPosLeft:    DEFB 0                  ; 1 = остались положительные комп-офсеты (доезд)
 VDC_BallsSpawned:  DEFB 0
-VDC_SpawnClusterColor: DEFB 0xFF  ; current cluster color (HD-ref style same-color runs)
-VDC_SpawnClusterRem:   DEFB 0     ; remaining same-color spawns ПОСЛЕ текущего (0=roll new)
+VDC_SpawnDue:      DEFB 0                  ; был переход HSub 31→0 во время normal speed-тиков
+VDC_SpawnClusterColor: DEFB 0xFF  ; цвет текущего cluster'а (HD-ref стиль same-color серий)
+VDC_SpawnClusterRem:   DEFB 0     ; оставшиеся same-color spawn'ы ПОСЛЕ текущего (0=новый roll)
 VDC_MatchScanIdx:  DEFB 0
 VDC_ScanGapBusy:   DEFB 0
 VDC_BridgeScanActive: DEFB 0

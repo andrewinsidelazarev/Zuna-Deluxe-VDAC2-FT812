@@ -40,6 +40,8 @@ ZL_SPACE_LEVEL_INDEX EQU LEVEL_RUNTIME_COUNT - 1       ; Space is the last runti
 ZL_SPACE_STARS_PER_LAYER EQU 24
 ZL_TRACKF_TUNNEL     EQU #01                           ; track flags bit0: no bullet hit
 ZL_TRACKF_DRAW_ABOVE EQU #02                           ; track flags bit1: draw after top layer
+ZL_SPIN12_LOW_LUT    EQU #4B80                         ; 256-byte runtime LUT after dual ball caches
+ZL_SPIN12_LOW_LUT_END EQU ZL_SPIN12_LOW_LUT + 256       ; ends before #4C80 service bytes
 
 ; ----------------------------------------------------------------------------
 ; MainLoop — точка входа. Никогда не возвращается.
@@ -50,6 +52,7 @@ MainLoop:       ; --- Init game state (одноразово при первом 
                 ; Spin K — runtime (per-level калибровка). Default = level 1.
                 LD   A, ZL_SPIN_K_DEFAULT
                 LD   (ZL_SpinK), A
+                CALL ZL_InitSpin12LowLut
 
 .Loop           ; --- 1. Update input + game state (Z80-only, параллельно с FT812 render) ---
                 CALL Input_Scan                      ; единый опрос ввода: мышь + PS/2-клавиатура
@@ -108,22 +111,30 @@ MainLoop:       ; --- Init game state (одноразово при первом 
                 endif
                 FT_Display
 
-                ; --- 3. Phase-stable sync: дождаться нового REG_FRAMES edge,
-                ; затем завершения предыдущего DLSWAP. REG_INT_FLAGS на реале
-                ; clear-on-read/edge-like; после ускорения Z80 он может давать
-                ; stale/missed phase. Этот тест намеренно one-frame-late.
-                FT_RD_REG8 FT_REG_FRAMES
-                LD   (ZL_WaitFrameByte), A
-.WaitFrameEdge  FT_RD_REG8 FT_REG_FRAMES
-                LD   HL, ZL_WaitFrameByte
-                CP   (HL)
-                JR   Z, .WaitFrameEdge
-.WaitDLSwap     FT_RD_REG8 FT_REG_DLSWAP
+                ; --- 3. Синхронизация gameplay-кадра: ставим swap из устойчивой фазы refresh.
+                ; Ожидание INT_SWAP ограничено: если edge уже съеден/пропущен,
+                ; переходим к жёсткому правилу ниже. Ожидание DLSWAP в gameplay
+                ; НЕ ограничено: нельзя кормить новый RAM_DL, пока предыдущий
+                ; DLSWAP_FRAME ещё ждёт показа.
+                LD   L, 64
+.WaitGameplayInt:
+                FT_RD_REG8 FT_REG_INT_FLAGS
+                AND  FT_INT_SWAP
+                JR   NZ, .GotGameplayInt
+                DEC  L
+                JR   NZ, .WaitGameplayInt
+                JR   .WaitGameplaySwapInit
+.GotGameplayInt:
+                FT_WR_REG8 FT_REG_INT_FLAGS, FT_INT_SWAP
+.WaitGameplaySwapInit:
+.WaitGameplaySwap:
+                FT_RD_REG8 FT_REG_DLSWAP
                 AND  3
-                JR   NZ, .WaitDLSwap
-
-                ; --- 4. Burst write Z80 buffer → FT812 RAM_CMD в swap window;
-                ; дождаться, пока coprocessor построит RAM_DL, затем request swap.
+                JR   Z, .SubmitGameplayFrame
+                JR   .WaitGameplaySwap
+.SubmitGameplayFrame:
+                ; Burst write Z80 buffer → FT812 RAM_CMD; дождаться, пока
+                ; coprocessor построит RAM_DL, затем request swap.
                 if ZL_FT_CMD_DMA_ENABLED
                 CALL ZL_FT_CMD_Write_DMA
                 else
@@ -132,7 +143,7 @@ MainLoop:       ; --- Init game state (одноразово при первом 
                 CALL FT.Coprocessor.WaitFlush
                 FT_WR_REG8 FT_REG_DLSWAP, FT_DLSWAP_FRAME
 
-                ; --- 5. Frame counter ---
+                ; --- 4. Frame counter ---
                 LD   HL, (ZL_FrameCounter)
                 INC  HL
                 LD   (ZL_FrameCounter), HL
@@ -1020,7 +1031,43 @@ ZL_BuildActiveChainCache:
                 LD   HL, (VDC_ActiveTrackSamples)
                 DEC  HL
 .PrePassTIn:
-                CALL VDC_ReadRenderSampleAtHL          ; BC=Vx, DE=Vy, sets LastT/Tangent/Flags
+                ; Inline render-sample reader: same Track V2 ABI as VDC_ReadRenderSampleAtHL,
+                ; but avoids the resident trampoline in the per-ball cache-build loop.
+                LD   (VDC_LastT), HL
+                PUSH HL
+                LD   A, H
+                RRCA
+                RRCA
+                RRCA
+                AND  #03                               ; page index = t >> 11
+                LD   E, A
+                LD   A, (VDC_RenderTrackPageIdx)
+                CP   E
+                JR   Z, .PrePassSamplePageReady
+                LD   A, E
+                LD   (VDC_RenderTrackPageIdx), A
+                LD   D, 0
+                LD   HL, (VDC_pTrackPages)
+                ADD  HL, DE
+                LD   A, (HL)
+                SetPage2_A
+.PrePassSamplePageReady:
+                POP  HL
+                LD   A, H
+                AND  #07
+                LD   H, A                              ; local sample = t & #07FF
+                ADD  HL, HL
+                ADD  HL, HL
+                ADD  HL, HL                            ; local * 8
+                SET  7, H                              ; #8000 + local*8
+                LD   C, (HL) : INC HL
+                LD   B, (HL) : INC HL                  ; BC = baked Vx
+                LD   E, (HL) : INC HL
+                LD   D, (HL) : INC HL                  ; DE = baked Vy
+                LD   A, (HL)
+                LD   (VDC_LastTangent), A : INC HL
+                LD   A, (HL)
+                LD   (VDC_LastTrackFlags), A
                 POP  HL                               ; restore cache ptr
                 LD   (ZL_TmpBallX), BC
                 LD   (ZL_TmpBallY), DE
@@ -1857,21 +1904,43 @@ ZL_SpinPhase:
                 endif
 
 ZL_SpinPhase12:
-                LD   C, H                              ; q = floor(t*61/256) mod 12
-                LD   D, L
-                LD   E, ZL_BALL_L19_SPIN_K
-                CALL Frog_Mul8x8u                      ; HL = low(t)*61
-                LD   A, H                              ; floor(low*61/256)
-                PUSH AF
-                LD   D, C
-                LD   E, ZL_BALL_L19_SPIN_K
-                CALL Frog_Mul8x8u                      ; HL = high(t)*61
-                POP  AF
+                ; q = floor(t*61/256) mod 12.
+                ; Since 61 mod 12 = 1:
+                ;   (H*61 + floor(L*61/256)) mod 12 = (H + floor(L*61/256)) mod 12.
+                LD   C, H                              ; C = high(t)
+                LD   A, L
+                ADD  A, LOW ZL_SPIN12_LOW_LUT
                 LD   E, A
-                LD   D, 0
-                ADD  HL, DE
-                LD   A, ZL_BALL_L19_PHASES
-                CALL VDC_DivHLbyA                      ; A = remainder
+                LD   D, HIGH ZL_SPIN12_LOW_LUT
+                JR   NC, .sp12_lut_addr_ok
+                INC  D
+.sp12_lut_addr_ok:
+                LD   A, (DE)                           ; floor(low(t)*61/256)
+                ADD  A, C                              ; high(t) contribution modulo 12
+                CP   48
+                JR   C, .sp12_lt48
+                SUB  48
+.sp12_lt48:     CP   24
+                JR   C, .sp12_lt24
+                SUB  24
+.sp12_lt24:     CP   ZL_BALL_L19_PHASES
+                RET  C
+                SUB  ZL_BALL_L19_PHASES
+                RET
+
+ZL_InitSpin12LowLut:
+                LD   DE, ZL_SPIN12_LOW_LUT
+                LD   HL, 0                             ; HL = n*61
+                LD   B, 0                              ; 256 entries
+.lut_loop:      LD   A, H
+                LD   (DE), A                           ; floor(n*61/256)
+                INC  DE
+                LD   A, L
+                ADD  A, ZL_BALL_L19_SPIN_K
+                LD   L, A
+                JR   NC, .lut_no_carry
+                INC  H
+.lut_no_carry:  DJNZ .lut_loop
                 RET
 
 ; [ZL_FT_CMD_Write_DMA перенесён в shared_render.asm (Main0-резидент) 2026-06-11:
@@ -1938,7 +2007,6 @@ ZL_BallCount:   DEFB 0                                ; cached VDC_SlotsLen дл
 ZL_TmpBucket:   DEFB 0                                ; current bucket в outer loop
 ZL_TmpLastTangent: DEFB 0                             ; per-ball loop: last emitted quantized tangent
 ZL_TmpLastHandle:  DEFB 0xFF                          ; lazy BITMAP_HANDLE — last emitted ball handle (0/9, #FF=reset)
-ZL_WaitFrameByte:  DEFB 0                              ; low byte of REG_FRAMES for phase-stable FT write
 ZL_BallRotationDisabled: DEFB 0                       ; pause/dialog guard: skip per-ball matrix state
 ZL_BallsPalettedActive: DEFB 0                        ; 1: use global native 51px PALETTED4444 balls atlas
 ZL_HeavyTunnelDual: DEFB 0                            ; heavy level: second chain or current level has top mask
@@ -1962,10 +2030,11 @@ ZL_BALL_CACHE2_END EQU ZL_BALL_CACHE2_ADDR + ZL_BALL_CACHE_BYTES
                 if RUNTIME_DIAGNOSTICS_ENABLED
                 ASSERT ZL_BALL_CACHE2_END <= GAMELOG_ADDR
                 else
-                ASSERT ZL_BALL_CACHE2_END <= #4C80
+                ASSERT ZL_BALL_CACHE2_END <= ZL_SPIN12_LOW_LUT
+                ASSERT ZL_SPIN12_LOW_LUT_END <= #4C80
                 endif
 
-; В обычной сборке оба cache должны закончиться до служебной низкой RAM у CMD area.
+; В обычной сборке после cache2 лежит runtime Spin12 LUT.
 ; В диагностической сборке сразу после cache2 начинается circular RAM event log.
 
 ; ----------------------------------------------------------------------------

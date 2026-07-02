@@ -7849,3 +7849,616 @@ hex в теле ftdump.req / номер страницы в dump.req) — поз
 **Финальная правка atlas:** вместо увеличения ячейки до `52x52` сделан шар `50px` внутри `51x51`. Это даёт прозрачный запас по краям, не увеличивает draw window на scanline, не требует новых страниц RAM_G и сохраняет отсутствие FT812 scale. После проверки пользователь подтвердил, что стало нормально, затем atlas был включён глобально.
 **Сборка/инжект:** `build_wc_img.cmd` PASS; host image `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` обновлён. Размеры после сборки: `Main0=9166`, `Main1=16286` (free 98), `UiOvl=13942`, `LoaderOvl=12246`.
 **SHA256 текущих артефактов:** `Build\test_wc.img` = `A0061B3FA7AE8C93DADF6A22180D7FE5A92FC911E19A6FBDECD1A51E4288E110`; host `wc.img` = `2A7C9016D89613951C05A929E45B0BB090B3458036963FEECB7B49DCD5F81F2B`; `ZUMA_VD2.SPG` = `303F928DA26FA22DDD6692260773590D26963D737F6E394B07C8D044138E46AE`; `ZUMAMAIN.PAK` = `5CF21D234D0FB88492BEED61E7C3C24773F437C969F5DEA3381B2EC353AD1130`.
+
+## [2026-06-26] Codex / VDAC2: Z80 bullet collision через per-level/per-angle ZBT1 tables
+**Что сделано:** добавлен offline-генератор `Source/OTHER/make_bullet_trajectory_tables.py`. Он строит для каждого уровня и каждого из 256 углов лягушки компактный stream `ZBT1`: full-sprite exit frame, hit-события по VDC cell/sub вдоль ray corridor, события enter/exit tunnel/no-hit зон. Источник данных тот же, что у runtime: frog X/Y из `level_runtime_table.inc`, треки из `Graphics/levels/Converted/pack/track_lNN*_640.bin`, масштабирование в 1024-space через существующий `make_level_pack.scale_track_samples`.
+**Формат pack:** `make_level_pack.py` теперь добавляет одну 16K страницу `ZBT1` в хвост каждой track section после Track V2 pages. Metadata `ZTV2` расширена полями `ZBT1`, `bullet_pages=1`, `bullet_used`. `ZUMALVL.PAK` вырос до `7,139,840` bytes (`13,945` sectors). Хуже всего по таблице: L19 `14112/16384`, max `26` событий на угол, то есть одна страница на уровень достаточна.
+**Загрузка:** `ts-dos.asm` валидирует marker `ZBT1` и exact track section size `1 + (track_pages + bullet_pages) * 32`, затем читает bullet table в physical page `#13` (`BULLET_TRAJ_PAGE`). Runtime variables `BulletTrajValid/BulletTrajPageCount` добавлены в `loader_resident.asm`.
+**Z80 hot path:** старый полный scan `Slots[]` из `Bullet.asm` заменён на `Bullet_CheckCollisionEvents` в `BulletTraj.asm`. Код вынесен в slot0, чтобы не переполнить `Main0`/`Main1`; после переноса layout: `Slot0 end=#3F43`, `Main0=9168`, `Main1=16169`. Event reader читает только события текущего frame, переключает chain1/chain2 по флагу track, проверяет кандидаты `base slot +/-2`, а реальное попадание всё ещё подтверждает старым bbox/manhattan (`35/54`) и tunnel flags. Gap bonus min-distance обновляется на gap-кандидатах, award остаётся только после `VDC_InsertAt` и destroy (`CALL NZ,VDC_AwardGapBonus`).
+**Вылет пули:** при валидном `ZBT1` `Bullet_Update` использует `Bullet_Frame/Bullet_ExitFrame`, то есть пуля отключается в точке, где sprite полностью вышел за экран, а не когда центр пересёк границу. Старые center bounds оставлены только fallback, если таблица не загружена.
+**Фикс build harness:** `inject_zuma_to_wc_img.py` теперь сначала освобождает все старые package-файлы Zuma в образе, затем пишет новые, иначе почти полный FAT image мог падать transient `not enough free clusters`. Локальный `Build\test_wc.img` расширен на 1024 sectors (512 KiB), потому что новый набор пакетов физически больше старого на ~337 clusters.
+**Проверено:** `build_wc_img.cmd` PASS; host image `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` обновлён in-place. Harness PASS: memory-map, page3 inflate guards, level-select loader, menu inflate, more-games loader, ZiFi pack pipeline, gameplay RAM_G load L01/L02, 24-bit score. Дополнительно PASS: `test_gap_bonus_event_rule.py`, `test_gap_bonus_score_z80.py`, `test_insert_immediate_match_z80.py`, `test_no_premature_shot2_z80.py`, `test_shot2_cleanup_z80.py`, `test_match3_insert_halfcell_z80.py`, `test_pending_shot2_survives_new_match_z80.py`.
+**SHA256 текущих артефактов:** `ZUMA_VD2.SPG` = `7c1b2cffd0f0fa468664b81c381d9fa80cc8cfe682d2234c17b5f3ea9ef005a2`; `ZUMA.SYM` = `176d5d2f6677830c0dfcd702ba2e6d593903d0af5ef62ad052f14c63fccabcba`; `ZUMAMAIN.PAK` = `e6a00e813837e06e11375ca582907068f67cfd947bd692488b07555324ca7280`; `ZUMALVL.PAK` = `938e0c57d0cbc6351279e3234858acdad03f02fe90be336cac525e944f95e122`; `ZUMAAUD.PAK` = `72ef97514a816962d725193dc27c3232373505c859362784c469a8cf057fb017`; `ZUMASND.PAK` = `8393db5bb8ec2fda98c970a3303c43bdef86a5ca5b4cf09ff09f8fc0c53409da`.
+
+## [2026-06-26] Codex / VDAC2: removed diagnostic one-frame-late gameplay vsync
+**Контекст:** после графических/Z80 экспериментов в gameplay path оставался диагностический phase-stable guard: перед основным submit кадра `MainLoop.asm` ждал новый `REG_FRAMES`, затем `REG_DLSWAP==0`, и только после этого слал `ZL_FT_CMD_Write_DMA`. Этот one-frame-late тест на реале ранее не помог и не является обязательным flush.
+**Правка:** из `Source/ASM/MainLoop.asm` удалён блок `REG_FRAMES -> .WaitFrameEdge -> REG_DLSWAP -> .WaitDLSwap`, а также мёртвая переменная `ZL_WaitFrameByte`. Оставлены обязательные части: `ZL_FlushCommandBufferMidFrame` для защиты host CMD buffer и финальный `FT.Coprocessor.WaitFlush -> REG_DLSWAP=FRAME`.
+**Проверено:** `build_wc_img.cmd` PASS; host image `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` обновлён. `check_host_wc_img.py` PASS, все игровые файлы hash_match=True. Размеры: `Slot0 end=#3F43`, `Main0=9168`, `Main1=16125` (free 259), `UiOvl=13942`, `LoaderOvl=12333`.
+**SHA256 текущих артефактов:** `ZUMA_VD2.SPG` = `26da4548c569236c5e241d52676779ced5276bf0fdaa826d2533c41bdf3f2044`; `ZUMA.SYM` = `20152157a464a4fdd2eca17cb88e04868071d6fe6b00858ac4f6fbb7de414610`; `ZUMAMAIN.PAK` = `a66b899464aec38af5b6fba32606328f6bf2470f8a1a3eff5f0b14c420b95512`; `ZUMALVL.PAK` = `938e0c57d0cbc6351279e3234858acdad03f02fe90be336cac525e944f95e122`.
+
+## [2026-06-26] Codex / VDAC2: fixed dual-chain ZBT1 load and chain2 bullet insert
+**Контекст:** после добавления ZBT1 любые уровни с двумя цепочками не грузились, а после исправления загрузки обнаружилось, что на dual-chain уровнях шар-пуля неверно вставляется в цепочку.
+**Загрузка dual-chain:** ранняя проверка размера track section в `ts-dos.asm` осталась старой (`CP 130`) и разрешала только `1 + 4*32` sectors без appended ZBT1 page. Уровни L05/L19 имеют `1 + (4 track pages + 1 bullet page) * 32 = 161` sectors, поэтому loader отваливался до FT phase и давал black screen. В `loader_resident.asm` добавлены `BULLET_TRAJ_PAGES` и `TRACK_SECTION_MAX_SECTORS`, а проверка заменена на вычисляемый максимум.
+**Chain2 insert bug:** в `BulletTraj_SelectTrack` желаемая цепь держалась в `B`, затем вызывался `VDC_SwapChains`. `VDC_SwapChains` клобает `BC`, поэтому после физического перехода на chain2 `Bullet_EventTrackState` мог записываться как 0. Restore не возвращал chain1, а следующие события/insert работали с неверной активной цепью. Исправлено сохранением track id через stack вокруг `CALL VDC_SwapChains`.
+**Bridge-over-tunnel:** no-hit mask теперь применяется на уровне фактического candidate после `VDC_SlotPos`; если candidate имеет `TRACKF_DRAW_ABOVE`, нижний tunnel/no-hit interval не блокирует попадание в верхний мост. Tunnel sample всё ещё не сбивается.
+**Проверено:** `build_wc_img.cmd` PASS; host image `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` обновлён и `check_host_wc_img.py` показывает `hash_match=True` по всем игровым файлам. PASS: `test_bullet_traj_dual_chain_insert_z80.py`, `test_bullet_traj_draw_above_nohit.py`, `test_gameplay_level_load_ramg.py --level-index 18`, `test_gameplay_level_load_ramg.py --level-index 4`, `test_gap_bonus_event_rule.py`, `test_tunnel_render_pass_priority.py`.
+**SHA256 текущих артефактов:** `ZUMA_VD2.SPG` = `70f9033f8491a9d49dc12a3b9d1391f85cea5066a208f9335b3d0ef404336d00`; `ZUMA.SYM` = `ff4625a8daaae71ce1f23f4dfe3fcd61b95dfef1168c21a577a04d715ff9f1f1`; `ZUMAMAIN.PAK` = `a66b899464aec38af5b6fba32606328f6bf2470f8a1a3eff5f0b14c420b95512`; `ZUMALVL.PAK` = `938e0c57d0cbc6351279e3234858acdad03f02fe90be336cac525e944f95e122`.
+
+## [2026-06-26] Session checkpoint before close
+**Текущее состояние:** актуальный рабочий билд собран и внедрён в host `wc.img`. Последние исправленные симптомы: dual-chain уровни L05/L19 снова грузятся; ZBT1 track2 hit вставляет шар именно во вторую цепочку и возвращает active chain1; bridge-over-tunnel hit не блокируется нижней tunnel/no-hit зоной, если candidate помечен `TRACKF_DRAW_ABOVE`.
+**Ключевые правки:** `BulletTraj_SelectTrack` сохраняет track id через stack вокруг `VDC_SwapChains`, потому что swap клобает `BC`; `ts-dos.asm` использует `TRACK_SECTION_MAX_SECTORS` вместо старого `CP 130`; no-hit mask применяется после `VDC_SlotPos` к фактическому candidate, с обходом для `DRAW_ABOVE`.
+**Последняя проверка:** `build_wc_img.cmd` PASS; `check_host_wc_img.py` PASS; targeted tests PASS: dual-chain insert, draw-above no-hit, L19/L5 RAM_G load, gap bonus event rule, tunnel render priority.
+**Продолжать отсюда:** если пользователь сообщает новый real-HW симптом, начинать с текущего host build hash `ZUMA_VD2.SPG=70f9033f8491a9d49dc12a3b9d1391f85cea5066a208f9335b3d0ef404336d00`.
+
+## [2026-06-26] Codex / VDAC2: fixed ZBT1 bbox register clobber after bridge no-hit change
+**Контекст:** после предыдущего исправления пользователь проверил реальное железо и сообщил, что шары в цепочку 2 всё ещё не становятся. Прямой regression `SelectTrack -> VDC_InsertAt` проходил, но он не покрывал полный путь `ZBT1 event -> VDC_SlotPos -> bbox/manhattan -> HemisphereTarget -> VDC_InsertAt`.
+**Причина:** в bridge-over-tunnel правке no-hit mask была перенесена на уровень фактического candidate. Для проверки mask вызывался `BulletTraj_EventMaskToB`, который пишет track mask в `B`. В этот момент `BC` уже содержит X координату шара после `VDC_SlotPos`. Поэтому `B` затирал high byte X (`BC` становился примерно `#01xx/#02xx`), bbox считал шар далеко от пули, и hit не доходил до insert. На chain2 это проявилось как "шары не становятся в цепочку 2".
+**Правка:** `Source/ASM/BulletTraj.asm`: вокруг `CALL BulletTraj_EventMaskToB` добавлен `PUSH BC` / `POP BC`, чтобы no-hit mask check не портил координату X для последующего bbox/manhattan.
+**Regression:** `Source/OTHER/test_bullet_traj_dual_chain_insert_z80.py` расширен: теперь он не только проверяет direct `SelectTrack -> InsertAt`, но и строит один synthetic ZBT1 event `TRACK2|HIT`, вызывает полный `Bullet_CheckCollisionEvents` и проверяет, что `Bullet_Active=0`, `VDC2_Slots` получил новый шар, `VDC_Slots` не изменился, а active chain восстановлена в chain1.
+**Проверено:** `build_wc_img.cmd` PASS; host image `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` обновлён; `check_host_wc_img.py` PASS (`hash_match=True`). PASS: `test_bullet_traj_dual_chain_insert_z80.py`, `test_bullet_traj_draw_above_nohit.py`, `test_gap_bonus_event_rule.py`, `test_gameplay_level_load_ramg.py --level-index 18`, `test_gameplay_level_load_ramg.py --level-index 4`.
+**SHA256 текущих артефактов:** `ZUMA_VD2.SPG` = `746fe1620323b2ef08dcff0e4e471cead20002eb9d4b2a2915d46e6748c8250d`; `ZUMA.SYM` = `51b56fe4417dfd542ca0cabc5b306dff2b74ae9bc44dd894f5f7a5eea064a1c2`; `ZUMAMAIN.PAK` = `a66b899464aec38af5b6fba32606328f6bf2470f8a1a3eff5f0b14c420b95512`; `ZUMALVL.PAK` = `938e0c57d0cbc6351279e3234858acdad03f02fe90be336cac525e944f95e122`.
+
+## [2026-06-30 12:26] VDAC2 → Codex: как ПРАВИЛЬНО запускать Unreal на эмуляцию (видимое окно)
+**Контекст:** напоминание по просьбе пользователя — Codex забыл команду запуска инструментированного Unreal Speccy для Zuma Deluxe VDAC2.
+
+**Командная строка (рабочая папка = `unreal_x64`, где лежат `ZUMA_VD2.SPG`, `Unreal.ini`, `wc.img`):**
+```
+cd /d "<путь>\unreal_x64"
+Unreal.exe ZUMA_VD2.SPG
+```
+Инструментированный билд (профиль L19: дамп кадра ft812_dump.bmp / память / vmouse):
+```
+cd /d "<путь>\unreal_x64"
+"<путь>\Zuma Deluxe VDAC2\Diagnostics\UnrealZ80ProfileL19\run_full\Unreal.exe" ZUMA_VD2.SPG
+```
+
+**Критично (именно это забывается):**
+- SPG передаётся ПРЯМЫМ АРГУМЕНТОМ `ZUMA_VD2.SPG` (имя файла, относительно рабочей папки), НЕ полным путём. БЕЗ аргумента → **CPU HALTED** (Unreal грузится пустым, чёрный экран).
+- Рабочая папка ОБЯЗАНА быть `unreal_x64` — иначе Unreal не находит SPG / `Unreal.ini` / `wc.img`.
+- Окно ВИДИМОЕ оконное: `Unreal.ini` `FullScr=0` (windowed) + `HideConsole=0`; у ярлыка WindowStyle=Normal(1). НЕ запускать скрыто/headless.
+- НЕ запускать ВТОРОЙ экземпляр, если один уже работает: эмулятор — общий ресурс, два экземпляра конфликтуют и клобают друг другу `ft812_dump.bmp`. Использовать уже запущенный (управление по файлам: vmouse / uipos.req / дамп), а не плодить копии.
+- Ярлыки на десктопе (эталон параметров): «Zuma Deluxe VDAC2 (SPG direct patched Unreal).lnk» = патченый Unreal; «Zuma Deluxe VDAC2 (SPG direct).lnk» / «Zuma Deluxe VDAC2.lnk» = `unreal_x64\Unreal.exe ZUMA_VD2.SPG`. Все: Args `ZUMA_VD2.SPG`, WorkDir `unreal_x64`, WinStyle 1.
+
+**Применимо в VDC:** аналог — свой `.SPG` аргументом + рабочая папка эмулятора; без арга так же HALTED.
+**Ссылки:** ярлыки `Desktop/Zuma Deluxe VDAC2*.lnk`; `unreal_x64/Unreal.ini` (FullScr/HideConsole); мемори VDAC2 `hmm2-emulator-launch-shortcut`.
+
+────────────────────────────────────────────────────────────────────────────
+[2026-06-30 15:47] VDAC2 → VDC | Динамический текст + правая кнопка мыши на FT812
+────────────────────────────────────────────────────────────────────────────
+HMM2-сторона сделала переиспользуемый ДИНАМИЧЕСКИЙ рендер текста (не запечённые
+картинки-строки): атлас глифов SMALFONT (ASCII 32..127, маска 1Б/px idx15, белая-
+альфа палитра) в RAM_G + таблица адресов; на Z80 цикл «спрайт-на-символ» через уже
+существующий per-glyph draw (BITMAP_SOURCE/LAYOUT/SIZE/VERTEX2F + перо ResPenX+=w*16).
+Текст НАТИВНО (transform 256, БЕЗ ×1.6 — апскейл рвёт мелкие глифы), низ глифа +2px
+паддинг (реальный FT812 режет ~2px низа). Применено: right-click инфо-попап здания
+замка (рамка RECTS + заголовок + описание построчно), подтверждено на bt8xxemu.
+
+**Полезно для Zuma/VDC (тот же патч-Unreal):** ПРАВАЯ кнопка мыши доступна —
+  • TSLib: Input.Mouse.SVK_RBUTTON = %010, порт #FADF active-low (как левая);
+  • виртуальная мышь патч-Unreal: vmouse.bin поле buttons бит0=Л, **бит1=П**, бит2=Сред.
+    (write_vm(active=1, buttons=2, dx=0, dy=0) = зажать ПКМ; 1=ЛКМ, 4=средняя).
+Если в Zuma понадобится текст поверх FT812 — тот же приём (глиф=спрайт, перо двигает
+draw-helper) работает без запекания строк.
+
+────────────────────────────────────────────────────────────────────────────
+[2026-06-30 17:14] VDAC2 → VDC | ЛОВУШКA FT812: FT_BITMAP_SIZE маскирует размер &511
+────────────────────────────────────────────────────────────────────────────
+Потратил полчаса на «невидимое» окно — корень в макросе FT_BITMAP_SIZE:
+он кодирует (Width & 511)<<9 | (Height & 511) — ширина/высота МАСКИРУЮТСЯ 9 битами.
+Для битмапа с ЭКРАННЫМ размером >511px ОБЯЗАТЕЛЬНО эмитить FT_BITMAP_SIZE_H Width,Height
+(высокие биты), ИНАЧЕ битмап клипится в (size & 511)px — часто в узкую полоску → «невидим»,
+причём DL не падает (кадр и курсор на месте, баг тихий).
+
+Коварство: 0 & 511 = 0, а FT812 трактует size=0 как «без клипа» (рисует целиком до SCISSOR).
+Поэтому полноэкранный композит шириной 1024 (=640×1.6) РАБОТАЕТ СЛУЧАЙНО (1024&511=0), и кажется
+что «SIZE_H не нужен». Любая НЕ кратная 512 ширина >511 — клипнется. У меня 513px → 513&511=1px.
+
+И: после большого битмапа СБРОСИТЬ FT_BITMAP_SIZE_H 0,0 (+ LAYOUT_H 0,0) перед мелкими спрайтами/
+глифами — иначе они унаследуют +512 к размеру (SIZE_H/LAYOUT_H — состояние DL, протекает как transform).
+
+Для Zuma то же железо/макросы (TSLib FT/DL Macro.inc) — если рисуешь диалог/портрет/апскейл шире 511px,
+проверь SIZE_H. Тихий баг, по снимку выглядит как «спрайт не появился».
+
+2026-07-01 03:40 Codex session summary
+- Saved project-format reference with sources/resources/artifacts: releases\v089-2026-07-01-spin12-lut-reference.
+- Reference contains Source, Graphics, Docs, project build/config files, current SPG/SYM/PAK artifacts; no Unreal, wc.img, emulator binaries, external tools or archive junk. Removed two ZIP patch archives from the reference Docs copy.
+- Current code/build includes Spin12 low-byte LUT work already present before this note.
+- Request to reduce ball glue/gap-close trigger from 256 to 128 was applied in Source\ASM\VDC.asm and mirrored in Source\OTHER\vdc_visual_emulator.py, built and injected.
+- User cancelled that change. Reverted glue/gap-close trigger back to 256:
+  Source\ASM\VDC.asm: VDC_GAP_ACCUM_STEP EQU 256
+  Source\OTHER\vdc_visual_emulator.py: GAP_ACCUM_STEP = 256
+- Rebuilt after revert: .\build.cmd passed with Errors: 0.
+- Updated Build\SD\Games\Zuma Deluxe VDAC2 with fresh SPG/SYM/PAK.
+- Updated host image C:\Users\Администратор\Desktop\unreal_x64\wc.img after checking Unreal was not running; wc.img timestamp after update: 2026-07-01 03:37:21.
+- No Unreal/python/sjasmplus/spgbld processes were left running at final check.
+
+## [2026-07-01 16:17] VDAC2 → VDC: две ловушки устаревания PAK при деплое (стрим-архитектура)
+**Контекст:** в HMM2-порте (та же машина/паттерн, что Zuma: spg-загрузчик + потоковые PAK) поймал ДВА бага «тихого устаревания» PAK, каждый выглядел как «баг рантайма/логики», часами уводил не туда:
+1. **HMM2SCN.PAK (код оверлеев сцен) не пересобирался** — build.cmd делал sjasmplus SAVEBIN свежих *_ovl.bin, но НЕ запускал упаковщик PAK (scn_pack.py). При входе стримился СТАРЫЙ код сцены → резидент прыгал на НОВЫЙ адрес входа, где лежал старый код с другой раскладкой → сцена тихо не открывалась (переменная режима не менялась, Z80 жив). Фикс: добавить упаковщик PAK в build.cmd ПОСЛЕ ассемблера.
+2. **PAK свежий, но не инжектился в образ диска** — build не пишет в wc.img; копировал только SPG, PAK на диске оставался старым → загрузчик читал сектора по НОВЫМ ожиданиям поверх СТАРОГО файла → «снег»/чёрный экран.
+**Применимо ли в VDC:** ПРЯМО применимо, если у тебя тоже цепочка assemble → pack PAK → inject в образ. Правило: (а) КАЖДЫЙ генератор PAK должен быть в build-скрипте и запускаться после того, что он пакует; (б) после сборки сверять TIMESTAMP каждого PAK vs исходников; (в) ОБЯЗАТЕЛЬНО ре-инжектить ВСЕ PAK в образ диска, не только загрузчик. Симптом «логика не срабатывает, но машина жива» при стрим-архитектуре → первым делом проверить свежесть/инжект PAK, а не код.
+**Ссылки:** HMM2 build.cmd (+scn_pack.py), memory hmm2-build-cmd-missing-scn-pack, hmm2-image-update-after-build.
+
+────────────────────────────────────────────────────────────────────────────
+[2026-07-01 13:28] VDAC2 / Zuma: L12 gameplay submit sync A/B build
+────────────────────────────────────────────────────────────────────────────
+**Контекст:** исследование L12 Snake Pit: цепочка дёргается при движении, визуально
+похоже на недорисовку хвоста при большом числе шаров. Проверка дампов показала, что
+protective flush-on-pressure в `ZL_DrawCachedActiveChain` НЕ удалён: большой комментарий
+`НЕ ВЫКЛЮЧАТЬ и не заменять на RET` на месте, per-ball guard при давлении host CMD
+buffer тоже на месте. `dl_stats.csv` рос вместе с числом шаров, без провала cell/vertex,
+то есть это не потеря хвоста на уровне готового DL. L12 без top-mask (`TopMaskL12 DB 0`).
+
+**Рабочая гипотеза после скрина/обсуждения:** проблема на стороне Z80/синхронизации
+submit кадра с `DLSWAP`, а не на стороне FT812-растеризации и не "срыв строчной
+синхронизации". Старый gameplay path после `FT_Display` сразу делал DMA + `WaitFlush`
++ `DLSWAP_FRAME`, без ожидания стабильной фазы и без обязательного `DLSWAP==0` перед
+отправкой. Это может позволить Z80 строить/подавать следующий кадр в плавающей фазе
+относительно реально показанного кадра.
+
+**Что изменено в текущем рабочем A/B-билде:** в `Source/ASM/MainLoop.asm` после
+`FT_Display` добавлен gameplay frame pacing gate:
+- bounded wait по `FT_REG_INT_FLAGS & FT_INT_SWAP` (64 poll), с очисткой `FT_INT_SWAP`,
+  если edge пойман;
+- затем обязательный unbounded wait `FT_REG_DLSWAP & 3 == 0`;
+- только после этого `ZL_FT_CMD_Write_DMA` / `WaitFlush` / `DLSWAP_FRAME`.
+
+Важно: первая попытка сделала `DLSWAP` wait bounded как в меню; это признано неверным
+для gameplay, потому что при тяжёлом L12 нельзя давать Z80 кормить новый RAM_DL, пока
+предыдущий `DLSWAP_FRAME` ещё pending. Финальный текущий билд ждёт `DLSWAP==0` без
+таймаута.
+
+**Сборка/деплой:** `.\build.cmd` PASS, `sjasmplus` 0 errors, 11 warnings, `Main1=16253`.
+Скопирован `Build\ZUMA_VD2.SPG` в `C:\Users\Администратор\Desktop\unreal_x64\ZUMA_VD2.SPG`
+и выполнен in-place inject в host image:
+`C:\Users\Администратор\Desktop\unreal_x64\wc.img`.
+Host `wc.img` timestamp после inject: `2026-07-01 13:28:06`.
+SPG SHA256 текущего sync A/B-билда:
+`D46D9F168086B3614988B84BA423CD7180C8D5555A0CA37C0A61B3DFA9FB5ABA`.
+
+**Статус опоры:** отдельная release/reference-папка с исходниками для этого sync A/B
+билда ещё НЕ создана. Последняя сохранённая опора остаётся
+`releases\v089-2026-07-01-spin12-lut-reference`; текущий sync-патч живёт в рабочем
+дереве и в собранных/инжекченных артефактах.
+
+────────────────────────────────────────────────────────────────────────────
+[2026-07-01 23:06] VDAC2 / Zuma (Claude): root-cause «хвост цепи не дорисовывается + дёргается» = mid-frame flush шлёт CMD_DLSTART при pending DLSWAP
+────────────────────────────────────────────────────────────────────────────
+**Симптом:** при большом числе шаров хвост цепи не дорисовывается, движение дёргается;
+на ЛЮБЫХ уровнях (в т.ч. одноцепочечный L04); срыва строк НЕТ; sync-патч 13:28 не помог.
+
+**Что проверено и ОТСЕЯНО (полный Z80-эмулятор, текущий билд):**
+- L04 чистое движение 240 кадров: 0 потерь (все 71-79 шаров в кэше и DL каждый кадр).
+- L04 + gap-закрытие CATCH-UP 180 кадров: bug_hits=0 — ни один шар с t>=0 в cull-окне
+  не выпал из кэша/DL. Логика цепи и flush-on-pressure Z80-стороны работают.
+- Защита старинного бага (ZL_FlushCommandBufferMidFrame + per-ball guard #58 +
+  комментарий-сторож) в рабочем дереве НЕ тронута (git diff проверен).
+
+**Root-cause (структурно, по коду MainLoop.asm:102-144):**
+Кадр: FT_CMD_Start → FT_DL_Start (CMD_DLSTART = ПЕРВОЕ слово host-буфера, :103) →
+ZL_DrawFrame → [sync-гейт DLSWAP==0, :114-134] → финальный submit → DLSWAP_FRAME.
+При кадре >3920Б внутри ZL_DrawFrame срабатывает ZL_FlushCommandBufferMidFrame
+(:558-567): DMA → WaitFlush → сброс BufferPtr — БЕЗ проверки REG_DLSWAP.
+Первый чанк кадра (с CMD_DLSTART) уходит в FIFO ДО гейта, в произвольной фазе.
+Если предыдущий DLSWAP_FRAME ещё pending — копроцессор по CMD_DLSTART обнуляет
+REG_CMD_DL и перезаписывает ЕЩЁ НЕ ПОКАЗАННЫЙ display list (нарушение требования
+даташита FT81x: не писать новый DL пока REG_DLSWAP != 0). На границе кадра
+свопается смесь: начало нового DL + огрызок старого → хвост цепи (последние
+слова DL) пропадает/мигает, движение дёргается.
+
+**Почему всё сходится:** порог «при большом числе шаров» = ровно появление
+mid-frame flush (кадр >3920Б; L04 ~79 шаров × ~52Б ≈ 4.1КБ). Короткие кадры
+уходят одним куском ПОСЛЕ гейта — чисто. Sync-патч 13:28 не помог, потому что
+гейт стоит перед ФИНАЛЬНОЙ отправкой, а не перед ПЕРВОЙ. DL валиден по формату —
+поэтому нет ни срыва строк, ни invalid-DL warning.
+
+**Фикс (концепт, НЕ реализован):** ожидание DLSWAP==0 перенести на ПЕРВУЮ отправку
+FIFO в кадре: флаг «swap armed» после DLSWAP_FRAME; ZL_FlushCommandBufferMidFrame
+и финальный submit перед отправкой: если флаг взведён → дождаться REG_DLSWAP==0,
+снять флаг, слать. Лёгкие кадры не меняются, тяжёлые сериализуются правильно.
+
+**Применимо в VDC:** если тот же паттерн (host-буфер + mid-frame flush + хостовый
+REG_DLSWAP) — проверь, что первая FIFO-отправка кадра ждёт DLSWAP==0.
+
+────────────────────────────────────────────────────────────────────────────
+[2026-07-02 02:14] VDAC2 / Zuma: L12 VDC spawn-boundary A/B build
+────────────────────────────────────────────────────────────────────────────
+**Контекст:** проверка L12/Snake Pit по дампам из
+`C:\Users\Администратор\Desktop\unreal_x64\Debug`. Симптом остаётся формулировать
+как недорисовка/недобор хвоста цепи при большом числе шаров, не top-mask и не
+обрыв хвоста render-кэшем.
+
+**Что проверено:**
+- Для L12 top-mask отсутствует (`TopMaskL12 DB 0`), поэтому объяснение через
+  top-mask для этого уровня неверное.
+- `.dl` из `Debug` не показывает забитый RAM_DL 2048/2048: например `000789.dl`
+  имеет хвост нулей после реального блока команд, а не жёсткий обрыв списка.
+- `.z80`-дампы patched Unreal содержат resident low-page напрямую, но gameplay
+  page `#C000` в них не читается старой схемой как `main1_play`; поэтому HSA и
+  offsets из этих дампов нельзя честно выводить старым парсером без отдельного
+  host-side dump'а нужной страницы.
+
+**Найденный Z80-side кандидат:**
+`VDC_GLOBAL_SPEED_FACTOR=2`, normal update делает два `VDC_SpeedAdvance` за кадр,
+а старый spawn-gate вызывался только один раз в конце кадра через `VDC_TrySpawn`
+и требовал текущий `HSub==0`. Если первый speed-тик переводил `HSub 31→0`, а
+второй тик сразу уводил `HSub` дальше, момент границы клетки пропускался. На
+двухцепочечном L12 такой пропуск может накапливаться как недобор хвоста на
+несколько шаров, без участия FT812 и без настоящего render-обрыва.
+
+**Что изменено в ASM:**
+- Добавлен локальный для активной цепи флаг `VDC_SpawnDue`.
+- `VDC_MoveChain` ставит `VDC_SpawnDue=1` при переходе `HSub 31→0`.
+- Оба normal-пути (`VDC_Update` и `VDC_UpdateActiveChainPlayOnly`) очищают флаг
+  перед speed-тиками и после анимации вызывают `VDC_TrySpawnBoundaryAware`.
+- `VDC_TrySpawnBoundaryAware`: если граница клетки уже была пересечена в этом
+  кадре, spawn идёт через `VDC_TrySpawn_NoHsubGate`; иначе остаётся старый gate
+  через текущий `HSub==0`. Fast-фаза не менялась.
+- Добавленные комментарии приведены к русскому, файл сохранён в UTF-8.
+
+**Сборка/инжект:**
+- `build.cmd` прошёл: `Errors: 0`, Main1/gameplay page = 16282 bytes.
+- `Build\ZUMA_VD2.SPG` SHA256 =
+  `DDC8253D0C7F9F3B6BF8B5DE0A116F425764974E70E4E3BA6945225F45191498`.
+- Тот же SPG скопирован в
+  `C:\Users\Администратор\Desktop\unreal_x64\ZUMA_VD2.SPG`.
+- `ZUMA.SYM` обновлён рядом с patched Unreal.
+- `wc.img` обновлён in-place через `Source\OTHER\inject_zuma_to_wc_img.py`;
+  SHA256 образа после инжекта =
+  `09B773D4DC4CA071F0591DB3104C05C6AF933EC79B9276556EF081D17B6DE7EF`.
+
+────────────────────────────────────────────────────────────────────────────
+[2026-07-02 02:22] VDAC2 / Zuma: сохранена опорная версия v090
+────────────────────────────────────────────────────────────────────────────
+После пользовательской проверки L12 проблема недорисовки хвоста/дёргания ушла.
+Сохранён reference snapshot:
+`C:\Users\Администратор\Desktop\Zuma Deluxe VDAC2\releases\v090-2026-07-02-l12-spawn-boundary-reference`.
+
+Формат как у предыдущих reference-релизов: `Source`, `Graphics`, `Docs`,
+build-скрипты, `spgbld*.ini`, `REFERENCE.txt` и текущие `.spg/.pak/.sym`.
+Не включены `.git`, `Build`, вложенные `releases`, backups/diagnostics,
+Unreal/patched emulator, `wc.img` и сторонние runtime-бинарники. Проверка
+релиза: `.exe/.dll/.img/.iso/.vhd` внутри нет.
+
+────────────────────────────────────────────────────────────────────────────
+[2026-07-02 02:26] VDAC2 / Zuma: подробный разбор исправленного L12 tail/spawn бага
+────────────────────────────────────────────────────────────────────────────
+**Итог:** проблема L12/Snake Pit ушла после Z80-side фикса в `Source/ASM/VDC.asm`.
+Причина была не в top-mask, не в переполнении RAM_DL, не в «обрыве хвоста»
+render-кэшем и не в строчной синхронизации FT812. Реальная ошибка была в логике
+спавна хвоста цепи: normal update мог пропустить момент перехода через границу
+клетки (`HSub 31→0`) и из-за этого не добавить очередной шар в хвост.
+
+**Как проявлялось:**
+- При большом числе шаров на L12 хвост выглядел как недорисованный/недобранный:
+  цепь физически не доходила до устья на несколько шаров.
+- Это было именно «не хватает шаров в хвосте», а не render-cull последнего
+  фрагмента. Display list рисовал то, что ему дали.
+- Дёргание цепи было следствием той же ошибки: движение `HSA/HSub` продолжалось,
+  а пополнение хвоста происходило не на каждом нужном cell-boundary. Визуально
+  хвост то отставал, то догонял, и на двух цепях L12 это особенно заметно.
+
+**Что было проверено и отброшено:**
+- `TopMaskL12 DB 0`: у L12 нет top-mask, значит объяснение через маску уровня
+  неверное.
+- Срыва строчной синхронизации нет.
+- По `.dl` дампам не подтверждается жёсткое переполнение RAM_DL 2048/2048:
+  в проблемных кадрах есть нормальный нулевой хвост после реального блока DL.
+- Старый защитный фрагмент от настоящего render-обрыва хвоста не удалялся:
+  логика mid-frame flush/guard остаётся отдельной темой, но этот L12 симптом
+  ушёл не из-за неё.
+- То, что похожий симптом был виден и без FT812 на чистом TS-Config, сходится
+  именно с общей Z80/VDC ошибкой, а не с аппаратным DL/FT812 дефектом.
+
+**Старая логика, где была ошибка:**
+- `VDC_GLOBAL_SPEED_FACTOR EQU 2`, поэтому normal-фаза делает два
+  `VDC_SpeedAdvance` за один игровой кадр.
+- `VDC_SpeedAdvance` через аккумулятор скорости может вызвать `VDC_MoveChain`.
+- `VDC_MoveChain` при переходе `HSub` через размер клетки делает:
+  `HSub = 0`, затем `HSA++`.
+- Старый spawn вызывался только один раз в конце normal-фазы:
+  `CALL VDC_AnimateChain` → `CALL VDC_TrySpawn`.
+- `VDC_TrySpawn` начинался с жёсткого gate:
+  если текущий `VDC_HSub != 0`, сразу `RET`.
+
+**Конкретный сбой:**
+1. В начале кадра `HSub` близко к концу клетки, например `31`.
+2. Первый `VDC_SpeedAdvance` делает `VDC_MoveChain`: `HSub 31→0`, `HSA++`.
+   Это ровно тот момент, когда хвост достиг следующей cell-boundary и spawn
+   должен получить шанс добавить шар.
+3. Из-за `VDC_GLOBAL_SPEED_FACTOR=2` сразу выполняется второй `VDC_SpeedAdvance`.
+   Он может снова продвинуть цепь и увести `HSub` с нуля, например `0→1`.
+4. В конце кадра вызывается старый `VDC_TrySpawn`.
+5. `VDC_TrySpawn` видит уже не событие перехода, а только текущее `HSub=1`,
+   делает `RET NZ` и пропускает spawn.
+
+Так один фактический переход через границу клетки превращался в потерянный
+spawn хвоста. Поэтому недобор не обязан быть ровно «2 шара»: каждый пропущенный
+boundary даёт минус один потенциальный хвостовой шар, а на L12 работают две
+цепи, разные фазы speed-аккумулятора и `VDC_SwapChains`. В результате в кадре
+может выглядеть как недобор на 2, 3, 4 шара и больше, в зависимости от фазы и
+накопления пропусков.
+
+**Почему L12 страдал сильнее:**
+- Это двухцепочечный уровень: обе цепи обновляются через общий active-chain
+  код, вторая цепь временно подставляется через `VDC_SwapChains`.
+- Каждая цепь отдельно могла пропускать spawn-boundary.
+- Суммарно на экране много шаров, хвосты двух цепей видны, а entrance/tail на
+  L12 расположен так, что недобор сразу бросается в глаза.
+- В одноцепочечных уровнях похожий дефект мог быть менее заметен или маскировался
+  геометрией устья, но корень был общий VDC/Z80.
+
+**Исправление в ASM:**
+- Добавлен локальный флаг активной цепи:
+  `VDC_SpawnDue: DEFB 0`.
+- В `VDC_Init` флаг сбрасывается вместе с остальным состоянием цепи.
+- В `VDC_MoveChain` при wrap `HSub 31→0` теперь ставится:
+  `VDC_SpawnDue = 1`.
+- В normal path первой цепи (`VDC_Update`, label `.upd_normal_go`) перед двумя
+  `VDC_SpeedAdvance` флаг очищается, после `VDC_AnimateChain` вызывается
+  `VDC_TrySpawnBoundaryAware`.
+- В normal path второй цепи (`VDC_UpdateActiveChainPlayOnly`, label
+  `.upd2_normal`) сделано то же самое. Это важно, потому что вторая цепь L12
+  обновляется через swapped active-chain state.
+- Добавлен `VDC_TrySpawnBoundaryAware`:
+  если `VDC_SpawnDue != 0`, флаг очищается и spawn идёт через
+  `VDC_TrySpawn_NoHsubGate`, то есть без повторной проверки текущего `HSub`;
+  если `VDC_SpawnDue == 0`, остаётся старый путь через `VDC_TrySpawn` и обычный
+  gate `HSub==0`.
+
+**Почему такой фикс корректный:**
+- Spawn по смыслу должен быть привязан не к финальному значению `HSub` в конце
+  кадра, а к факту прохождения границы клетки за этот кадр.
+- Флаг `VDC_SpawnDue` ровно фиксирует событие `HSub 31→0`, которое раньше могло
+  исчезнуть между первым и вторым `SpeedAdvance`.
+- Ограничение «не больше одного spawn на normal update» сохраняется: флаг только
+  даёт один deferred spawn, а не цикл множественного роста хвоста.
+- Fast-фаза не менялась: там spawn и раньше шёл через `VDC_TrySpawn_NoHsubGate`,
+  потому что fast lead-in специально должен быстро нарастить цепь.
+- Остальные условия `VDC_TrySpawn_NoHsubGate` остаются действующими:
+  `GaugeFull`, `SlotsLen < VDC_MAX_SLOTS`, `HSA >= SlotsLen`, tail-offset settle
+  и лимит spawned balls не обходятся. Обходится только устаревшая проверка
+  текущего `HSub`, потому что событие boundary уже доказано флагом.
+
+**Почему это именно исправило баг:**
+- Предыдущий sync/DLSWAP A/B билд сам по себе проблему L12 не снял.
+- После добавления spawn-boundary фикса и сборки `v090` пользователь проверил L12:
+  проблема ушла.
+- Значит рабочая причинная часть для этого симптома — пропущенный Z80 spawn
+  хвоста на normal speed boundary.
+
+**Где сохранено:**
+- Рабочий билд:
+  `Build\ZUMA_VD2.SPG`
+  SHA256 `DDC8253D0C7F9F3B6BF8B5DE0A116F425764974E70E4E3BA6945225F45191498`.
+- Опорная версия с исходниками:
+  `C:\Users\Администратор\Desktop\Zuma Deluxe VDAC2\releases\v090-2026-07-02-l12-spawn-boundary-reference`.
+- В reference included: `Source`, `Graphics`, `Docs`, build scripts, `spgbld*.ini`,
+  `.spg/.pak/.sym`, `REFERENCE.txt`, `Чат.txt`.
+- В reference excluded: `.git`, `Build`, nested `releases`, backups/diagnostics,
+  Unreal, `wc.img`, emulator runtime и сторонний софт.
+
+────────────────────────────────────────────────────────────────────────────
+[2026-07-02 02:48] VDAC2 / Zuma: Lose hold перед KZ после normal-speed crossing
+────────────────────────────────────────────────────────────────────────────
+**Проблема:** при подходе к lose state, если в цепи/цепях ещё есть gap-маркеры
+или не завершилась destroy-анимация match-3 (`ExplodeFrame != 0`), шары должны
+останавливаться ДО kill-zone. Старый protective path был, но не закрывал кадр,
+где normal update сначала проверял kill-zone, потом speed-тики двигали цепь уже
+в trigger-точку, и только следующий кадр возвращал её в hold.
+
+**Почему старый фикс не дожимал:**
+- `VDC_Update` и `VDC_UpdateActiveChainPlayOnly` вызывали `VDC_CheckKillzone`
+  в начале update.
+- Потом normal-фаза делала один/два `VDC_SpeedAdvance`
+  (`VDC_GLOBAL_SPEED_FACTOR=2`).
+- Если перед update было `remaining_samples=2`, ранний check ещё не держал цепь.
+  Два speed-тика могли довести голову до `remaining_samples<=0` уже ПОСЛЕ check.
+- Render этого же кадра видел шар на kill-zone, хотя lose ещё должен ждать
+  gap/explode settle.
+
+**Фикс:**
+- В normal-path обеих цепей после speed-advance и до `VDC_AnimateChain` добавлен
+  `CALL VDC_LoseHoldPostAdvanceMaybe`.
+- Новый helper `VDC_LoseHoldPostAdvanceMaybe` работает только когда череп уже в
+  opening-зоне (`VDC_KzFrame >= 2`). Если `VDC_LoseStartReady` говорит busy,
+  повторяется `VDC_CheckKillzone` до render; при `rem<=1` он сразу вызывает
+  `VDC_LoseHoldBeforeKillzone` и возвращает голову в hold-позицию перед KZ.
+- В `VDC_LoseHoldBeforeKillzone` дополнительно очищается `VDC_SpawnDue`, чтобы
+  post-advance hold не превратился в хвостовой spawn после clamp.
+
+**Что считается blocker'ом lose сейчас:**
+- blocker: `Slots[i] >= VDC_NUM_COLORS` (GAP/CASCADE marker),
+  `ExplodeFrame[i] != 0`, `VDC_GapJunction != 0`, `VDC_GapPosLeft != 0`;
+  проверяются active и inactive chain на dual-уровнях.
+- НЕ blocker: одиночный `Shot2`, одиночный unsettled `Offset`, `ChainFreezeCnt`.
+  Это соответствует текущему комментарию к `VDC_LoseChainBusy`.
+
+**Тесты:**
+- `build.cmd` PASS, `Errors: 0`, Main1/gameplay page = 16305 bytes.
+- `python Source\OTHER\test_lose_waits_chain_settle_z80.py` PASS.
+  Добавлены регрессии:
+  - active chain: `rem=2`, pending `ExplodeFrame`, два speed-тика за update →
+    сразу hold `HSA=8`, `HSub=30`, `LoseHoldCnt!=0`, `SpawnDue=0`.
+  - dual inactive chain: active head пересекает KZ, но inactive chain имеет
+    pending `ExplodeFrame` → active тоже сразу держится перед KZ.
+- `python Source\OTHER\test_gap_pull_z80.py` PASS.
+- `python Source\OTHER\test_match3_marker_z80.py` PASS.
+- `python Source\OTHER\test_match3_insert_halfcell_z80.py` PASS.
+- `python Source\OTHER\test_cascade_requires_gap_bridge_z80.py` PASS.
+- `python Source\OTHER\test_pending_shot2_survives_new_match_z80.py` PASS.
+
+**Артефакты:**
+- `Build\ZUMA_VD2.SPG` SHA256 =
+  `C9C59F43490435282945809EBDB8BD5205341E880F43235060606F5555AE3AF8`.
+- Тот же SPG скопирован в
+  `C:\Users\Администратор\Desktop\unreal_x64\ZUMA_VD2.SPG`.
+- `ZUMA.SYM` обновлён рядом с patched Unreal.
+- `C:\Users\Администратор\Desktop\unreal_x64\wc.img` обновлён in-place;
+  SHA256 после инжекта =
+  `EF1BB4AF180B128060223D9E9791A57A8B4099CC85EBB7E954A91F2991D8054E`.
+
+────────────────────────────────────────────────────────────────────────────
+[2026-07-02 03:00] VDAC2 / Zuma: rollback нерабочего Lose hold эксперимента к v090
+────────────────────────────────────────────────────────────────────────────
+Пользователь проверил build `C9C59F...` с `VDC_LoseHoldPostAdvanceMaybe` и
+подтвердил: проблема lose-hold НЕ исправлена. Эксперимент откатан.
+
+**Что восстановлено из опорной версии:**
+- `Source\ASM\VDC.asm` восстановлен byte-for-byte из
+  `releases\v090-2026-07-02-l12-spawn-boundary-reference\Source\ASM\VDC.asm`.
+- `Source\OTHER\test_lose_waits_chain_settle_z80.py` восстановлен из того же
+  reference snapshot.
+- Нерабочий helper `VDC_LoseHoldPostAdvanceMaybe` удалён из рабочего дерева.
+- L12 tail/spawn fix (`VDC_SpawnDue`, `VDC_TrySpawnBoundaryAware`) сохранён,
+  потому что это часть v090 и уже проверено пользователем как рабочее.
+
+**Артефакты rollback:**
+- `Build\ZUMA_VD2.SPG` заменён на reference artifact v090.
+- `Build\ZUMAMAIN.PAK`, `Build\ZUMALVL.PAK`, `Build\ZUMAAUD.PAK`,
+  `Build\ZUMASND.PAK`, `Build\zuma.sym` также приведены к v090 artifact set.
+- `C:\Users\Администратор\Desktop\unreal_x64\ZUMA_VD2.SPG` обновлён.
+- `C:\Users\Администратор\Desktop\unreal_x64\ZUMA.SYM` обновлён.
+- `C:\Users\Администратор\Desktop\unreal_x64\wc.img` обновлён in-place.
+
+**Контрольные SHA после rollback:**
+- SPG:
+  `DDC8253D0C7F9F3B6BF8B5DE0A116F425764974E70E4E3BA6945225F45191498`.
+- `wc.img`:
+  `09B773D4DC4CA071F0591DB3104C05C6AF933EC79B9276556EF081D17B6DE7EF`.
+
+Итого: runtime и build-артефакты снова соответствуют опорной v090 версии.
+
+────────────────────────────────────────────────────────────────────────────
+[2026-07-02 03:08] Zuma HD v010 ref: как шары «висят» до kill-zone
+────────────────────────────────────────────────────────────────────────────
+Смотрел reference:
+`C:\Users\Администратор\Desktop\Zuma-Deluxe-HD-release-v010-ref`.
+
+**Ключевой вывод:** в HD v010 нет отдельного lose-state clamp, который ставит
+всю цепь на фиксированную точку перед kill-zone. Видимое «зависание» шаров до
+KZ получается из per-ball физики сегментов цепи.
+
+**Места в коде HD:**
+- `src\gameplay\Game.c:315` `_Game_IsGameLose`: game over/retry стартует только
+  когда `chain.len == 0 && chain.isEndReached`.
+- `src\gameplay\objects\BallChain.c:272`: если любой шар дошёл до конца трека
+  (`ball->pos >= spiralLen`), он удаляется, `isGenerating=0`,
+  `isEndReached=1`.
+- `src\gameplay\Game.c:427-430`: после `isEndReached` скорость цепи переводится
+  в `ROLLING_TO_PIT_SPEED=32`, но только когда `BallChain_GetLastMovingBall`
+  уже в последних 80% трека.
+- `src\gameplay\Game.c:603-613`: skull/pit opening — чисто визуальная анимация:
+  открытие начинается, когда голова в последних `PIT_OPEN_POS=0.2` длины трека.
+
+**Почему front-сегмент может висеть ДО KZ:**
+- HD хранит `pos/spd` у каждого шара отдельно.
+- Если между front-сегментом и хвостом есть gap/explode, front-сегмент больше
+  не получает скорость от заднего шара.
+- В `BallChain_Update`:
+  - если шар collidesBack с задним соседом, он наследует `preBall->spd`;
+  - если gap и цвета по разные стороны НЕ совпадают, скорость фронта гасится
+    трением `BALL_FRC=0.04` → сегмент замирает на месте;
+  - если gap и цвета совпадают, front-сегмент получает отрицательную скорость
+    через `BALL_DECC=0.4` до `BALL_MAX_BACK_SPEED=-10` и откатывается назад,
+    закрывая gap.
+- Match/cascade через `BallChain_ExplodeBalls` запрещён после `isEndReached`
+  (`!ballChain->isEndReached` guards), но до этого момента gap/explode физика
+  может остановить front-сегмент перед KZ сама.
+
+**Следствие для VDAC2:** наша нерабочая попытка `VDC_LoseHoldPostAdvanceMaybe`
+делала глобальный post-check/clamp всей цепи. Это не повторяет HD. Более близкая
+модель: если KZ уже близко, но есть gap/explode work, движение фронта должно
+перестать проталкиваться к KZ, пока gap/explode pipeline дорабатывает. В VDAC2,
+где нет per-ball `spd`, это надо моделировать явно как pause движения цепи
+перед KZ с продолжающейся `VDC_AnimateChain`/explode/gap processing, а не как
+поздний clamp после speed-advance.
+
+────────────────────────────────────────────────────────────────────────────
+[2026-07-02 03:28] Lose-state: стоп ДО kill-zone при gap/explode
+────────────────────────────────────────────────────────────────────────────
+Задача: когда дело идёт к lose-state, но в цепочке/цепочках ещё есть gap и/или
+не отработала destroy-анимация match-3, шары должны останавливаться ДО kill-zone,
+а не доходить до самой kill-zone и не откатываться уже после факта.
+
+**Почему предыдущая попытка была неправильной:**
+- `VDC_LoseHoldPostAdvanceMaybe` работал после обычного speed-advance.
+- Поэтому цепь успевала физически войти в KZ/окно открытия, а потом её
+  принудительно возвращали. Это выглядело как стоп/дёргание на kill-zone, а не
+  как HD-подобное ожидание до неё.
+
+**Где была реальная ошибка:**
+- `Source\ASM\main.asm`, `VDC_CheckKillzone`.
+- Старый код вызывал `Core.VDC_LoseStartReady` только в точке `rem==1` или уже
+  в `.ck_trigger`.
+- При `VDC_GLOBAL_SPEED_FACTOR=2` это поздно: за один кадр нормальный ход может
+  сделать до двух `VDC_SpeedAdvance`, и голова успевает перейти из безопасной
+  зоны в окно `rem<=64`/trigger до следующего `VDC_CheckKillzone`.
+
+**Что исправлено сейчас:**
+- Проверка `Core.VDC_LoseStartReady` перенесена в ранний guard для `rem<=66`.
+- `HL` сохраняется вокруг `Core.VDC_LoseStartReady`, потому что `L` содержит
+  рассчитанный `rem` для последующего `KzFrame`.
+- Если в active или inactive chain ещё есть gap/explode work, вызывается
+  существующий `Core.VDC_LoseHoldBeforeKillzone`.
+- `VDC_LoseHoldBeforeKillzone` ставит голову на `rem=65`, то есть на один sample
+  до открытия KZ (`rem<=64`), и включает `VDC_LoseHoldCnt`.
+- Дальше `VDC_MoveChain` видит `VDC_LoseHoldCnt` и не двигает цепь, но
+  `VDC_AnimateChain` продолжает дорабатывать gap/explode pipeline.
+- Когда `Core.VDC_LoseStartReady` возвращает ready, цепь больше не держится и
+  старый `VDC_LoseHoldCnt` очищается, после чего цепь штатно запускает
+  ABSORB/lose.
+
+**Почему порог именно `rem<=66`:**
+- Открытие KZ начинается с `rem<=64`.
+- Нормальный кадр может дать два шага движения.
+- Значит при `rem=66` следующий кадр уже может завести голову в `rem=64`, если
+  заранее не поставить hold.
+
+**Проверка:**
+- Сборка `.\build.cmd`: 0 errors, 11 старых fwdref warnings.
+- Z80-sim:
+  `python -u Source\OTHER\test_lose_waits_chain_settle_z80.py`
+  прошёл все cases.
+- Тест проверяет:
+  - ready chain сразу запускает ABSORB;
+  - ready chain при `rem=64` корректно выставляет `KzFrame=2`;
+  - stale `VDC_LoseHoldCnt` сбрасывается, когда chain уже ready на `rem=65`;
+  - active explode-frame блокирует ABSORB и держит `HSA/HSub` на `rem=65`;
+  - active gap marker блокирует ABSORB и держит `rem=65`;
+  - при `rem=66` busy-chain уже ставится на hold до KZ;
+  - при `rem=67` hold ещё не включается;
+  - `MoveChain` после hold не проталкивает голову в KZ;
+  - inactive chain на dual-level тоже блокирует lose-start;
+  - отдельно проверено: gap marker (`0xFE`) во второй цепочке блокирует ABSORB
+    и не даёт активной голове пройти в KZ после `MoveChain`.
+
+**Runtime-артефакты обновлены:**
+- `C:\Users\Администратор\Desktop\unreal_x64\ZUMA_VD2.SPG`
+- `C:\Users\Администратор\Desktop\unreal_x64\ZUMA.SYM`
+- `C:\Users\Администратор\Desktop\unreal_x64\ZUMAMAIN.PAK`
+- `C:\Users\Администратор\Desktop\unreal_x64\ZUMALVL.PAK`
+- `C:\Users\Администратор\Desktop\unreal_x64\ZUMAAUD.PAK`
+- `C:\Users\Администратор\Desktop\unreal_x64\ZUMASND.PAK`
+- `C:\Users\Администратор\Desktop\unreal_x64\wc.img` обновлён in-place через
+  `Source\OTHER\inject_zuma_to_wc_img.py`.
+
+**Контрольные SHA:**
+- SPG:
+  `9C6F4943C54FED0909C4EAEF11AA2626C92BBC9B8AE07E3C1ABB4FBD59E652F2`.
+- `wc.img`:
+  `471975456D32FBCB06D2C246D0F30CF66E7481A31CD8DDFE03E26631E1E895A2`.
+
+────────────────────────────────────────────────────────────────────────────
+[2026-07-02 03:45] Опорная версия v091 сохранена
+────────────────────────────────────────────────────────────────────────────
+Создана опорная папка:
+`C:\Users\Администратор\Desktop\Zuma Deluxe VDAC2\releases\v091-2026-07-02-lose-kz-gap-hold-reference`.
+
+Формат такой же, как у предыдущих reference-release:
+- `Source`, `Graphics`, `Docs`;
+- build/config файлы `build.cmd`, `build_wc_img.cmd`, `spgbld*.ini`;
+- корневые project docs (`README.md`, `LICENSE`, `CLAUDE*.md`, `TODO.md`,
+  `RELEASE_NOTES_v2026-05-17.md`, `PATCHED_UNREAL_ZPROF.md`);
+- `Чат.txt`;
+- артефакты из `Build\` с префиксом
+  `v091-2026-07-02-lose-kz-gap-hold-reference`.
+
+Не включены: `.git`, `Build\`, `releases\`, Unreal, `wc.img`, дампы и сторонний
+runtime-софт.
+
+Назначение v091: L12 spawn-boundary fix + early lose hold до kill-zone при
+gap/explode, включая blocker во второй цепочке на dual-level.
+
+Контрольный SHA SPG:
+`9C6F4943C54FED0909C4EAEF11AA2626C92BBC9B8AE07E3C1ABB4FBD59E652F2`.

@@ -6,9 +6,10 @@ Layout (512-byte sectors):
   Sector 2..N       : data blob, per-level: bg -> pal -> track -> title -> preview
                       each section sector-aligned (zero-padded tail)
                       missing section => off=0xFFFF in TOC
-                      track sections are Track V2:
+                      track sections are Track V2 + bullet trajectory table:
                         sector 0: metadata "ZTV2" + chain sample/page counts
                         then pure 16K pages of 8-byte baked render samples
+                        then one 16K "ZBT1" page for bullet collision events
                       runtime maps up to four pages from the same section.
 
 Currently:
@@ -23,6 +24,8 @@ import struct
 import sys
 from pathlib import Path
 from typing import Optional
+
+from make_bullet_trajectory_tables import build_level_table as build_bullet_table
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
@@ -97,8 +100,10 @@ TRACK_SRC_REC = 6
 TRACK_V2_REC = 8
 TRACK_V2_SAMPLES_PER_PAGE = PAGE // TRACK_V2_REC
 TRACK_V2_MAGIC = b"ZTV2"
+TRACK_BULLET_MAGIC = b"ZBT1"
 TRACK_V2_MAX_PAGES = 4
 TRACK_V2_BALL_HALF = 26
+TRACK_BULLET_PAGES = 1
 
 # --- 1024x768 upscale: scale stored sample X/Y x1.6 (640->1024, 480->768) ----
 # Source track bins (track_l*_640.bin) stay in 640x480 space; we scale ONLY the
@@ -148,7 +153,14 @@ def encode_track_v2_pages(blob: Optional[bytes]) -> tuple[int, list[bytes]]:
     return count, pages
 
 
-def make_track_v2_metadata(count1: int, pages1: int, count2: int, pages2: int) -> bytes:
+def make_track_v2_metadata(
+    count1: int,
+    pages1: int,
+    count2: int,
+    pages2: int,
+    bullet_pages: int,
+    bullet_used: int,
+) -> bytes:
     meta = bytearray(SECTOR)
     meta[0:4] = TRACK_V2_MAGIC
     struct.pack_into("<H", meta, 4, count1)
@@ -157,6 +169,9 @@ def make_track_v2_metadata(count1: int, pages1: int, count2: int, pages2: int) -
     meta[9] = pages2
     meta[10] = TRACK_V2_REC
     struct.pack_into("<H", meta, 11, TRACK_V2_SAMPLES_PER_PAGE)
+    meta[13:17] = TRACK_BULLET_MAGIC
+    meta[17] = bullet_pages
+    struct.pack_into("<H", meta, 18, bullet_used)
     return bytes(meta)
 
 
@@ -167,6 +182,7 @@ def read_track_blob(level_idx0: int) -> Optional[bytes]:
     first = scale_track_samples(paths[0].read_bytes())
     count1, pages1 = encode_track_v2_pages(first)
     count2, pages2 = 0, []
+    second = None
     if len(paths) > 1:
         second = scale_track_samples(paths[1].read_bytes())
         count2, pages2 = encode_track_v2_pages(second)
@@ -177,8 +193,14 @@ def read_track_blob(level_idx0: int) -> Optional[bytes]:
             f"L{level_idx0 + 1:02d}: Track V2 supports {TRACK_V2_MAX_PAGES} runtime "
             f"pages, got {total_pages} ({len(pages1)} + {len(pages2)})"
         )
-    meta = make_track_v2_metadata(count1, len(pages1), count2, len(pages2))
-    return meta + b"".join(pages1 + pages2)
+    bullet = build_bullet_table(level_idx0, [b for b in (first, second) if b is not None])
+    if len(bullet) != PAGE or bullet[0:4] != TRACK_BULLET_MAGIC:
+        raise ValueError(f"L{level_idx0 + 1:02d}: bad bullet trajectory table")
+    bullet_used = struct.unpack_from("<H", bullet, 12)[0]
+    meta = make_track_v2_metadata(
+        count1, len(pages1), count2, len(pages2), TRACK_BULLET_PAGES, bullet_used
+    )
+    return meta + b"".join(pages1 + pages2) + bullet
 
 
 def build() -> tuple[bytes, list[dict]]:
@@ -311,6 +333,7 @@ def main() -> int:
         "; by name AND this exact size so it picks the current pack, not a stale copy.\n"
         f"EXPECTED_PAK_SIZE   EQU {len(pack)}\n",
         encoding="ascii",
+        newline="\n",
     )
     print(f"pack: {OUT}  ({len(pack):,} bytes = {len(pack)//SECTOR} sectors)")
     print(f"  wrote {inc} (EXPECTED_PAK_SIZE={len(pack)})")

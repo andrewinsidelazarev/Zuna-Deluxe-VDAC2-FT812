@@ -392,6 +392,14 @@ def main() -> int:
     package_files = prepare_host_package(root)
     games = image.ensure_dir(image.root_cluster, "Games")
     zuma = image.ensure_dir(games, "Zuma Deluxe VDAC2")
+    # Free all old package chains before allocating any replacement. The local
+    # 100 MB test image is intentionally tight; replacing files one-by-one can
+    # fail transiently even when the final package set fits.
+    for file in package_files:
+        existing = image.find_entry(zuma, file.name)
+        if existing:
+            image.free_chain(existing["cluster"])
+            image.mark_deleted(zuma, existing)
     for file in package_files:
         image.write_file(zuma, file.name, file)
     root_pak = root / "Build" / "ZUMALVL.PAK"

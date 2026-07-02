@@ -5,6 +5,7 @@ import re
 
 ROOT = Path(__file__).resolve().parents[2]
 BULLET = ROOT / "Source" / "ASM" / "Bullet.asm"
+BULLET_TRAJ = ROOT / "Source" / "ASM" / "BulletTraj.asm"
 VDC = ROOT / "Source" / "ASM" / "VDC.asm"
 MAIN = ROOT / "Source" / "ASM" / "main.asm"
 
@@ -19,6 +20,7 @@ def body(text: str, label: str, next_label: str | None = None) -> str:
 
 def main() -> int:
     bullet = BULLET.read_text(encoding="utf-8")
+    bullet_traj = BULLET_TRAJ.read_text(encoding="utf-8")
     vdc = VDC.read_text(encoding="utf-8")
     main_asm = MAIN.read_text(encoding="utf-8")
     fails: list[str] = []
@@ -29,8 +31,8 @@ def main() -> int:
     if "CALL VDC_BreakShotStats" not in update:
         fails.append("offscreen Bullet_Update does not break shot stats")
 
-    collision = body(bullet, "Bullet_CheckCollision", "Bullet_HemisphereTarget")
-    if not re.search(r"CALL VDC_InsertAt\s*;[^\n]*\n\s*OR\s+A\s*\n\s*CALL NZ, VDC_AwardGapBonus", collision):
+    collision = body(bullet_traj, "Bullet_CheckCollisionEvents", "BulletTraj_ProcessEvent")
+    if not re.search(r"CALL VDC_InsertAt(?:\s*;[^\n]*)?\n\s*OR\s+A\s*\n\s*CALL NZ, VDC_AwardGapBonus", collision):
         fails.append("collision path does not award gap bonus only after matched insert")
 
     insert_at = body(vdc, "VDC_InsertAt", "VDC_ShiftRight_Slots")

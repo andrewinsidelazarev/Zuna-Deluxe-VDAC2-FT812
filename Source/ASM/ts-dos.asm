@@ -2814,11 +2814,12 @@ OVL_LoadGameplayLevelSpecificFromPack:
                 LD   HL, (ZiFi_LevelTOC + 2)
                 LD   A, H : CP 1 : JP NZ, .Err
                 LD   A, L : OR A : JP NZ, .Err
-                ; Track V2: 1 metadata sector + up to four 16K sample pages.
+                ; Track V2: 1 metadata sector + up to four 16K sample pages,
+                ; plus one appended 16K ZBT1 bullet trajectory page.
                 LD   HL, (ZiFi_LevelTOC + 10)
                 LD   A, H : OR A : JP NZ, .Err
                 LD   A, L : OR A : JP Z, .Err
-                CP   130 : JP NC, .Err
+                CP   TRACK_SECTION_MAX_SECTORS + 1 : JP NC, .Err
 
                 ; ===== SD PHASE: прочитать всё в RAM, БЕЗ FT812 access. ======
                 ; FT812 и SD card делят Z-Controller SPI bus #57/#77; interleaving
@@ -2870,6 +2871,8 @@ OVL_LoadGameplayLevelSpecificFromPack:
                 LD   IX, #8000
                 CALL RawPak_ReadOneLogicalIX_Retry
                 JP   C, .Err
+                XOR  A
+                LD   (BulletTrajValid), A
 
                 ; Metadata magic/version: "ZTV2".
                 LD   IX, #8000
@@ -2884,6 +2887,16 @@ OVL_LoadGameplayLevelSpecificFromPack:
                 AND  A
                 SBC  HL, DE
                 JP   NZ, .Err
+                ; Appended bullet trajectory table marker: "ZBT1", exactly one
+                ; 16K page after Track V2 pages. Runtime maps it to #13.
+                LD   A, (IX+13) : CP #5A : JP NZ, .Err  ; 'Z'
+                LD   A, (IX+14) : CP #42 : JP NZ, .Err  ; 'B'
+                LD   A, (IX+15) : CP #54 : JP NZ, .Err  ; 'T'
+                LD   A, (IX+16) : CP #31 : JP NZ, .Err  ; '1'
+                LD   A, (IX+17)
+                CP   1
+                JP   NZ, .Err
+                LD   (BulletTrajPageCount), A
 
                 LD   L, (IX+4)
                 LD   H, (IX+5)
@@ -2909,12 +2922,15 @@ OVL_LoadGameplayLevelSpecificFromPack:
                 CP   TRACK_MAX_PAGES + 1
                 JP   NC, .Err
                 LD   B, A
+                LD   A, (BulletTrajPageCount)
+                ADD  A, B                              ; track pages + bullet pages
+                LD   B, A
                 ADD  A, A
                 ADD  A, A
                 ADD  A, A
                 ADD  A, A
                 ADD  A, A
-                INC  A                                  ; 1 metadata + N*32 sectors
+                INC  A                                  ; 1 metadata + (track+bullet)*32 sectors
                 LD   B, A
                 LD   A, (ZiFi_LevelTOC + 10)
                 CP   B
@@ -2971,6 +2987,21 @@ OVL_LoadGameplayLevelSpecificFromPack:
                 DEC  (HL)
                 JR   .sdTrkPage
 .sdTrkDone:
+                ; Bullet trajectory page follows immediately after track pages.
+                ; One 16K page -> 32 sectors into physical page #13.
+                LD   A, BULLET_TRAJ_PAGE
+                SetPage2_A
+                LD   IX, #8000
+                LD   B, 32
+.sdBulletSec:   PUSH BC
+                CALL RawPak_ReadOneLogicalIX_Retry
+                JP   C, .sdBulletReadErr
+                LD   DE, 512
+                ADD  IX, DE
+                POP  BC
+                DJNZ .sdBulletSec
+                LD   A, 1
+                LD   (BulletTrajValid), A
                 CALL SetCurrentTrackPage
                 LD   A, #35
                 if RUNTIME_DIAGNOSTICS_ENABLED
@@ -2982,6 +3013,9 @@ OVL_LoadGameplayLevelSpecificFromPack:
                 POP  BC
                 JP   .Err
 .sdTrkReadErr: POP  BC
+                JP   .Err
+.sdBulletReadErr:
+                POP  BC
                 JP   .Err
 
 .ftPhase:

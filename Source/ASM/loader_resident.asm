@@ -33,6 +33,9 @@ TRACK_MAX_PAGES    EQU 4
 TRACK_V2_REC       EQU 8
 TRACK_V2_PAGE_SAMPLES EQU 2048
 TRACK_V2_BALL_HALF EQU 26
+BULLET_TRAJ_PAGE   EQU #13            ; one 16K ZBT1 page appended to current track section
+BULLET_TRAJ_PAGES  EQU 1
+TRACK_SECTION_MAX_SECTORS EQU 1 + ((TRACK_MAX_PAGES + BULLET_TRAJ_PAGES) * 32)
 
 ; ----------------------------------------------------------------------------
 ; VDC_ReadSampleAtHL — читает track sample [HL] -> BC=X, DE=Y; выставляет
@@ -72,6 +75,8 @@ VDC_TrackPageCount1:   DEFB 0
 VDC_TrackPageCount2:   DEFB 0
 VDC_ActiveTrackPage1:  DEFB TRACK_L01_PAGE
 VDC_RenderTrackPageIdx: DEFB #FF
+BulletTrajValid:       DEFB 0
+BulletTrajPageCount:   DEFB 0
 
 ; --- Hoisted gameplay/UI state (из VDC.asm / Frog.asm) -----------------------
 ; Перенесено в resident Core: transition + HUD/dialog/absorb/win logic из main.asm

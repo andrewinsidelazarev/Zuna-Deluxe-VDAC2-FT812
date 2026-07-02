@@ -2245,6 +2245,19 @@ VDC_CheckKillzone:
                 OR   A
                 JR   NZ, .ck_closed                    ; rem > 255 → > 64 → closed
                 LD   A, L
+                CP   67
+                JR   NC, .ck_closed                    ; rem >= 67: до окна KZ ещё есть запас
+                ; При VDC_GLOBAL_SPEED_FACTOR=2 проверка в rem==1 уже поздняя:
+                ; обычный кадр может войти в окно открытия/trigger до следующего
+                ; VDC_CheckKillzone. Если gap/explode ещё активны, держим голову
+                ; на rem=65, т.е. до kill-zone, как в HD-логике.
+                PUSH HL
+                CALL Core.VDC_LoseStartReady
+                POP  HL
+                JP   C, Core.VDC_LoseHoldBeforeKillzone
+                XOR  A
+                LD   (Core.VDC_LoseHoldCnt), A
+                LD   A, L
                 CP   65
                 JR   NC, .ck_closed
                 ; rem ∈ [1..64]: KzFrame = 2 + ((64 - rem) >> 3) ∈ [2..9]
@@ -2255,8 +2268,6 @@ VDC_CheckKillzone:
                 LD   (Core.VDC_KzFrame), A
                 DEC  L
                 RET  NZ
-                CALL Core.VDC_LoseStartReady
-                JP   C, Core.VDC_LoseHoldBeforeKillzone
                 XOR  A
                 LD   (Core.VDC_LoseHoldCnt), A
                 RET
@@ -2855,6 +2866,8 @@ ZL_DiagTrkPg1:
                 RET
 ZL_DiagBarX16:  DEFW 0
                 endif
+
+                include "BulletTraj.asm"              ; slot0 resident ZBT1 bullet trajectory event reader
 
                 endmodule
 

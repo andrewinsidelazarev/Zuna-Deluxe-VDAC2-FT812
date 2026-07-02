@@ -1,0 +1,43 @@
+v091-2026-07-02-lose-kz-gap-hold-reference
+
+Release contents:
+1. Keeps the L12/Snake Pit spawn-boundary fix: the tail spawn is tied to the
+   actual HSub 31->0 boundary through VDC_SpawnDue / VDC_TrySpawnBoundaryAware.
+2. Fixes lose-state hold before kill-zone: VDC_CheckKillzone checks
+   VDC_LoseStartReady early at rem<=66 and holds the head at rem=65 while
+   gap/explode work is pending.
+3. Dual-chain lose blocker is verified: gap marker or pending explode in the
+   inactive chain blocks ABSORB and prevents the active head from moving into KZ.
+4. Current build also includes the ZBT1 bullet trajectory event reader used by
+   the project build pipeline.
+
+GitHub release contents:
+- v091-2026-07-02-lose-kz-gap-hold-reference.spg
+- v091-2026-07-02-lose-kz-gap-hold-reference.zumamain.pak
+- v091-2026-07-02-lose-kz-gap-hold-reference.zumalvl.pak
+- v091-2026-07-02-lose-kz-gap-hold-reference.zumaaud.pak
+- v091-2026-07-02-lose-kz-gap-hold-reference.zumasnd.pak
+
+Not included:
+- Unreal emulator runtime, wc.img, dumps, Build/, full source snapshot, and
+  third-party applications.
+
+Verification:
+- .\build.cmd PASS
+- sjasmplus: 0 errors
+- python -u Source\OTHER\test_lose_waits_chain_settle_z80.py PASS
+- python -u Source\OTHER\test_bullet_traj_dual_chain_insert_z80.py PASS
+- python -u Source\OTHER\test_bullet_traj_draw_above_nohit.py PASS
+- python -u Source\OTHER\test_gap_bonus_event_rule.py PASS
+
+Build artifacts:
+- v091-2026-07-02-lose-kz-gap-hold-reference.spg
+  SHA256 9C6F4943C54FED0909C4EAEF11AA2626C92BBC9B8AE07E3C1ABB4FBD59E652F2
+- v091-2026-07-02-lose-kz-gap-hold-reference.zumamain.pak
+  SHA256 63DC3F8023DCD7B171BAA685E81E8E9A4CADAE04C80FB69E83891D61A8E75407
+- v091-2026-07-02-lose-kz-gap-hold-reference.zumalvl.pak
+  SHA256 938E0C57D0CBC6351279E3234858ACDAD03F02FE90BE336CAC525E944F95E122
+- v091-2026-07-02-lose-kz-gap-hold-reference.zumaaud.pak
+  SHA256 72EF97514A816962D725193DC27C3232373505C859362784C469A8CF057FB017
+- v091-2026-07-02-lose-kz-gap-hold-reference.zumasnd.pak
+  SHA256 8393DB5BB8EC2FDA98C970A3303C43BDEF86A5CA5B4CF09FF09F8FC0C53409DA
