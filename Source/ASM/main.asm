@@ -1904,9 +1904,11 @@ Score_CheckExtraLife:
                 LD   (Core.NextLifeScore + 2), A
                 JR   .cel_loop
 ; ----------------------------------------------------------------------------
-; Score_Reset — score = 0, NextLifeScore = 50000 (new run / final Game Over exit).
+; Score_Reset — lives=3, score=0, NextLifeScore=50000 (new run / final Game Over exit).
 ; ----------------------------------------------------------------------------
 Score_Reset:
+                LD   A, 3
+                LD   (Core.VDC_Lives), A
                 LD   HL, 0
                 LD   (Core.VDC_PlayerScore), HL
                 XOR  A
@@ -2276,6 +2278,14 @@ VDC_CheckKillzone:
                 RET
 .ck_trigger:    CALL Core.VDC_LoseStartReady
                 JP   C, Core.VDC_LoseHoldBeforeKillzone
+                XOR  A
+                LD   (Core.Bullet_Active), A
+                LD   (Core.Frog_IsFire), A
+                LD   (Core.Frog_RecoilTick), A
+                LD   A, 38                             ; FROG_BALL_IDLE, константа из Frog.asm объявлена позже
+                LD   (Core.Frog_BallExpand), A
+                LD   A, 24
+                LD   (Core.Frog_TongueExpand), A
                 LD   A, 1
                 LD   (Core.VDC_GameState), A
                 LD   A, 11                             ; wide-open mouth absorb при старте всасывания
@@ -2430,13 +2440,22 @@ Frog_FilteredRandomColor:                              ; in A: 0xFF=force fresh;
                 POP  BC
                 RET
 
-; Frog_RefilterCurrent — каждый кадр проверяет BallColor/NextBallColor по chain mask
-; и заменяет цвет, если он исчез из цепи после cascade match-3.
+; Frog_RefilterCurrent — кадровый sanitizer цветов лягушки.
+; Валидные BallColor/NextBallColor уже видны игроку, поэтому их нельзя
+; спонтанно менять без выстрела: ни на старте PLAY после intro, ни после
+; cascade/match-3. Refilter по live chain mask разрешён только для мусорных
+; значений памяти (>= VDC_NUM_COLORS); обычный выбор/перевыбор цвета делается
+; в Frog_NewNextColor и при promote next -> current после реального выстрела.
 Frog_RefilterCurrent:
                 LD   A, (Core.Frog_BallColor)
+                CP   Core.VDC_NUM_COLORS
+                JR   C, .frc_check_next
                 CALL Frog_FilteredRandomColor
                 LD   (Core.Frog_BallColor), A
+.frc_check_next:
                 LD   A, (Core.Frog_NextBallColor)
+                CP   Core.VDC_NUM_COLORS
+                RET  C
                 CALL Frog_FilteredRandomColor
                 LD   (Core.Frog_NextBallColor), A
                 RET
@@ -3440,16 +3459,8 @@ GetCurrentTargetScore:
                 LD   E, (HL)
                 INC  HL
                 LD   D, (HL)
-                ; Двойная цепочка: счёт сыплется в ОБЩИЙ gauge с обеих цепочек,
-                ; а таблица даёт таргет на одну → удваиваем, иначе gauge полнится
-                ; вдвое быстрее, спавн вырубается рано и отстающая цепочка мёрзнет
-                ; короткой. Одиночные уровни: HasSecondChain=0 → RET Z (без изменений).
-                LD   A, (VDC_HasSecondChain)
-                OR   A
-                RET  Z
-                EX   DE, HL
-                ADD  HL, HL                            ; таргет×2
-                EX   DE, HL                            ; DE = таргет×2 (HL сохранён)
+                ; Target score is a per-level Zuma bar value from level settings.
+                ; Dual-chain progression is separate data; do not scale the bar.
                 RET
 
 ; GetCurrentColors — ball-color count для current level/difficulty (settings field

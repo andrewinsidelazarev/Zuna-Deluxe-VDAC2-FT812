@@ -8462,3 +8462,400 @@ gap/explode, включая blocker во второй цепочке на dual-l
 
 Контрольный SHA SPG:
 `9C6F4943C54FED0909C4EAEF11AA2626C92BBC9B8AE07E3C1ABB4FBD59E652F2`.
+
+────────────────────────────────────────────────────────────────────────────
+[2026-07-02] Память завершения сессии: GitHub v091 / release notes
+────────────────────────────────────────────────────────────────────────────
+Состояние GitHub после исправлений:
+- `origin/main` указывает на `c7eb2f2 Update v091 release notes since v074`.
+- Перед ним были:
+  - `e4a300a Translate v091 reference note`;
+  - `084a284 Remove stray Source OTHER build artifacts`;
+  - `744f50c Release v091 lose KZ gap hold`.
+
+Что исправлено в последнем коммите:
+- `releases/v091-2026-07-02-lose-kz-gap-hold-reference/REFERENCE.txt`
+  переписан как полное русское описание единого релиза v091 относительно
+  GitHub-релиза v074, а не как короткое описание только последнего бага.
+- В файле явно написано, что исходники этой версии лежат в общем дереве
+  репозитория (`Source/ASM/`, `Source/OTHER/`, `Graphics/`, `Docs/`), а
+  release-папка содержит только опорные бинарные артефакты и `REFERENCE.txt`.
+  Это соответствует старому формату GitHub release-папок в этом репозитории.
+- В описание добавлены не только L12 и lose-state, но и все крупные блоки
+  изменений v074->v091:
+  - L12 / Snake Pit spawn-boundary fix;
+  - hold ДО kill-zone при gap/explode;
+  - dual-chain blocker для inactive chain;
+  - ZBT1 bullet trajectory pipeline;
+  - bullet/collision/dual-chain insertion fixes;
+  - loader/PAK/RAWPAK изменения;
+  - новый формат шаров;
+  - top-mask/Serpents/track_640/WinSnap/KZ particle;
+  - Z80-оптимизации MainLoop/VDC;
+  - синхронизация/диагностика;
+  - UI/loader/win transition;
+  - документация и тесты;
+  - очистка `Source/OTHER/Build`.
+
+Важные детали, которые пользователь отдельно потребовал не потерять:
+- Новый формат шаров:
+  - global `PALETTED4444`;
+  - `BALLS_ARGB4_ENABLED=0`;
+  - 50px визуальный шар в 51x51 guarded cell;
+  - 6 цветов x 12 spin phases;
+  - 12 страниц данных шаров + отдельная ARGB4 palette page;
+  - `BALLS_RAMG_ADDR=#050000`;
+  - `BALLS_PALETTE_RAMG=#080000`;
+  - runtime cell index `color*12 + spin12`;
+  - `make_balls_l19_pal4444.py`;
+  - `chain_matrix_lut_l19_51.bin`;
+  - `ZL_BALL_L19_*` и `PALETTED4444` путь в `MainLoop.asm`.
+- Z80-оптимизация:
+  - per-ball cache для chain1/chain2;
+  - cache строится один раз, потом under/above draw-pass рисуют из cache;
+  - inline render-sample reader вместо resident trampoline в горячем цикле;
+  - runtime Spin12 LUT;
+  - `chain_matrix_lut.bin` / `chain_matrix_lut_l19_51.bin`;
+  - ZBT1 event reader вместо полного скана Slots на каждый кадр летящего шара;
+  - ball-cache ужат под текущий максимум слотов.
+
+Проверка после пуша:
+- `git push origin main` прошёл: `e4a300a..c7eb2f2 main -> main`.
+- `git show origin/main:releases/v091-2026-07-02-lose-kz-gap-hold-reference/REFERENCE.txt`
+  показал расширенный русский текст с пунктами "Новый формат шаров" и
+  "Z80-оптимизация MainLoop / VDC".
+
+Текущий локальный статус на момент завершения:
+- ветка `main...origin/main`;
+- есть только untracked-файлы, они НЕ включались в пуш:
+  - `Graphics/levels/Original/04-targetglyph/level_src_04_baked.png`;
+  - `Source/ASM/track_lengths.inc`.
+
+Следующей сессии:
+- начинать с чтения этого файла и `git status`;
+- не трогать untracked-файлы без отдельного запроса пользователя;
+- не возвращаться к ошибочным версиям `v075`: релиз этой линии называется `v091`;
+- не дублировать исходники внутрь GitHub release-папки, если пользователь не
+  попросит новый локальный full-project backup; на GitHub исходники уже в
+  корневом дереве того же commit.
+
+────────────────────────────────────────────────────────────────────────────
+[2026-07-02 12:59] Codex / VDAC2: main-menu hover больше не блокирует клавиатуру
+────────────────────────────────────────────────────────────────────────────
+**Контекст:** в главном меню вернулась старая проблема: если курсор мыши стоял
+над кнопкой, `MenuUpdateButtons` каждый кадр снова проставлял mouse-hover и
+синхронизировал `MenuSelection` с кнопкой под курсором. Поэтому одно нажатие
+клавиатурного Down/Up действовало только на текущий кадр, а следующий кадр
+статический hover откатывал выбор обратно.
+
+**Фикс:** `Source/ASM/MenuMain.asm` получил `MenuInputMode`
+(`0=mouse`, `1=keyboard`) и hover-id `MenuMouseHoverNow/Prev`. Клавиатурный
+Up/Down/Fire вызывает `MenuKeyboardTakeFocus`, очищает mouse state и даёт
+`MenuHighlightSelection` рисовать keyboard selection даже если курсор физически
+остаётся над старой кнопкой. Мышь забирает фокус обратно только когда курсор
+входит на другую кнопку или нажата ЛКМ; дрожание/статический hover внутри той же
+кнопки больше не перебивает клавиатуру.
+
+**Проверка:** `.\build.cmd` PASS (0 errors, 11 старых fwdref warnings);
+`python -u Source\OTHER\test_menu_hover_keyboard_focus.py` PASS; также прошли
+`test_adventure_gauntlet_chains.py`, `test_levelsel_transition.py`,
+`check_memory_map.py`.
+
+**Доставка:** `.\build_wc_img.cmd` PASS, host
+`\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` обновлён in-place.
+`check_host_wc_img.py` PASS: все hash_match=True. Прямые runtime-файлы также
+скопированы в `C:\Users\Администратор\Desktop\unreal_x64`
+(`ZUMA_VD2.SPG`, `ZUMA.SYM`, `ZUMAMAIN.PAK`, `ZUMALVL.PAK`, `ZUMAAUD.PAK`,
+`ZUMASND.PAK`). SHA-256 текущего `ZUMA_VD2.SPG`:
+`42563765cecb8921e5190e31f3429e224cb3079b303d776fac2690b250ee1e6e`.
+
+**Ссылки:** `Source/ASM/MenuMain.asm`,
+`Source/OTHER/test_menu_hover_keyboard_focus.py`.
+
+────────────────────────────────────────────────────────────────────────────
+[2026-07-02 13:17] Codex / VDAC2: main-menu keyboard через раз — быстрый PS/2 tap
+────────────────────────────────────────────────────────────────────────────
+**Контекст:** после фикса mouse-hover пользователь увидел, что клавиатура в
+главном меню срабатывает «через раз». Причина не в hover state: прямое
+выставление `Input_KUp/Down` работало. Реальный риск был в `Input_EdgeZ` поверх
+sampled-level флагов: если press/release/press попадали между двумя кадрами,
+`Input_KDown` мог остаться `1`, а `MenuKbdDownPrev` тоже `1`, поэтому новый
+нажим не давал фронта.
+
+**Фикс:** `Source/ASM/Input.asm` теперь чистит в начале `Input_Scan` и выставляет
+per-frame PS/2 make-события `Input_EvUp`, `Input_EvDown`, `Input_EvFireKey`.
+События ставятся только на make-кодах Up/Q, Down/A, Space/Enter; break только
+обновляет level-флаг. `Source/ASM/MenuMain.asm` сначала потребляет эти события
+и выставляет соответствующий `MenuKbd*Prev=1`, затем fallback'ится на старый
+`Input_EdgeZ` для обычного удержания/Kempston. Быстрый tap больше не теряется,
+а удержание не даёт лишний шаг без нового make/typematic.
+
+**Проверка/доставка:** `.\build.cmd` PASS; `python -u
+Source\OTHER\test_menu_hover_keyboard_focus.py` PASS (добавлены проверки
+`Input_SetKey` make/break и сценария `prev=1 + new make-event`); `check_memory_map.py`,
+`test_adventure_gauntlet_chains.py`, `test_levelsel_transition.py` PASS.
+`.\build_wc_img.cmd` PASS, host `wc.img` обновлён; `check_host_wc_img.py` PASS,
+все hash_match=True. Прямые runtime-файлы в
+`C:\Users\Администратор\Desktop\unreal_x64` обновлены. SHA-256 текущего
+`ZUMA_VD2.SPG`: `56550480a362ce1bb23485b2f70812be3de375f80b96ed145ec02242411f39a4`.
+
+────────────────────────────────────────────────────────────────────────────
+[2026-07-02 13:53] Codex / VDAC2: Gauntlet new-run reset теперь сбрасывает lives
+────────────────────────────────────────────────────────────────────────────
+**Контекст:** пользователь заметил: при выходе из Gauntlet в главное меню через
+pause menu счёт при следующем запуске сбрасывался, а счётчик жизней оставался
+старым. Root-cause был не в pause-dialog UI, а в общем `Score_Reset`: новый
+запуск из Level Select/Gauntlet вызывает `Score_Reset`, но функция сбрасывала
+только `VDC_PlayerScore` и `NextLifeScore`, не трогая `VDC_Lives`.
+
+**Фикс:** `Source/ASM/main.asm`: `Score_Reset` теперь также делает
+`VDC_Lives=3`. Это покрывает новые Adventure/Gauntlet-прогоны и final Game Over
+exit, не задевая `RestartLevel` после потери одной жизни.
+
+**Проверка/доставка:** `.\build.cmd` PASS; `test_score24_z80.py` PASS и теперь
+проверяет, что `Score_Reset` восстанавливает lives с 1 до 3; также PASS:
+`test_adventure_gauntlet_chains.py`, `check_memory_map.py`,
+`test_win_transition_z80.py`. `.\build_wc_img.cmd` PASS, host
+`\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` обновлён и
+`check_host_wc_img.py` показал hash_match=True. Локальные прямые runtime-файлы
+и `C:\Users\Администратор\Desktop\unreal_x64\wc.img` тоже обновлены.
+SHA-256 текущего `ZUMA_VD2.SPG`:
+`C7FF17F947A0433D341409FA92325DA9231CBE01C2C2911EBD45F669D94CF781`.
+
+## [2026-07-02 14:40] Codex / VDAC2: L19/Rabbit Zuma bar target — убрано ошибочное dual target×2
+**Контекст:** пользователь заметил на L19/Rabbit (`serpents`), что при SCORE около 4400 Zuma bar меньше половины. Проверка показала: `GetCurrentTargetScore` искусственно удваивал target на двухцепочных уровнях, поэтому `lvl35 score=4500` превращался в 9000.
+
+**Вывод по правилам:** HD-ref нельзя считать авторитетом по dual-chain gameplay, но wiki-like источники описывают Zuma bar как один общий индикатор уровня; двухдорожечность — свойство уровня, не множитель score target. Локальный original-like `levels.xml` также хранит `progression="dual"` отдельно от `score="4500"`. Значит для L19/Rabbit target должен оставаться 4500.
+
+**Фикс:** `Source/ASM/main.asm`: в `GetCurrentTargetScore` удалён блок `VDC_HasSecondChain -> target×2`; теперь возвращается прямой per-level score из `level_runtime_table.inc`. Добавлен `Source/OTHER/test_dual_chain_target_z80.py`: L19/Rabbit при `has_second=0/1` возвращает 4500. Заодно обновлены stale dual-chain harness tests `test_dual_chain_fastfill.py` и `test_dual_chain_tail_render.py` под текущий Track V2 page-table loader, чтобы они больше не видели `tns=0`.
+
+**Проверка/доставка:** `build.cmd` PASS, `build_wc_img.cmd` PASS. PASS: `test_dual_chain_target_z80.py`, `test_score24_z80.py`, `test_gap_bonus_score_z80.py`, `test_draw_progress_z80.py`, `test_win_transition_z80.py`, `test_dual_chain_fastfill.py`, `test_dual_chain_tail_render.py`, `test_dual_chain_win_outro_z80.py`, `test_level_pack_second_tracks.py`, `test_adventure_gauntlet_chains.py`, `check_memory_map.py`. Host `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` и local `C:\Users\Администратор\Desktop\unreal_x64\wc.img` обновлены и проверены hash_match=True. Новый `ZUMA_VD2.SPG` SHA256 `E006ADE4B74EB7CD1F6DE0B4DD1088452DC2A17B87575E4927924770E2822A66`.
+
+## [2026-07-02 15:12] Codex / VDAC2: main menu LMB click срабатывает на первом нажатии
+**Контекст:** пользователь сообщил, что в главном меню ЛКМ на кнопках срабатывает не с первого раза. Причина: `MenuCheckButton` выставлял `Menu*Click` только на release edge (`MenuLmbNow=0`, `MenuLmbPrev=1`) внутри hit-box. Визуально это воспринималось как запаздывание/нужен повторный клик, особенно в сравнении с `MoreGamesExitPressed`, где ЛКМ уже принимается по press edge или release edge.
+
+**Фикс:** `Source/ASM/MenuMain.asm`: `MenuCheckButton` теперь активирует кнопку на первом press edge (`0->1`) и сохраняет release edge (`1->0`) для сценария "зажал снаружи, отпустил внутри". Hold не повторяет click, потому что `MenuLmbPrev=1` блокирует повторный press-edge.
+
+**Тест:** обновлён `Source/OTHER/test_menu_hover_keyboard_focus.py`: добавлена проверка немедленного `MenuAdventureClick` на первом press, отсутствие повтора при hold и сохранение release-edge. PASS: `test_menu_hover_keyboard_focus.py`, `test_more_games_loader_walks.py`, `test_levelsel_transition.py`, `test_adventure_gauntlet_chains.py`, `check_memory_map.py`. `build.cmd` и `build_wc_img.cmd` PASS.
+
+**Доставка:** host `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` и local `C:\Users\Администратор\Desktop\unreal_x64\wc.img` обновлены и проверены `hash_match=True`; прямые runtime-файлы в `Desktop\unreal_x64` тоже обновлены. Новый `ZUMA_VD2.SPG` SHA256 `E7F91234D788C8DFA0D789E7B9F82E47C45C9D13F1270BD3D7360A5F8F517B00`.
+
+## [2026-07-02 15:20] Codex / VDAC2: итоговая опорная v092 после score/lives, L19 target и main-menu LMB
+**Контекст:** пользователь попросил записать всё сделанное в `Чат.txt` и создать опорную с исходниками в формате проекта.
+
+**Сделано в этой серии:**
+1. Разобран L19/Rabbit Zuma bar: текущий код ошибочно удваивал target на dual-chain (`4500 -> 9000`). HD-ref не является авторитетом по dual-chain, wiki-like правило и `levels.xml` указывают на один общий per-level Zuma bar. `GetCurrentTargetScore` теперь возвращает прямой score из `level_runtime_table.inc`; L19/Rabbit = 4500. Добавлен `test_dual_chain_target_z80.py`.
+2. Починен reset нового Gauntlet/Adventure прогона: `Score_Reset` теперь ставит `VDC_Lives=3` вместе со score=0 и `NextLifeScore=50000`. Это убирает наследование старых жизней после выхода из Gauntlet через pause menu.
+3. Проверено правило времени после потери жизни: после retry время должно сбрасываться. В VDAC2 это уже так (`RestartLevel -> VDC_Init` сбрасывает `VDC_GameSeconds`/`VDC_StatTimeFrames`), совпадает с HD-ref (`Game_Init` на новую попытку).
+4. Обновлены dual-chain harness tests под текущий Track V2 loader: `test_dual_chain_fastfill.py` и `test_dual_chain_tail_render.py` больше не вручную мапят stale page #06/#0F и корректно видят tns L05/L12/L19.
+5. Починен главный экран: `MenuCheckButton` теперь кликает по первому press edge ЛКМ, release edge сохранён, hold не повторяет click. `test_menu_hover_keyboard_focus.py` расширен press/hold/release проверками.
+6. Сборки и доставка: `build.cmd` PASS, `build_wc_img.cmd` PASS; host `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img`, local `C:\Users\Администратор\Desktop\unreal_x64\wc.img` и прямые файлы в `Desktop\unreal_x64` обновлены; оба образа проверены `hash_match=True`.
+
+**Проверки:** PASS: `test_score24_z80.py`, `test_dual_chain_target_z80.py`, `test_gap_bonus_score_z80.py`, `test_draw_progress_z80.py`, `test_win_transition_z80.py`, `test_dual_chain_fastfill.py`, `test_dual_chain_tail_render.py`, `test_dual_chain_win_outro_z80.py`, `test_level_pack_second_tracks.py`, `test_adventure_gauntlet_chains.py`, `test_menu_hover_keyboard_focus.py`, `test_more_games_loader_walks.py`, `test_levelsel_transition.py`, `check_memory_map.py`.
+
+**Опорная создана:** `releases/v092-2026-07-02-score-lives-l19-menu-lmb-reference/`. Внутри сохранены `Source/`, `Graphics/`, `Docs/`, корневые build/config файлы, `REFERENCE.txt`, обновлённый `Чат.txt` и runtime-артефакты. Новый SPG SHA256: `E7F91234D788C8DFA0D789E7B9F82E47C45C9D13F1270BD3D7360A5F8F517B00`.
+
+## [2026-07-02 18:00] Codex / VDAC2: подготовка Z80 profile L19 и первая оптимизация matrix path
+**Контекст:** пользователь попросил замерить производительность Z80 на L19 и посмотреть, что ещё можно оптимизировать.
+
+**Профайлер:** runtime `C:\Users\Администратор\Desktop\unreal_x64\Unreal.exe` был patched без исходников: обновлена zprof-таблица call-site адресов под текущий `Build\zuma.sym` (`Core.MainLoop.Loop=#E8C9`, `ZL_DrawFrame` call `#E978..#E97B`, `ZLDF_*` актуальные адреса), gate immediate `#E921 -> #E8C9` и строка отчёта. Перед патчем создан backup `Unreal.exe.pre_zprof_E8C9_20260702_1738`. `zprof.req` создан заново: ASCII `120 90`, bytes `31-32-30-20-39-30`.
+
+**Headless baseline L19 до оптимизации:** `profile_dual_chain_perf.py` для `CurrentLevel=18`, warm=80: `draw_full_frame=30915` steps, `cmd_words=381`, `Command_BCDE=3487` grouped hits. Обновление цепей: `VDC_UpdateAllChains=9626` steps, `update_chain1=2483`, `update_chain2=2418`.
+
+**Оптимизация:** `Source/ASM/MainLoop.asm`, `.l19_native` внутри `ZL_EmitBallMatrixFromBRAD`: прежняя схема `CALL ZL_EmitLoadId` + 6 `FT_CMD_BUF` + `CALL ZL_EmitRotate` + `JP ZL_EmitSetMatrix` заменена на compact block-writer: prefix block (`LOADIDENTITY`, `TRANSLATE`, `+25.5`, `+25.5`) через `LDIR`, прямой append `CMD_ROTATE + angle`, suffix block (`TRANSLATE`, `-25.5`, `-25.5`, `SETMATRIX`) через `LDIR`. Командная последовательность не меняется: проверка дала 40 bytes / 10 dwords в ожидаемом порядке.
+
+**Headless после оптимизации:** `draw_full_frame=30258` steps (`-657`), `Command_BCDE=3091` grouped hits (`-396`), `cmd_words=381` без изменения. `Main1` уменьшился `16282 -> 16238`, free `102 -> 146` bytes. Большая `chain_matrix_lut_l19_51.bin` существует, но напрямую в Main1/slot0 сейчас не помещается (нужно ~768 bytes).
+
+**Проверки/доставка:** `build.cmd` PASS, `check_memory_map.py` PASS (`Main1=16238`, free 146), `test_draw_progress_z80.py` PASS, `test_dual_chain_target_z80.py` PASS, `test_dual_chain_tail_render.py` PASS. `test_cmd_buffer_budget_z80.py` не засчитан: два запуска зависли/не уложились в 5 минут, процессы остановлены; нужен отдельный разбор этого теста. Локальные runtime-файлы и `C:\Users\Администратор\Desktop\unreal_x64\wc.img` обновлены; host `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` обновлён injector'ом и `check_host_wc_img.py` показал `hash_match=True` для SPG/SYM/PAK внутри образа. Direct copy PAK в host-папку дал `Access is denied`, но host `wc.img` актуален.
+
+**Текущие SHA256:** `ZUMA_VD2.SPG` = `AF9E424035B4CD5209DA1A5F2860CD25BA5AACA95DB9022369BDE178B3CBEF5C`; `ZUMA.SYM` = `269E52336E62D59498C9A73317AA0ED8103FDE4226E5798758DF5E616996731A`; patched `Unreal.exe` = `8F4C7930C10684ABFE6FDDE9670781105329CB95688E6B9A4A7145CECE3C7D00`.
+
+**Что нужно для real-frame zprof:** пользователь должен стартовать emulator видимо из `C:\Users\Администратор\Desktop\unreal_x64` с `ZUMA_VD2.SPG` и дойти до L19. После consumed `zprof.req` ожидаемые файлы: `zprof.txt`, `zprof.csv`, `zprof_draw.csv`; валидный отчёт должен иметь `frames=120 target=120`, `gate: CurrentLevel=18`, `min_slots=90`, `frame PC Core.MainLoop.Loop #E8C9`.
+
+## [2026-07-02 19:20] Codex / VDAC2: проверка достоверности L19 zprof после замечания про `slots=210+0`
+**Контекст:** пользователь указал, что во время замера L19 обе цепи были видимо непустые, поэтому моя трактовка `slots=210+0` как "вторая цепь пустая" была неверной. Также пользователь попросил не переходить к оптимизациям до анализа тактов Z80 по убыванию.
+
+**Проверка:** сохранённый отчёт `Diagnostics/L19_zprof_20260702_185604/zprof.txt` имеет `frames=120 target=120`, `min_slots=90`, `frame PC Core.MainLoop.Loop #E8C9`, `total_avg_tstates_per_frame=183836`, `total_max_frame_tstates=200804`. Дизассемблер текущего patched `Unreal.exe` подтвердил, что диагностическая строка читает адреса из `zuma.sym`: `CurrentLevel=#69CE`, `VDC_DialogState=#69F2`, `VDC_SlotsLen=#69EE`, `VDC_HasSecondChain=#D6B3`, `VDC2_SlotsLen=#DA75`. Значит это не "левые" адреса.
+
+**Исправленный вывод:** `slots=210+0` из этого отчёта нельзя считать доказательством пустой видимой второй цепи. Сам профиль содержит ненулевые секции второй цепи на всех 120 кадрах: `ZLDF_chain2_over avg=19379`, `ZLDF_chain2_under avg=9712`. То есть замер был тяжёлым dual-chain draw, а не сценой без второй цепи. Для следующего строгого замера нужно добавить в profiler report явные флаги `VDC_HasSecondChain`, `VDC_SecondActive` и безусловочный `VDC2_SlotsLen`, а также не использовать напечатанный `CurrentLevel=18` как proof: в текущем runtime branch по уровню NOP-патчен, строка отчёта осталась фиксированной.
+
+**Текущий top по avg tstates/frame:** `ZL_DrawFrame=137415`, `ZLDF_chains_total=116068`, `ZLDF_prepare_chain_caches=51229`, `VDC_UpdateAllChains=36175`, `ZLDF_chain2_over=19379`, `ZLDF_afterchains_total=19247`, `ZLDF_chain1_over=17709`, `ZLDF_chain1_under=11517`, `ZLDF_chain2_under=9712`, `ZLDF_hud_top_text=8967`. Полный CSV сохранён в `Diagnostics/L19_zprof_20260702_185604/zprof.csv`.
+
+**Служебная правка:** `PATCHED_UNREAL_ZPROF.md` обновлён: из критериев валидности убрано reliance on `CurrentLevel=18`, добавлено предупреждение не трактовать `slots=a+b` как видимую заполненность второй цепи без дополнительных диагностик. Текущий `Unreal.exe` SHA256: `5325C2D9FF8ECA57D88E0ADCE2C7471BE9F299FE93FB6C0526107A485AA62C4B`.
+
+## [2026-07-02 20:35] Codex / VDAC2: внедрён ExplodeFrame-gate в draw path
+**Контекст:** пользователь попросил делать следующую оптимизацию после анализа L19 zprof. Выбрана низкорисковая оптимизация из `ZL_DRAWFRAME_OPTIMIZATION.md`: убрать hot-path чтение `ExplodeFrame[i]` и destroy-pass в кадрах без активной match-3 анимации.
+
+**Сделано:** добавлен per-chain флаг `VDC_ExplodeActive` в `VDC_ChainLocal` (`Source/ASM/VDC.asm`). `VDC_ApplyMatch3` ставит флаг сразу при записи `ExplodeFrame=1`; `VDC_AnimateChain` обновляет его в том же проходе, где инкрементирует и финализирует кадры взрыва. Так флаг корректно живёт отдельно для обеих цепей через `VDC_SwapChains` без ручного счётчика и без риска на shift/remove путях. В `Source/ASM/MainLoop.asm` `ZL_DrawCachedActiveChain` теперь один раз выбирает `PBExplodeCheck` или fast path к head-absorb/normal draw; `ZL_DrawExplosions` вызывается только при `VDC_ExplodeActive!=0`. `ZL_TmpSlotIdx` перенесён из начала каждой cache-итерации в реально рисуемый path, чтобы pass-filter skips не платили за него.
+
+**Замер headless Z80 на текущем build:** один и тот же L19 state, принудительно `VDC_ExplodeActive=0/1` при пустых `ExplodeFrame[]`. Warm `36+36`: `287103 -> 300053` tstates, delta `12950`. Synthetic heavy `105+105`: `634927 -> 667809` tstates, delta `32882`; CMD `525 -> 537` words. Это относительная дельта внутри Python harness, не абсолют patched-Unreal zprof. Старая оценка `-6K` была занижена, потому что не учитывала безусловочный `ZL_DrawExplosions`.
+
+**Проверено:** `build.cmd` PASS; `check_memory_map.py` PASS (`Main1=16283`, free 101); PASS: `test_explode_active_flag_z80.py` (новый), `test_match3_marker_z80.py`, `test_insert_immediate_match_z80.py`, `test_match3_full_same_color_run_z80.py`, `test_shot2_cleanup_z80.py`, `test_cascade_requires_gap_bridge_z80.py`, `test_dual_chain_tail_render.py`, `test_dual_chain_fastfill.py`, `test_dual_chain_target_z80.py`, `test_draw_progress_z80.py`, `test_tunnel_render_pass_priority.py`, `test_explosion_color_mapping.py`. `test_cmd_buffer_budget_z80.py` снова не засчитан: два запуска не уложились в 120/300 секунд, как и в предыдущей серии; требуется отдельный ремонт/сокращение этого теста.
+
+**Доставка:** ярлык `C:\Users\Администратор\Desktop\Zuma Deluxe VDAC2 (SPG direct).lnk` запускает `C:\Users\Администратор\Desktop\unreal_x64\Unreal.exe ZUMA_VD2.SPG` из `Desktop\unreal_x64`, поэтому свежие `ZUMA_VD2.SPG`, `ZUMAMAIN.PAK`, `ZUMALVL.PAK`, `zuma.sym` скопированы туда из `Build`. SHA256 текущих файлов: `ZUMA_VD2.SPG` = `CB552E079DDC2F5F48971B0029EADF10752E0C462DFBBCA27F37C16787654D4D`; `ZUMAMAIN.PAK` = `BCD19A951C16D736DA3518FCC48ABAE4B1F07A54FC667622285F12AFB8062561`; `ZUMALVL.PAK` = `938E0C57D0CBC6351279E3234858ACDAD03F02FE90BE336CAC525E944F95E122`; `zuma.sym` = `956A8776961DBD6E4A9FA76BBCD63FB1138B23F6E7C625A858322FF400188C16`.
+
+**Host inject:** после уточнения пользователя выполнен in-place inject в `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` через `inject_zuma_to_wc_img.py`. `check_host_wc_img.py` PASS: `SPGBLD.INI`, `ZUMA_VD2.SPG`, `ZUMA.SYM`, `ZUMAMAIN.PAK`, `ZUMALVL.PAK`, `ZUMAAUD.PAK`, `ZUMASND.PAK` внутри host image имеют `size_match=True` и `hash_match=True`.
+
+## [2026-07-02 20:55] Codex / VDAC2: сохранена опорная v093 после ExplodeFrame-gate
+**Контекст:** пользователь попросил сохранить опорную с исходниками по текущему build.
+
+**Папка:** `releases/v093-2026-07-02-explodeframe-gate-reference/`.
+
+**Состав:** сохранены текущие `Source/`, `Graphics/`, `Docs/`, корневые build/config файлы, `PATCHED_UNREAL_ZPROF.md`, `ZL_DRAWFRAME_OPTIMIZATION.md`, `Чат.txt`, `REFERENCE.txt` и runtime-артефакты с префиксом v093. В Source входит новый `Source/OTHER/test_explode_active_flag_z80.py`.
+
+**Смысл версии:** текущий build после v092, включая compact writer для `.l19_native` matrix path и внедрённый per-chain `VDC_ExplodeActive`/draw-gate, который убирает per-ball `ExplodeFrame[i]` read и destroy-pass в кадрах без match-3 анимации.
+
+**Проверка сохранения:** все сохранённые v093 runtime-артефакты совпадают с текущими `Build/*` по SHA256 (`Match=True`). Основные SHA256: `ZUMA_VD2.SPG` = `CB552E079DDC2F5F48971B0029EADF10752E0C462DFBBCA27F37C16787654D4D`; `ZUMA.SYM` = `956A8776961DBD6E4A9FA76BBCD63FB1138B23F6E7C625A858322FF400188C16`; `ZUMAMAIN.PAK` = `BCD19A951C16D736DA3518FCC48ABAE4B1F07A54FC667622285F12AFB8062561`; `ZUMALVL.PAK` = `938E0C57D0CBC6351279E3234858ACDAD03F02FE90BE336CAC525E944F95E122`.
+
+## [2026-07-02 21:55] Codex / VDAC2: TRANSFORM-LUT для PALETTED ball matrix
+**Контекст:** пользователь попросил внедрить оптимизацию matrix emit: вместо runtime-команд FT812 `LOADIDENTITY + TRANSLATE + ROTATE + TRANSLATE + SETMATRIX` для 51px PALETTED-атласа писать готовые `BITMAP_TRANSFORM_A..F` DL-слова из LUT. Это глобальный путь шаров, L19 используется как тяжёлый пример.
+
+**Сделано:** `Source/OTHER/make_chain_matrix_lut.py` теперь генерирует `Graphics/Converted/chain_matrix_lut_l19_51_16.bin`: 16 buckets x 24 bytes = 384 bytes, pivot 25.5px, тот же face-offset/знак, что у L19 native rotate. В `Source/ASM/MainLoop.asm` текущий `BALLS_ARGB4_ENABLED=0` путь `ZL_EmitBallMatrixFromBRAD` переключён с `.l19_native` coprocessor-command writer на `.l19_lut`: `A & #F0 -> bucket 0..15 -> bucket*24 -> LDIR 24 bytes` прямо в `FT.Coprocessor.BufferPtr`. Старый ARGB4 LUT оставлен под `if BALLS_ARGB4_ENABLED`, но в текущий build не включается.
+
+**Проверка корректности LUT:** генератор пересобран, новый 384-byte LUT байт-в-байт совпал с каждым вторым entry существующей L19 32-bucket таблицы (`chain_matrix_lut_l19_51.bin`). Точечный runtime-test через Z80 harness: 16 вызовов `Core.ZL_EmitBallMatrixFromBRAD` для углов `0..240 step 16` дали `ptr_delta=384`, `cmd_words=96`, `bytes_per_emit=24`, и весь CMD-буфер совпал с `chain_matrix_lut_l19_51_16.bin` (`match=True`).
+
+**Замер L19 после LUT:** headless `CurrentLevel=18`, warm=80, прогретое состояние `has2=1`, `len1=36`, `len2=36`, `hsa=35`: `draw_full_frame=28808` steps, `288166` Z80 tstates, `cmd_words=353` (`1412` bytes). Top by tstates: `FT.Coprocessor.Command_BCDE=26414`, `ZL_BuildActiveChainCache.PrePassSamplePageReady=18872`, `PrePassCellReady=17231`, `VDC_SwapBlock=13176`, `ZL_DrawCachedActiveChain.PBPassOk=9486`, `ZL_EmitBallMatrixFromBRAD.l19_lut=6255`. Важно: матрица эмитится только при смене quantized tangent (`ZL_TmpLastTangent`), поэтому выигрыш на кадр зависит от числа смен угла, а не от общего числа шаров.
+
+**Сборка/память:** `build.cmd` PASS. `check_memory_map.py` PASS: `Main1_Size=15803`, free `581` bytes. За счёт удаления compact native writer и включения только 16-bucket LUT текущий `Main1` стал меньше v093 (`16283 -> 15803`) несмотря на 384-byte таблицу.
+
+**Регрессии:** PASS: `check_memory_map.py`, `test_draw_progress_z80.py`, `test_dual_chain_target_z80.py`, `test_dual_chain_tail_render.py`, `test_explode_active_flag_z80.py`, `test_tunnel_render_pass_priority.py`, `test_match3_marker_z80.py`, `test_insert_immediate_match_z80.py`, `test_match3_full_same_color_run_z80.py`, `test_shot2_cleanup_z80.py`, `test_cascade_requires_gap_bridge_z80.py`, `test_explosion_color_mapping.py`. `test_cmd_buffer_budget_z80.py` не перезапускался в этой серии, потому что ранее стабильно не укладывался в лимит и требует отдельного ремонта.
+
+**Доставка:** прямые runtime-файлы для ярлыка `C:\Users\Администратор\Desktop\Zuma Deluxe VDAC2 (SPG direct).lnk` обновлены в `C:\Users\Администратор\Desktop\unreal_x64`: `ZUMA_VD2.SPG`, `ZUMA.SYM`, `ZUMAMAIN.PAK`, `ZUMALVL.PAK`. Host `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` обновлён in-place через `inject_zuma_to_wc_img.py`; `check_host_wc_img.py` PASS, все `size_match=True` и `hash_match=True`. Локальный `C:\Users\Администратор\Desktop\unreal_x64\wc.img` тоже обновлён in-place.
+
+**SHA256:** `ZUMA_VD2.SPG` = `5EE4662F9103EF0DD754F9624002EC90154E86B9E940DC7172683E67E71042D3`; `ZUMA.SYM` = `AC24BC2E796084DF5456A29B0202740CB865BB6452B57DCC1A966A59FFE35599`; `ZUMAMAIN.PAK` = `EFAEEEFCBF11C419050CBAA23105F42B3F8D1AFF55E0403A0FC427A5AE2F9AE9`; `ZUMALVL.PAK` = `938E0C57D0CBC6351279E3234858ACDAD03F02FE90BE336CAC525E944F95E122`.
+
+## [2026-07-02 22:35] Codex / VDAC2: lose больше не стартует поверх активной match-3 анимации
+**Контекст:** пользователь подтвердил работоспособность TRANSFORM-LUT, но заметил новый edge-case: после крайнего исправления lose state запускается, когда цепочки смыкаются, не дожидаясь окончания match-3 destroy animation. Формулировка пользователя точная: match-3 animation фактически трактовалась как уже чистая цепочка без дырки.
+
+**Причина:** `VDC_LoseChainBusy` проверял `GapJunction`, `GapPosLeft`, slot markers и прямой scan `ExplodeFrame[]`, но не использовал per-chain `VDC_ExplodeActive`. После закрытия gap цепь уже может быть геометрически connected, а destroy fade ещё является активной игровой фазой; для lose-start это должно быть `busy`, даже если slot layout уже выглядит как обычная цепь.
+
+**Фикс:** `Source/ASM/VDC.asm`: в начале `VDC_LoseChainBusy` добавлен guard `VDC_ExplodeActive != 0 -> busy`. Флаг per-chain, входит в `VDC_ChainLocalStart..End` и корректно свопается через `VDC_SwapChains`, поэтому блокирует как активную, так и inactive chain на dual levels. Старый полный scan `ExplodeFrame[]` оставлен как страховка.
+
+**Тесты:** расширен `Source/OTHER/test_lose_waits_chain_settle_z80.py`: добавлены случаи `active explode-active flag blocks absorb after gap closure` и `dual inactive explode-active flag blocks absorb after gap closure`. Дополнительно вручную проверен динамический сценарий: PULL-gap закрылся за 17 кадров, возникла цепь `[3,0,0,0,1,2]` с `ExplodeFrame=[0,1,1,1,0,0]` и `VDC_ExplodeActive=1`; последующий `VDC_CheckKillzone` оставил `GameState=0` и поставил `LoseHoldCnt=24`, то есть ABSORB не стартовал.
+
+**Сопутствующая правка теста:** `Source/OTHER/test_dual_chain_lose_absorb_z80.py` был stale: вручную грузил старые track pages `#06/#0F`, поэтому видел `TrackNumSlots=0`. Переведён на общий Track V2 helper `load_track_v2_pair` из `test_dual_chain_fastfill.py` и стабильный `ReadRTCSeconds` stub.
+
+**Проверено:** `build.cmd` PASS (`Main1=15809`, free `575`). PASS: `test_lose_waits_chain_settle_z80.py`, `test_dual_lose_full_path_z80.py`, `test_dual_chain_lose_absorb_z80.py`, `test_explode_active_flag_z80.py`, `test_match3_marker_z80.py`, `test_insert_immediate_match_z80.py`, `test_match3_full_same_color_run_z80.py`, `test_shot2_cleanup_z80.py`, `test_cascade_requires_gap_bridge_z80.py`, `test_gap_pull_z80.py`, `check_memory_map.py`, `test_dual_chain_target_z80.py`, `test_dual_chain_tail_render.py`.
+
+**Доставка:** прямые runtime-файлы для `Zuma Deluxe VDAC2 (SPG direct).lnk` обновлены в `C:\Users\Администратор\Desktop\unreal_x64`; host `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` обновлён in-place и `check_host_wc_img.py` показал все `size_match=True` / `hash_match=True`; локальный `Desktop\unreal_x64\wc.img` тоже обновлён.
+
+**SHA256:** `ZUMA_VD2.SPG` = `58E1C4F7E9C7DD093F5AAD7A82AD0663FE074F4EC6F00F01428B742E7C07DF34`; `ZUMA.SYM` = `63F2C4198F48A28921CD80613EB9A59B4D94D3B7C69F6AA982DCAF548DCEF50F`; `ZUMAMAIN.PAK` = `CD60C8C228FD11B41A95B46B3A7A6A381FB05C00DC3462DBB9732552990A542C`; `ZUMALVL.PAK` = `938E0C57D0CBC6351279E3234858ACDAD03F02FE90BE336CAC525E944F95E122`.
+
+## [2026-07-02 23:05] Codex / VDAC2: follow-up — ожидание match-3 больше не открывает kill-zone
+**Контекст:** пользователь проверил предыдущий build и уточнил, что не помогло: explosion animation всё ещё визуально "едет в lose state". Это показало, что одного запрета `ABSORB` мало: `VDC_LoseHoldBeforeKillzone` при busy всё равно открывал череп (`KzFrame` рос до 9) и мог играть warning, то есть lose-визуал стартовал, хотя `GameState` ещё оставался PLAY.
+
+**Фикс:** `Source/ASM/VDC.asm`: `VDC_LoseHoldBeforeKillzone` теперь только ставит голову на rem=65 и `LoseHoldCnt`, но держит `VDC_KzFrame=1` (closed skull) и не проигрывает warning. Открытие kill-zone теперь начинается только когда `VDC_LoseStartReady` уже ready: нет active `VDC_ExplodeActive`, нет `ExplodeFrame[]`, нет gap markers/Junction/PosLeft.
+
+**Проверка:** `test_lose_waits_chain_settle_z80.py` теперь подтверждает `kz=1` при active destroy frame и при active/inactive `VDC_ExplodeActive`. Динамический сценарий: PULL-gap закрылся за 17 кадров, возник match `[3,0,0,0,1,2]`, `ExplodeFrame=[0,1,1,1,0,0]`, `VDC_ExplodeActive=1`; последующий `VDC_CheckKillzone` дал `GameState=0`, `LoseHoldCnt=24`, `KzFrame=1`.
+
+**Регрессии/доставка:** `build.cmd` PASS (`Main1=15778`, free `606`). PASS: `test_lose_waits_chain_settle_z80.py`, `test_dual_lose_full_path_z80.py`, `test_dual_chain_lose_absorb_z80.py`, `test_explode_active_flag_z80.py`, `test_gap_pull_z80.py`, `check_memory_map.py`. Прямые файлы в `Desktop\unreal_x64`, host `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` и local `Desktop\unreal_x64\wc.img` обновлены; `check_host_wc_img.py` PASS, все `hash_match=True`.
+
+**SHA256:** `ZUMA_VD2.SPG` = `81719A3A40F2CA651D4B33C9696FFBE2693B61793BC0566620EDAEB20A677C26`; `ZUMA.SYM` = `CBD2A1943F3C924931A7128D1B9E88DF64F8CD195C80697B6E31A7A5DECDC4F1`; `ZUMAMAIN.PAK` = `310C55F1D056A2FCD58547715E0CAD1F50D3F0BBF91F354BBF3E802975B5ADDC`; `ZUMALVL.PAK` = `938E0C57D0CBC6351279E3234858ACDAD03F02FE90BE336CAC525E944F95E122`.
+
+## [2026-07-02 22:48] Codex / VDAC2: ABSORB больше не замораживает match-3 explode
+
+**Симптом:** после предыдущего KZ-hold фикса на реальном запуске lose-state мог уже быть в ABSORB, при этом на экране оставались кадры взрыва match-3. Скрин IMG_20260702_222824.jpg: игра зависла на explosion overlay.
+
+**Причина:** VDC_UpdateAbsorb/ABSORB-path не вызывает VDC_AnimateChain. Если ABSORB успел стартовать при живом ExplodeFrame или липком VDC_ExplodeActive, поглощение начинало сдвигать массив шаров, а explode/gap lifetime не доживал штатно. В минимальном harness до правки было видно: ExplodeFrame=1 сдвигался вместе с удалением head, а VDC_ExplodeActive мог оставаться 1.
+
+**Правка:** в Source/ASM/VDC.asm VDC_Update теперь отправляет state=ABSORB через общий VDC_UpdateAbsorbOrRush. В начале VDC_UpdateAbsorbOrRush добавлен guard VDC_LoseStartReady: если цепь ещё busy по explode/gap, вызываются VDC_LoseHoldBeforeKillzone и VDC_AnimateChain, после чего update возвращается без rush/absorb-сдвига. Когда busy снят, старый ABSORB/rush путь продолжается как раньше.
+
+**Регрессии:** расширен Source/OTHER/test_lose_waits_chain_settle_z80.py: добавлены кейсы bsorb pending explode animates before absorb (rames=[0,2,0], slots не сдвигаются) и bsorb stale explode-active flag is cleared.
+
+**Проверки:** uild.cmd PASS (Main1=15790, free 594). PASS: 	est_lose_waits_chain_settle_z80.py, 	est_dual_chain_lose_absorb_z80.py, 	est_explode_active_flag_z80.py, 	est_gap_pull_z80.py, check_memory_map.py. 	est_dual_lose_full_path_z80.py не засчитан в этой итерации: heavy full-emulator прогон с полным ZL_DrawFrame не уложился в 5 минут; короткая диагностика показала, что первые 10 warmup VDC_UpdateAllChains проходят штатно, проблема в скорости harness, не в Z80 timeout.
+
+**Доставка:** прямые runtime-файлы для Zuma Deluxe VDAC2 (SPG direct).lnk обновлены в C:\Users\Администратор\Desktop\unreal_x64 (ZUMA_VD2.SPG, ZUMA.SYM, ZUMAMAIN.PAK, ZUMALVL.PAK, ZUMAAUD.PAK, ZUMASND.PAK) и сверены с Build по SHA (Match=True). Host \\tsclient\D\Работа.Андрей\unreal_x64\wc.img и local C:\Users\Администратор\Desktop\unreal_x64\wc.img обновлены in-place через inject_zuma_to_wc_img.py; check_host_wc_img.py для обоих образов показал все size_match=True / hash_match=True.
+
+**SHA256:** ZUMA_VD2.SPG = F58484C31BC25C404E1874F1C36FED531BD07E7CB6A30C810F5B8F7058673448; ZUMA.SYM = 96290B236C1AB71AFA401814C3BF1C3C5F3286BE3CA9BA9BB17A9100770DE391; ZUMAMAIN.PAK = 73B7416F9B2D32AC4D954963DCAE42F1E3E7589D1979C92EDFB527A2E47A74EB; ZUMALVL.PAK = 938E0C57D0CBC6351279E3234858ACDAD03F02FE90BE336CAC525E944F95E122.
+
+## [2026-07-02 23:03] Codex / VDAC2: запрет выстрела при входе шаров в kill-zone
+
+**Симптом:** лягушка могла выстрелить в кадре, когда шары уже начинали уходить в kill-zone. Причина в порядке main loop: Frog_Update вызывается до VDC_UpdateAllChains, поэтому в кадре перехода Bullet_Spawn ещё видел VDC_GameState=PLAY, а сразу после этого VDC переводил цепь в ABSORB.
+
+**Правка:** в Source/ASM/Bullet.asm Bullet_Spawn теперь дополнительно блокирует новый выстрел, если VDC_KzFrame>=2 или VDC2_KzFrame>=2 (череп уже открывается у любой цепи). Комментарии добавлены на русском, UTF-8.
+
+**Дополнительно:** в Source/ASM/main.asm при .ck_trigger входе в ABSORB обнуляются Bullet_Active, Frog_IsFire, Frog_RecoilTick, а Frog_BallExpand/TongueExpand возвращаются в idle. Это гасит уже начатый выстрел/recoil, чтобы пуля не летела поверх lose-анимации.
+
+**Тесты:** добавлен Source/OTHER/test_lose_blocks_shots_z80.py: проверяет, что закрытый череп разрешает обычный shot, KzFrame>=2 у цепи 1/2 блокирует spawn, а вход в ABSORB гасит активную пулю/recoil. Также в 	est_win_transition_z80.py allowed-shot сценарии явно ставят KzFrame=1, чтобы не конфликтовать с новым KZ-gate.
+
+**Проверки:** uild.cmd PASS (Main1=15804, free 580). PASS: 	est_lose_blocks_shots_z80.py, 	est_win_transition_z80.py, 	est_lose_waits_chain_settle_z80.py, 	est_dual_chain_lose_absorb_z80.py, 	est_explode_active_flag_z80.py, 	est_gap_pull_z80.py, check_memory_map.py.
+
+**Доставка:** прямые runtime-файлы для Zuma Deluxe VDAC2 (SPG direct).lnk обновлены в C:\Users\Администратор\Desktop\unreal_x64 и сверены с Build (Match=True). Host \\tsclient\D\Работа.Андрей\unreal_x64\wc.img и local C:\Users\Администратор\Desktop\unreal_x64\wc.img обновлены in-place; check_host_wc_img.py для обоих образов показал все size_match=True / hash_match=True.
+
+**SHA256:** ZUMA_VD2.SPG = CDEA6D13BBEA9AF9F63A4B7457C16D01E9D803358F45EFCE743AC47E7FE0B9A7; ZUMA.SYM = 806CC8E370D342A789B9B6D3E9559008AD1B3B97970BBE6D023B160755F32F67; ZUMAMAIN.PAK = E02F977DC1A4E35EC9F8A4C59DA7F476AA32CA957E79B16AC59E209F249AFECA; ZUMALVL.PAK = 938E0C57D0CBC6351279E3234858ACDAD03F02FE90BE336CAC525E944F95E122.
+
+## [2026-07-02 23:21] Codex / VDAC2: запрет выстрела сдвинут позже в KZ warning
+
+**Симптом:** после предыдущего фикса лягушка переставала стрелять слишком рано: Bullet_Spawn блокировался уже при KzFrame>=2, то есть с самого начала открытия черепа.
+
+**Правка:** в Source/ASM/Bullet.asm порог запрета сдвинут на последнюю фазу предупреждения: новый выстрел блокируется только при VDC_KzFrame>=9 или VDC2_KzFrame>=9. Раннее/среднее открытие KZ (KzFrame=2..8) снова разрешает стрелять. Очистка уже активной пули/recoil при фактическом входе в ABSORB оставлена без изменений.
+
+**Тесты:** обновлён Source/OTHER/test_lose_blocks_shots_z80.py: KzFrame=2 для цепи 1/2 должен разрешать shot, KzFrame=9 для цепи 1/2 должен блокировать shot, вход в ABSORB по-прежнему гасит активный выстрел/recoil.
+
+**Проверки:** uild.cmd PASS (Main1=15804, free 580). PASS: 	est_lose_blocks_shots_z80.py, 	est_win_transition_z80.py, 	est_lose_waits_chain_settle_z80.py, 	est_dual_chain_lose_absorb_z80.py, check_memory_map.py.
+
+**Доставка:** прямые runtime-файлы для Zuma Deluxe VDAC2 (SPG direct).lnk обновлены в C:\Users\Администратор\Desktop\unreal_x64 и сверены с Build (Match=True). Host \\tsclient\D\Работа.Андрей\unreal_x64\wc.img и local C:\Users\Администратор\Desktop\unreal_x64\wc.img обновлены in-place; check_host_wc_img.py для обоих образов показал все size_match=True / hash_match=True.
+
+**SHA256:** ZUMA_VD2.SPG = B6547F64827B06EE8E060336CB84CA75FB0EF130DEA4CB611E464F2C4981B929; ZUMA.SYM = 806CC8E370D342A789B9B6D3E9559008AD1B3B97970BBE6D023B160755F32F67; ZUMAMAIN.PAK = B31D4189747F72CF807C84F130225E941678A941371F5D14C489BB2560BC8163; ZUMALVL.PAK = 938E0C57D0CBC6351279E3234858ACDAD03F02FE90BE336CAC525E944F95E122.
+
+## [2026-07-02 23:31] Codex / VDAC2: стабилизирован цвет next-шара лягушки
+
+**Симптом:** иногда в лягушке самопроизвольно менялся цвет шара следующего хода. Это происходило без выстрела: `Frog_Update` каждый PLAY-кадр вызывал `Frog_RefilterCurrent`, а тот прогонял через live chain mask и `Frog_BallColor`, и уже показанный `Frog_NextBallColor`.
+
+**Причина:** после cascade/match-3 или при переключении активной цепи live mask может временно потерять цвет уже показанного next-шара. Старый refilter считал это поводом сразу перегенерировать `Frog_NextBallColor`, поэтому игрок видел "прыжок" следующего шара.
+
+**Правка:** `Source/ASM/main.asm`: `Frog_RefilterCurrent` теперь каждый кадр фильтрует только текущий `Frog_BallColor`. Валидный `Frog_NextBallColor` не меняется без выстрела; invalid/memory-corrupt next (`>= VDC_NUM_COLORS`) по-прежнему чинится. `Source/ASM/Frog.asm`: при реальном выстреле promote next -> current дополнительно проходит через `Frog_FilteredRandomColor`, чтобы новый текущий шар не стал цветом, которого уже нет в активной цепи. Комментарии добавлены на русском, UTF-8.
+
+**Тесты:** расширен `Source/OTHER/test_frog_refilter_zero_mask_z80.py`: проверяет, что валидный `NextBallColor` не меняется без выстрела даже если его цвет отсутствует в mask, а invalid next чинится. В `Source/OTHER/test_win_transition_z80.py` обновлён dual-chain guard: прямой refilter больше не обязан менять valid next, но fire-key после `VDC_SwapChains` обязан использовать контекст оставшейся второй цепи.
+
+**Проверки:** `build.cmd` PASS (`Main1=15810`). PASS: `test_frog_refilter_zero_mask_z80.py`, `test_win_transition_z80.py`, `test_lose_blocks_shots_z80.py`, `test_lose_waits_chain_settle_z80.py`.
+
+**Доставка:** прямые runtime-файлы обновлены в `C:\Users\Администратор\Desktop\unreal_x64`. Host `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` и local `C:\Users\Администратор\Desktop\unreal_x64\wc.img` обновлены in-place через `inject_zuma_to_wc_img.py`; `check_host_wc_img.py` для обоих образов показал все `size_match=True` / `hash_match=True`.
+
+**SHA256:** ZUMA_VD2.SPG = A4AC3D9CA5744673EEBA7CD3CE91833A15398E0CF5A93844B6D94DAD711078CB; ZUMA.SYM = AC65EAAE5885411A47737E3F77B02E8CEFB4F220CAD2CDE47532545444DB72F0; ZUMAMAIN.PAK = 65B65A1C2441A0755F96F960B26FFFF991983E71FBEF5E1F054909CD5F0661F0; ZUMALVL.PAK = 938E0C57D0CBC6351279E3234858ACDAD03F02FE90BE336CAC525E944F95E122.
+
+## [2026-07-02 23:45] Codex / VDAC2: current-шар лягушки больше не меняется при старте PLAY
+
+**Симптом:** перед игрой в intro/preview у лягушки во рту был один цвет, а после начала PLAY цвет менялся без выстрела. Это был follow-up к предыдущему фиксу next-шара: `Frog_RefilterCurrent` уже не трогал валидный next, но всё ещё мог перефильтровать валидный `Frog_BallColor` на первом PLAY-кадре, когда в цепи уже появилась live color mask.
+
+**Правка:** `Source/ASM/main.asm`: `Frog_RefilterCurrent` теперь является только sanitizer'ом. Валидные `Frog_BallColor` и `Frog_NextBallColor` не меняются без выстрела ни при переходе intro/preview -> PLAY, ни после cascade/match-3. Refilter по live chain mask вызывается только для invalid/memory-corrupt значений (`>= VDC_NUM_COLORS`). `Source/ASM/Frog.asm`: комментарий `Frog_Update` обновлён под новый контракт.
+
+**Сохранён игровой контракт выстрела:** цвет пули остаётся тем, который игрок видел во рту до нажатия. После успешного выстрела promote next -> current по-прежнему фильтруется через активную цепь, а новый next выбирается через `Frog_NewNextColor`.
+
+**Тесты:** `Source/OTHER/test_frog_refilter_zero_mask_z80.py` теперь проверяет стабильность и current, и next без выстрела, плюс repair invalid current/next. `Source/OTHER/test_win_transition_z80.py` обновлён: direct refilter не меняет valid current/next, а fire-key сохраняет visible shot color и использует контекст второй цепи только для новых цветов после выстрела.
+
+**Проверки:** `build.cmd` PASS (`Main1=15810`). PASS: `test_frog_refilter_zero_mask_z80.py`, `test_win_transition_z80.py`, `test_lose_blocks_shots_z80.py`, `test_lose_waits_chain_settle_z80.py`.
+
+**Доставка:** прямые runtime-файлы обновлены в `C:\Users\Администратор\Desktop\unreal_x64`. Host `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` и local `C:\Users\Администратор\Desktop\unreal_x64\wc.img` обновлены in-place; `check_host_wc_img.py` для обоих образов показал все `size_match=True` / `hash_match=True`.
+
+**SHA256:** ZUMA_VD2.SPG = 75CD04B3D6CFA52594EACDB0617DCC02705A93847763D24B496549FD643F8FDF; ZUMA.SYM = 7C207D440D313C7BEF5D8C4F79FA167876A79E8B8627C1F7A14117A1A91AA668; ZUMAMAIN.PAK = B6DD45FDF755084261F3393CA8F7B56E40E08C21D0E19A236ED0734FF4490A40; ZUMALVL.PAK = 938E0C57D0CBC6351279E3234858ACDAD03F02FE90BE336CAC525E944F95E122.
+
+## [2026-07-02 23:50] Codex / VDAC2: сохранена опорная v094 после стабилизации цветов лягушки
+
+**Контекст:** пользователь попросил сохранить текущую версию как опорную с исходниками после фиксов цвета current/next шаров лягушки.
+
+**Папка:** `releases/v094-2026-07-02-frog-colors-stable-reference/`.
+
+**Состав:** сохранены текущие `Source/`, `Graphics/`, `Docs/`, корневые build/config/docs файлы, `PATCHED_UNREAL_ZPROF.md`, `ZL_DRAWFRAME_OPTIMIZATION.md`, `Чат.txt`, `REFERENCE.txt` и runtime-артефакты с префиксом v094. Всего файлов в опорной папке: 2529.
+
+**Смысл версии:** текущий build после v093, включая TRANSFORM-LUT для PALETTED ball matrix, lose/match-3/KZ follow-up fixes и стабилизацию цветов лягушки: валидные `Frog_BallColor`/`Frog_NextBallColor` больше не меняются без выстрела, а invalid значения чинятся sanitizer'ом.
+
+**Проверка сохранения:** все сохранённые v094 runtime-артефакты совпадают с текущими `Build/*` по SHA256 (`Match=True`).
+
+**SHA256:** `ZUMA_VD2.SPG` = `75CD04B3D6CFA52594EACDB0617DCC02705A93847763D24B496549FD643F8FDF`; `ZUMA.SYM` = `7C207D440D313C7BEF5D8C4F79FA167876A79E8B8627C1F7A14117A1A91AA668`; `ZUMAMAIN.PAK` = `B6DD45FDF755084261F3393CA8F7B56E40E08C21D0E19A236ED0734FF4490A40`; `ZUMALVL.PAK` = `938E0C57D0CBC6351279E3234858ACDAD03F02FE90BE336CAC525E944F95E122`; `ZUMAAUD.PAK` = `72EF97514A816962D725193DC27C3232373505C859362784C469A8CF057FB017`; `ZUMASND.PAK` = `8393DB5BB8EC2FDA98C970A3303C43BDEF86A5CA5B4CF09FF09F8FC0C53409DA`.
+
+## [2026-07-02 23:58] План: No_GS Covox fallback для SFX
+
+**Контекст:** пользователь уточнил вопрос: если у человека нет General Sound, игра сейчас немая. Нужно оценить, можно ли по принципу `C:\Users\Администратор\Desktop\Zuma Deluxe\graphics\ts_anim` играть SFX на Covox через строчные прерывания TS-Config.
+
+**Ответ по реализуемости:** да, принципиально возможно. Но это не полноценная замена GS, а ограниченный No_GS fallback: одноканальный PCM-плеер коротких SFX на Covox.
+
+**Идея реализации:** если `GS_Present=0`, вызовы `GS_PlaySfx`/`GS_PlaySfxNote` не должны просто молчать, а могут запускать Covox sample. Строчный IRQ TS-Config выдаёт unsigned 8-bit PCM байты в `COVOX_PORT #FB`. Можно взять схему из `ts_anim`: line IRQ 15625 Гц и делитель /2 для playback около 7813 Гц, либо выдавать каждый line IRQ для 15625 Гц, если бюджет позволит.
+
+**Минимальный scope:** сначала не делать музыку и не делать полноценный микшер. Только 1 канал, короткие one-shot эффекты. Рекомендуемый первый набор: `SND_BUTTON1/2`, `SND_FIREBALL1`, `SND_BALLCLICK1/2`, `SND_POP`, `SND_BALLSDESTROYED*`, `SND_WARNING1`. Приоритеты нужны: важный новый SFX может перебить менее важный текущий.
+
+**Ограничения:** одновременные SFX не смешиваются, а перебивают друг друга; длинные/частые sample могут съесть Z80 budget; критические `DI`-участки и SD/overlay/FT812 transfer могут дать щелчки/джиттер; ISR должен быть resident и не зависеть от PAGE3, потому что игровой код активно пейджит оверлеи.
+
+**Технические требования:** держать ISR и управляющие переменные в resident/Core области; включать line IRQ только пока sample реально играет; по окончании sample возвращать Covox в #80 и отключать line IRQ; не конфликтовать с текущим IM2 frame handler/`Init_Int`; аккуратно учесть `VID_NOGFX`, FT812 SPI/DMA и MainLoop timing.
+
+**Обязательная проверка перед включением:** сделать экспериментальный build с 3-5 sample, снять L19 zprof/кадровый budget до/после, отдельно проверить прямой ярлык `Zuma Deluxe VDAC2 (SPG direct).lnk` на машине без GS/с `GS_Present=0`. Если line IRQ overhead окажется слишком большим, оставить fallback только для menu/button/fire/pop или перейти на более низкую частоту/ручной audio tick.

@@ -49,6 +49,15 @@ Bullet_Spawn:       LD   A, (VDC_DialogState)
                     LD   A, (VDC_GameState)
                     OR   A
                     JR   NZ, .bs_block
+                    ; MainLoop вызывает Frog_Update до VDC_UpdateAllChains.
+                    ; Если череп почти открыт, этот же кадр может войти в
+                    ; ABSORB после проверки spawn. Новый выстрел тут запрещён.
+                    LD   A, (VDC_KzFrame)
+                    CP   9
+                    JR   NC, .bs_block
+                    LD   A, (VDC2_KzFrame)
+                    CP   9
+                    JR   NC, .bs_block
                     LD   A, (Bullet_Active)
                     OR   A
                     JR   Z, .bs_free

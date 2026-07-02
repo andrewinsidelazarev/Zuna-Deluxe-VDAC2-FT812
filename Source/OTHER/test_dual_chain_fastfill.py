@@ -11,12 +11,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from make_level_pack import encode_track_v2_pages, scale_track_samples
 from zuma_full_z80_emulator import PAGE_SIZE, ZumaFullZ80Emulator
 
 
 ROOT = Path(__file__).resolve().parents[2]
 PACK = ROOT / "Graphics" / "levels" / "Converted" / "pack"
 CASES = (5, 12, 19)
+TRACK_RUNTIME_PAGES = (0x06, 0x0F, 0x10, 0x12)
 
 
 def install_ret_a(emu: ZumaFullZ80Emulator, addr: int, value: int) -> None:
@@ -25,11 +27,42 @@ def install_ret_a(emu: ZumaFullZ80Emulator, addr: int, value: int) -> None:
     emu.mem.write(addr + 2, 0xC9)  # RET
 
 
-def load_track_page(emu: ZumaFullZ80Emulator, page: int, path: Path) -> None:
-    data = path.read_bytes()
+def load_page_bytes(emu: ZumaFullZ80Emulator, page: int, data: bytes) -> None:
     start = page * PAGE_SIZE
     emu.mem.physical[start : start + PAGE_SIZE] = b"\x00" * PAGE_SIZE
     emu.mem.physical[start : start + len(data)] = data
+
+
+def write_page_table(emu: ZumaFullZ80Emulator, addr: int, pages: list[int]) -> None:
+    for idx in range(4):
+        emu.set_byte(addr + idx, pages[idx] if idx < len(pages) else 0)
+
+
+def load_track_v2_pair(emu: ZumaFullZ80Emulator, track1: Path, track2: Path) -> None:
+    first = scale_track_samples(track1.read_bytes())
+    second = scale_track_samples(track2.read_bytes())
+    assert first is not None and second is not None
+    count1, pages1 = encode_track_v2_pages(first)
+    count2, pages2 = encode_track_v2_pages(second)
+    all_pages = pages1 + pages2
+    if len(all_pages) > len(TRACK_RUNTIME_PAGES):
+        raise AssertionError(f"test runtime page overflow: {len(all_pages)} pages")
+
+    for page_id, data in zip(TRACK_RUNTIME_PAGES, all_pages):
+        load_page_bytes(emu, page_id, data)
+
+    sym = emu.sym
+    write_page_table(emu, sym["Core.VDC_TrackPages1"], list(TRACK_RUNTIME_PAGES[: len(pages1)]))
+    write_page_table(
+        emu,
+        sym["Core.VDC_TrackPages2"],
+        list(TRACK_RUNTIME_PAGES[len(pages1) : len(pages1) + len(pages2)]),
+    )
+    emu.set_word(sym["Core.VDC_TrackSamples1"], count1)
+    emu.set_word(sym["Core.VDC_TrackSamples2"], count2)
+    emu.set_byte(sym["Core.VDC_TrackPageCount1"], len(pages1))
+    emu.set_byte(sym["Core.VDC_TrackPageCount2"], len(pages2))
+    emu.call(sym["Core.SetCurrentTrackPage"], max_steps=200_000)
 
 
 def main() -> int:
@@ -38,9 +71,11 @@ def main() -> int:
         emu = ZumaFullZ80Emulator(ROOT)
         sym = emu.sym
         install_ret_a(emu, sym["Core.ReadRTCSeconds"], 17)
-        load_track_page(emu, 0x06, PACK / f"track_l{level:02d}_640.bin")
-        load_track_page(emu, 0x0F, PACK / f"track_l{level:02d}_2_640.bin")
-        emu.mem.pages = [0x00, 0x05, 0x06, 0x04]
+        load_track_v2_pair(
+            emu,
+            PACK / f"track_l{level:02d}_640.bin",
+            PACK / f"track_l{level:02d}_2_640.bin",
+        )
         emu.set_byte(sym["Core.CurrentLevel"], level - 1)
         emu.set_byte(sym["Core.CurrentDifficulty"], 0)
         emu.call(sym["Core.GetCurrentStart"], max_steps=200_000)

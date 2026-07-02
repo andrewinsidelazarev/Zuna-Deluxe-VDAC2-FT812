@@ -141,6 +141,10 @@ MenuMain:
                 XOR  A
                 LD   (MenuLmbPrev), A
                 LD   (MenuSelection), A                     ; по умолчанию выбрана Adventure (0)
+                LD   (MenuInputMode), A                     ; 0=mouse, 1=keyboard
+                LD   A, #FF
+                LD   (MenuMouseHoverNow), A
+                LD   (MenuMouseHoverPrev), A
                 LD   A, 1                                   ; фронт-флаги = «нажато» -> гасим перенос
                 LD   (MenuKbdUpPrev), A                     ; нажатия с предыдущей сцены (напр. Fire,
                 LD   (MenuKbdDownPrev), A                   ; которым выбрали Adventure) до отпускания
@@ -319,11 +323,19 @@ MenuAdvanceSky:
                 INC  A
 .store?:        LD   (State?), A
                 if ClickVar?
-                CP   1
-                JR   NZ, .outside?
+                ; Activate on first press edge. Also accept release edge so a
+                ; press that began outside and ends inside still behaves like a click.
+                LD   A, (MenuLmbNow)
+                OR   A
+                JR   NZ, .press_edge?
                 LD   A, (MenuLmbPrev)
                 CP   1
                 JR   NZ, .outside?
+                JR   .do_click?
+.press_edge?:  LD   A, (MenuLmbPrev)
+                OR   A
+                JR   NZ, .outside?
+.do_click?:
                 LD   A, 1
                 LD   (ClickVar?), A
                 LD   A, SND_BUTTON1
@@ -353,35 +365,73 @@ MenuUpdateButtons:
                 MenuCheckButton MENU_OPT_X + MENU_BUTTON_HIT_BORDER, MENU_OPT_Y + MENU_BUTTON_HIT_BORDER, MENU_OPT_W - MENU_BUTTON_HIT_BORDER * 2, MENU_OPT_H - MENU_BUTTON_HIT_BORDER * 2, MenuButtonStateOptions, 0
                 MenuCheckButton MENU_MORE_X + MENU_BUTTON_HIT_BORDER, MENU_MORE_Y + MENU_BUTTON_HIT_BORDER, MENU_MORE_W - MENU_BUTTON_HIT_BORDER * 2, MENU_MORE_H - MENU_BUTTON_HIT_BORDER * 2, MenuButtonStateMore, MenuMoreClick
                 ; Quit временно неактивен: не даём hover/click мышью.
-                ; Синхронизировать MenuSelection с текущим hover мыши.
-                ; Если мышь на навигируемой кнопке — запомнить её как активную.
-                ; При уходе мыши MenuSelection хранит последний hover → клавиатура
-                ; подхватывает с того же места.
-                LD   A, (MenuButtonStateAdventure)
-                OR   A
-                JR   Z, .ms_gaunt
-                XOR  A
-                LD   (MenuSelection), A                     ; 0=Adventure
-                JR   .ms_done
-.ms_gaunt:      LD   A, (MenuButtonStateGauntlet)
-                OR   A
-                JR   Z, .ms_more
-                LD   A, 1
-                LD   (MenuSelection), A                     ; 1=Gauntlet
-                JR   .ms_done
-.ms_more:       LD   A, (MenuButtonStateMore)
-                OR   A
-                JR   Z, .ms_done
-                LD   A, 2
-                LD   (MenuSelection), A                     ; 2=More
-.ms_done:
+                CALL MenuUpdateHoverFocus
                 LD   A, (MenuLmbNow)
                 LD   (MenuLmbPrev), A
                 RET
 
+MenuUpdateHoverFocus:
+                LD   A, #FF
+                LD   (MenuMouseHoverNow), A
+                LD   A, (MenuButtonStateAdventure)
+                OR   A
+                JR   Z, .hf_gaunt
+                XOR  A
+                LD   (MenuMouseHoverNow), A                 ; 0=Adventure
+                JR   .hf_ready
+.hf_gaunt:      LD   A, (MenuButtonStateGauntlet)
+                OR   A
+                JR   Z, .hf_opt
+                LD   A, 1
+                LD   (MenuMouseHoverNow), A                 ; 1=Gauntlet
+                JR   .hf_ready
+.hf_opt:        LD   A, (MenuButtonStateOptions)
+                OR   A
+                JR   Z, .hf_more
+                LD   A, 3
+                LD   (MenuMouseHoverNow), A                 ; 3=Options (not keyboard-navigable)
+                JR   .hf_ready
+.hf_more:       LD   A, (MenuButtonStateMore)
+                OR   A
+                JR   Z, .hf_ready
+                LD   A, 2
+                LD   (MenuMouseHoverNow), A                 ; 2=More
+.hf_ready:      LD   A, (MenuMouseHoverNow)
+                LD   B, A
+                LD   A, (MenuMouseHoverPrev)
+                CP   B
+                JR   Z, .hf_lmb
+                LD   A, B
+                LD   (MenuMouseHoverPrev), A
+                CP   #FF
+                JR   Z, .hf_lmb
+                XOR  A
+                LD   (MenuInputMode), A                     ; entering another button gives focus to mouse
+.hf_lmb:        LD   A, (MenuLmbNow)
+                OR   A
+                JR   Z, .hf_mode
+                XOR  A
+                LD   (MenuInputMode), A                     ; LMB gives focus to mouse even without hover change
+.hf_mode:       LD   A, (MenuInputMode)
+                OR   A
+                JP   NZ, MenuClearButtonStates              ; keyboard focus: stationary cursor cannot own hover
+                LD   A, (MenuMouseHoverNow)
+                CP   0
+                JR   NZ, .hf_not_adv
+                LD   (MenuSelection), A                     ; 0=Adventure
+                RET
+.hf_not_adv:    CP   1
+                JR   NZ, .hf_not_gaunt
+                LD   (MenuSelection), A                     ; 1=Gauntlet
+                RET
+.hf_not_gaunt:  CP   2
+                RET  NZ
+                LD   (MenuSelection), A                     ; 2=More
+                RET
+
 ; ----------------------------------------------------------------------------
 ; Клавиатурная навигация главного меню. Активные кнопки (порядок навигации):
-;   0 = Adventure, 1 = More (Gauntlet/Options/Quit без действия — пропущены).
+;   0 = Adventure, 1 = Gauntlet, 2 = More (Options/Quit без действия — пропущены).
 ; Вверх/Вниз ходят по списку (по просьбе юзера ТОЛЬКО Вверх/Вниз — Влево/Вправо в
 ;   этом меню НЕ участвуют). Огонь = нажатие текущей кнопки (тот же Click-флаг, что
 ;   и мышь).
@@ -389,20 +439,34 @@ MenuUpdateButtons:
 ; ----------------------------------------------------------------------------
 MenuKeyboardNav:
                 ; nav-вверх = Up
-                CALL Input_Up
+                LD   A, (Input_EvUp)
+                OR   A
+                JR   Z, .up_level
+                LD   (MenuKbdUpPrev), A
+                JR   .up_step
+.up_level:      CALL Input_Up
                 LD   HL, MenuKbdUpPrev
                 CALL Input_EdgeZ
                 JR   Z, .chk_down
+.up_step:
+                CALL MenuKeyboardTakeFocus
                 LD   A, (MenuSelection)
                 OR   A
                 JR   Z, .chk_down                          ; уже на верхней (Adventure)
                 DEC  A
                 LD   (MenuSelection), A
 .chk_down:      ; nav-вниз = Down
-                CALL Input_Down
+                LD   A, (Input_EvDown)
+                OR   A
+                JR   Z, .down_level
+                LD   (MenuKbdDownPrev), A
+                JR   .down_step
+.down_level:    CALL Input_Down
                 LD   HL, MenuKbdDownPrev
                 CALL Input_EdgeZ
                 JR   Z, .highlight
+.down_step:
+                CALL MenuKeyboardTakeFocus
                 LD   A, (MenuSelection)
                 CP   2
                 JR   NC, .highlight                        ; уже на нижней активной (More)
@@ -410,10 +474,17 @@ MenuKeyboardNav:
                 LD   (MenuSelection), A
 .highlight:     CALL MenuHighlightSelection
                 ; огонь = выбор текущей кнопки
-                CALL Input_FireKey
+                LD   A, (Input_EvFireKey)
+                OR   A
+                JR   Z, .fire_level
+                LD   (MenuKbdFirePrev), A
+                JR   .fire_step
+.fire_level:    CALL Input_FireKey
                 LD   HL, MenuKbdFirePrev
                 CALL Input_EdgeZ
                 RET  Z
+.fire_step:
+                CALL MenuKeyboardTakeFocus
                 LD   A, (MenuSelection)
                 OR   A
                 JR   NZ, .not_adv
@@ -429,6 +500,20 @@ MenuKeyboardNav:
 MenuButtonSfx:
                 LD   A, SND_BUTTON1
                 JP   GS_PlaySfx
+
+MenuKeyboardTakeFocus:
+                LD   A, 1
+                LD   (MenuInputMode), A
+                JP   MenuClearButtonStates
+
+MenuClearButtonStates:
+                XOR  A
+                LD   (MenuButtonStateAdventure), A
+                LD   (MenuButtonStateGauntlet), A
+                LD   (MenuButtonStateOptions), A
+                LD   (MenuButtonStateMore), A
+                LD   (MenuButtonStateQuit), A
+                RET
 
 ; Подсветить клавиатурный выбор только если мышь не на кнопке.
 ; Если любой MenuButtonState* != 0 — мышь активна, keyboard hover не показываем.
@@ -804,6 +889,9 @@ MenuSunScaleHi:           DEFW 0                        ; масштаб сол�
 MenuGlowAlpha:            DEFB 0                        ; пульсирующая alpha свечения
 MenuLmbNow:               DEFB 0
 MenuLmbPrev:              DEFB 0
+MenuMouseHoverNow:        DEFB #FF
+MenuMouseHoverPrev:       DEFB #FF
+MenuInputMode:            DEFB 0   ; 0=mouse hover/click owns focus, 1=keyboard owns focus
 MenuAdventureClick:       DEFB 0
 MenuGauntletClick:        DEFB 0
 MenuMoreClick:            DEFB 0

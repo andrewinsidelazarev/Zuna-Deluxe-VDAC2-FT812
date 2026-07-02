@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Regression for Frog_FilteredRandomColor with marker-only chains.
+"""Регрессия Frog_FilteredRandomColor/Frog_RefilterCurrent.
 
-When VDC_SlotsLen is non-zero but all slots are gap/cascade markers
-(slot >= VDC_NUM_COLORS), the live color mask is zero. Refilter must treat that
-like an empty chain: keep an already-valid frog color, and only generate once
-when the input color is invalid (0xFF).
+Если VDC_SlotsLen ненулевой, но все слоты заняты gap/cascade-маркерами
+(slot >= VDC_NUM_COLORS), живая маска цветов равна нулю. Refilter должен
+считать это пустой цепью: валидные цвета лягушки не трогать, а invalid
+(0xFF) чинить один раз. Отдельно проверяем, что уже показанные BallColor и
+NextBallColor не меняются без выстрела, даже если их цвет временно отсутствует
+в цепи.
 """
 
 from __future__ import annotations
@@ -92,11 +94,31 @@ def main() -> int:
     set_colors(emu, 2, 3)
     call_refilter(emu, 1)
     ball, next_ball = colors(emu)
-    if ball not in (1, 3) or next_ball != 3:
-        print(f"FAIL: nonzero mask filtering broke: got {ball}/{next_ball}")
+    if (ball, next_ball) != (2, 3):
+        print(f"FAIL: valid frog colors changed without a shot: got {ball}/{next_ball}")
         return 1
 
-    print("PASS: Frog_RefilterCurrent keeps colors stable for marker-only zero masks")
+    set_colors(emu, 1, 2)
+    call_refilter(emu, 16)
+    if colors(emu) != (1, 2):
+        print(f"FAIL: valid NextBallColor changed without a shot: got {colors(emu)}")
+        return 1
+
+    set_colors(emu, 0xFF, 2)
+    call_refilter(emu, 1)
+    ball, next_ball = colors(emu)
+    if ball not in (1, 3) or next_ball != 2:
+        print(f"FAIL: invalid BallColor was not repaired against live mask: got {ball}/{next_ball}")
+        return 1
+
+    set_colors(emu, 1, 0xFF)
+    call_refilter(emu, 1)
+    ball, next_ball = colors(emu)
+    if ball != 1 or next_ball >= ncolors:
+        print(f"FAIL: invalid NextBallColor was not repaired: got {ball}/{next_ball}")
+        return 1
+
+    print("PASS: Frog_RefilterCurrent keeps shown frog colors stable and repairs invalid colors")
     return 0
 
 

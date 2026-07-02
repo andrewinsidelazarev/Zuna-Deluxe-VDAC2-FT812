@@ -106,8 +106,8 @@ Frog_Update:      LD   A, (ZL_MouseMoved)
                   DEC  A
                   LD   (ZL_MotionGrace), A             ; tick down
 .fu_compute:      CALL Frog_ComputeAngle
-.fu_skip:         ; Refilter — это re-randomization которая дёргает LFSR seed и может
-                  ; спонтанно менять Frog_BallColor/NextBallColor. Только в PLAY!
+.fu_skip:         ; Refilter здесь теперь только sanitizer: валидные цвета лягушки
+                  ; не меняются без выстрела, invalid значения чинятся в PLAY.
                   ; INTRO/PREVIEW/CLOSING/ABSORB/GAMEOVER → колайс жабы остаются стабильные.
                   LD   A, (VDC_GameState)
                   OR   A
@@ -141,8 +141,12 @@ Frog_FireKeyboard:
                   ; Start fire: тот же порядок state updates, что в Frog_HandleMouse.
                   CALL Bullet_Spawn                    ; spawn с CURRENT BallColor (= шар изо рта)
                   RET  C
+                  ; Promote фильтруется только в момент выстрела: показанный
+                  ; next не прыгает каждый кадр, но новый текущий шар остаётся
+                  ; цветом из активной цепи, если старый next уже исчез.
                   LD   A, (Frog_NextBallColor)
-                  LD   (Frog_BallColor), A             ; promote next → ball-now
+                  CALL Frog_FilteredRandomColor
+                  LD   (Frog_BallColor), A             ; promote/refilter next → ball-now
                   CALL Frog_NewNextColor               ; новый filtered NextBallColor
                   LD   A, 1
                   LD   (Frog_IsFire), A
@@ -191,8 +195,12 @@ Frog_HandleMouse:
                   ; ballExpand=0, recoilTick=0, isFire=1.
                   CALL Bullet_Spawn                    ; spawn с CURRENT BallColor (= шар изо рта)
                   RET  C
+                  ; Promote фильтруется только в момент выстрела: показанный
+                  ; next не прыгает каждый кадр, но новый текущий шар остаётся
+                  ; цветом из активной цепи, если старый next уже исчез.
                   LD   A, (Frog_NextBallColor)
-                  LD   (Frog_BallColor), A             ; promote next → ball-now
+                  CALL Frog_FilteredRandomColor
+                  LD   (Frog_BallColor), A             ; promote/refilter next → ball-now
                   CALL Frog_NewNextColor               ; новый filtered NextBallColor
                   LD   A, 1
                   LD   (Frog_IsFire), A

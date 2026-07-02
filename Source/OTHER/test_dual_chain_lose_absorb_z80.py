@@ -10,7 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from zuma_full_z80_emulator import PAGE_SIZE, ZumaFullZ80Emulator
+from test_dual_chain_fastfill import install_ret_a, load_track_v2_pair
+from zuma_full_z80_emulator import ZumaFullZ80Emulator
 
 ROOT = Path(__file__).resolve().parents[2]
 PACK = ROOT / "Graphics" / "levels" / "Converted" / "pack"
@@ -18,13 +19,6 @@ CASES = (5, 12, 19)
 MAX_FRAMES = 900
 MIN_DIALOG_DELAY_AFTER_EMPTY = 12
 MAX_HEAD_KZ_DIST_AT_FIRST_DROP = 6
-
-
-def load_track_page(emu: ZumaFullZ80Emulator, page: int, path: Path) -> None:
-    data = path.read_bytes()
-    start = page * PAGE_SIZE
-    emu.mem.physical[start : start + PAGE_SIZE] = b"\x00" * PAGE_SIZE
-    emu.mem.physical[start : start + len(data)] = data
 
 
 def gb(emu: ZumaFullZ80Emulator, name: str) -> int:
@@ -62,9 +56,12 @@ def chain2_head_distance_to_kz(emu: ZumaFullZ80Emulator) -> int | None:
 def run_case(level: int) -> tuple[bool, str]:
     emu = ZumaFullZ80Emulator(ROOT)
     sym = emu.sym
-    load_track_page(emu, 0x06, PACK / f"track_l{level:02d}_640.bin")
-    load_track_page(emu, 0x0F, PACK / f"track_l{level:02d}_2_640.bin")
-    emu.mem.pages = [0x00, 0x05, 0x06, 0x04]
+    install_ret_a(emu, sym["Core.ReadRTCSeconds"], 17)
+    load_track_v2_pair(
+        emu,
+        PACK / f"track_l{level:02d}_640.bin",
+        PACK / f"track_l{level:02d}_2_640.bin",
+    )
     sb(emu, "Core.CurrentLevel", level - 1)
     sb(emu, "Core.CurrentDifficulty", 0)
     emu.call(sym["Core.VDC_Init"], max_steps=5_000_000)
@@ -188,9 +185,12 @@ def run_case(level: int) -> tuple[bool, str]:
 def run_primary_after_chain2_trigger_case(level: int) -> tuple[bool, str]:
     emu = ZumaFullZ80Emulator(ROOT)
     sym = emu.sym
-    load_track_page(emu, 0x06, PACK / f"track_l{level:02d}_640.bin")
-    load_track_page(emu, 0x0F, PACK / f"track_l{level:02d}_2_640.bin")
-    emu.mem.pages = [0x00, 0x05, 0x06, 0x04]
+    install_ret_a(emu, sym["Core.ReadRTCSeconds"], 17)
+    load_track_v2_pair(
+        emu,
+        PACK / f"track_l{level:02d}_640.bin",
+        PACK / f"track_l{level:02d}_2_640.bin",
+    )
     sb(emu, "Core.CurrentLevel", level - 1)
     sb(emu, "Core.CurrentDifficulty", 0)
     emu.call(sym["Core.VDC_Init"], max_steps=5_000_000)

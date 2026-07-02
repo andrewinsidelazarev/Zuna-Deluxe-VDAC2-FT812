@@ -51,6 +51,9 @@ Input_KQ:       DEFB 0
 Input_KA:       DEFB 0
 Input_KO:       DEFB 0
 Input_KP:       DEFB 0
+Input_EvUp:     DEFB 0          ; PS/2 make seen during this Input_Scan
+Input_EvDown:   DEFB 0
+Input_EvFireKey: DEFB 0
 Input_PS2Brk:   DEFB 0          ; ожидается префикс отпускания (#F0)
 Input_DrainCnt: DEFB 0          ; ограничитель дренажа FIFO (макс байт за скан)
 
@@ -71,6 +74,10 @@ Input_Init:
 ; Сначала заново включает Mr.Gluk (чтение RTC его гасит). Портит AF, BC, DE, HL.
 ; ----------------------------------------------------------------------------
 Input_Scan:
+                XOR  A
+                LD   (Input_EvUp), A
+                LD   (Input_EvDown), A
+                LD   (Input_EvFireKey), A
                 CALL Input.Mouse.UpdateMouseState          ; мышь — единая точка опроса здесь
                 LD   BC, #EFF7 : LD A, #80 : OUT (C), A    ; заново enable (RTC мог погасить)
                 LD   BC, #DFF7 : LD A, #F0 : OUT (C), A    ; выбрать регистр PS/2 FIFO
@@ -97,18 +104,36 @@ Input_SetKey:
                 XOR  A : LD (Input_PS2Brk), A              ; съесть префикс break
                 LD   A, E
                 LD   HL, Input_KEsc   : CP INP_SC_ESC   : JR Z, .sk
-                LD   HL, Input_KUp    : CP INP_SC_UP    : JR Z, .sk
-                LD   HL, Input_KDown  : CP INP_SC_DOWN  : JR Z, .sk
+                LD   HL, Input_KUp    : CP INP_SC_UP    : JR Z, .sk_ev_up
+                LD   HL, Input_KDown  : CP INP_SC_DOWN  : JR Z, .sk_ev_down
                 LD   HL, Input_KLeft  : CP INP_SC_LEFT  : JR Z, .sk
                 LD   HL, Input_KRight : CP INP_SC_RIGHT : JR Z, .sk
-                LD   HL, Input_KEnter : CP INP_SC_ENTER : JR Z, .sk
-                LD   HL, Input_KSpace : CP INP_SC_SPACE : JR Z, .sk
-                LD   HL, Input_KQ     : CP INP_SC_Q     : JR Z, .sk
-                LD   HL, Input_KA     : CP INP_SC_A     : JR Z, .sk
+                LD   HL, Input_KEnter : CP INP_SC_ENTER : JR Z, .sk_ev_fire
+                LD   HL, Input_KSpace : CP INP_SC_SPACE : JR Z, .sk_ev_fire
+                LD   HL, Input_KQ     : CP INP_SC_Q     : JR Z, .sk_ev_up
+                LD   HL, Input_KA     : CP INP_SC_A     : JR Z, .sk_ev_down
                 LD   HL, Input_KO     : CP INP_SC_O     : JR Z, .sk
                 LD   HL, Input_KP     : CP INP_SC_P     : JR Z, .sk
                 RET                                        ; неотслеживаемый код
 .sk:            LD   (HL), D
+                RET
+.sk_ev_up:      LD   (HL), D
+                LD   A, D
+                OR   A
+                RET  Z
+                LD   (Input_EvUp), A
+                RET
+.sk_ev_down:    LD   (HL), D
+                LD   A, D
+                OR   A
+                RET  Z
+                LD   (Input_EvDown), A
+                RET
+.sk_ev_fire:    LD   (HL), D
+                LD   A, D
+                OR   A
+                RET  Z
+                LD   (Input_EvFireKey), A
                 RET
 
 ; ----------------------------------------------------------------------------

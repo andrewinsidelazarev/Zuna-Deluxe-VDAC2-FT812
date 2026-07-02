@@ -40,8 +40,8 @@ def main() -> int:
     def add(delta):
         emu.call(sym["Score_Add24"], h=(delta >> 8) & 0xFF, l=delta & 0xFF)
 
-    # start lives at a known value, reset score
-    emu.set_byte(sym["Core.VDC_Lives"], 3)
+    # New run reset must restore lives as well as score/extra-life threshold.
+    emu.set_byte(sym["Core.VDC_Lives"], 1)
     emu.call(sym["Score_Reset"])
 
     fails = []
@@ -71,7 +71,7 @@ def main() -> int:
     check("+65535 -> 175535 (1 life)", 175535, 6, 200000)
 
     # craft a double-threshold crossing: reset, set score near, add big.
-    emu.set_byte(sym["Core.VDC_Lives"], 3)
+    emu.set_byte(sym["Core.VDC_Lives"], 1)
     emu.call(sym["Score_Reset"])
     add(40000)            # 40000, next=50000
     add(65000)            # 105000 -> crosses 50000 AND 100000 -> +2 lives, next=150000

@@ -153,6 +153,7 @@ VDC_Init:
                 LD   (VDC_WinEmitPos2),        HL
                 XOR  A
                 LD   (VDC_WinOutroActive),     A
+                LD   (VDC_ExplodeActive),      A
                 ; Gauge bar reset: без этого GaugeScore/Full
                 ; тащились с прошлого уровня через Win→AdvanceToNextLevel→VDC_Init,
                 ; и новый уровень стартовал с полным баром → спавн сразу отсекался.
@@ -546,7 +547,7 @@ VDC_Update:
                 CP   VDC_STATE_CLOSING
                 JR   Z, .upd_closing
                 CP   VDC_STATE_ABSORB
-                JP   Z, VDC_UpdateAbsorb
+                JP   Z, VDC_UpdateAbsorbOrRush
                 CP   VDC_STATE_GAMEOVER
                 RET  Z
                 CP   VDC_STATE_WIN
@@ -686,6 +687,12 @@ VDC_UpdateSecondAbsorbMaybe:
                 JP   SetCurrentTrackPage
 
 VDC_UpdateAbsorbOrRush:
+                CALL VDC_LoseStartReady                ; ABSORB may have started before match/gap settle
+                JR   NC, .uar_settled
+                CALL VDC_LoseHoldBeforeKillzone
+                CALL VDC_AnimateChain
+                RET
+.uar_settled:
                 LD   A, (VDC_KzFrame)
                 CP   11
                 JR   NZ, .uar_rush_start
@@ -865,24 +872,8 @@ VDC_LoseHoldBeforeKillzone:
 .lh_zero_track: XOR  A
                 LD   (VDC_HSA), A
 .lh_save_hsub:  LD   (VDC_HSub), A
-                LD   A, (VDC_StatTimeFrames)
-                AND  3                                 ; +1 фрейм открытия каждые 4 тика (~15 fps)
-                JR   NZ, .lh_no_inc
-                LD   A, (VDC_KzFrame)
-                CP   9                                 ; 9 = макс открытый череп до поглощения
-                JR   NC, .lh_no_inc
-                INC  A
+                LD   A, 1                              ; busy settle: keep skull closed
                 LD   (VDC_KzFrame), A
-.lh_no_inc:
-                LD   A, (VDC_KzFrame)
-                CP   7
-                JR   C, .lh_set_hold
-                LD   A, (Core.GS_SfxSilenceTimer)
-                OR   A
-                JR   NZ, .lh_set_hold
-                LD   A, SND_WARNING1
-                CALL GS_PlaySfx
-.lh_set_hold:
                 LD   A, VDC_FAST_ADVANCE * VDC_GLOBAL_SPEED_FACTOR
                 LD   (VDC_LoseHoldCnt), A
                 SCF
@@ -891,6 +882,9 @@ VDC_LoseHoldBeforeKillzone:
 ; CF=1, пока current active chain ещё имеет gaps или pending explode frames.
 ; Offset settling и freeze (включая pShot2) больше не обрывают проезд в KZ.
 VDC_LoseChainBusy:
+                LD   A, (VDC_ExplodeActive)
+                OR   A
+                JR   NZ, .lcb_busy                    ; match-3 fade is still visible
                 LD   A, (VDC_SlotsLen)
                 OR   A
                 JR   Z, .lcb_ready
@@ -1373,6 +1367,8 @@ VDC_MoveChain:
 ; ============================================================================
 VDC_AnimateChain:
                 ; --- 0. Match-3 explosion animation.
+                XOR  A
+                LD   (VDC_ExplodeActive), A
                 LD   A, (VDC_SlotsLen)
                 OR   A
                 JR   Z, .ac_after_explode
@@ -1414,6 +1410,8 @@ VDC_AnimateChain:
                 JR   .ac_explode_next
 .ac_explode_save:
                 LD   (HL), A
+                LD   A, 1
+                LD   (VDC_ExplodeActive), A
 .ac_explode_next:
                 INC  HL
                 DJNZ .ac_explode
@@ -2120,6 +2118,8 @@ VDC_ApplyMatch3:
 
                 ; ExplodeFrame[lb..rb] = 1, ExplodeMarker[lb..rb] = B.
                 ; Slots stay as colors until VDC_AnimateChain finalizes them.
+                LD   A, 1
+                LD   (VDC_ExplodeActive), A
                 LD   A, (VDC_TmpML)
                 LD   H, 0 : LD L, A
                 LD   DE, (VDC_pExplodeFrame)
@@ -3387,6 +3387,7 @@ VDC_LevelSpeed:   DEFB 50              ; per-level chain speed_x100; normal-phas
 VDC_LevelStart:   DEFB VDC_LEVEL_START_BALLS ; per-level lead-in ball count, fast-fill threshold
 VDC_SpeedAccum:   DEFB 0               ; sub-frame speed accumulator для VDC_LevelSpeed
 VDC_RollingActive: DEFB 0              ; 1, пока SND_ROLLING нужно остановить на fast->normal
+VDC_ExplodeActive: DEFB 0              ; 1 если в активной цепочке есть ExplodeFrame > 0
 VDC_ChainLocalEnd:
 ; --- Stats counters (показываются в game-over диалоге, reset на VDC_Init) ---
 VDC_StatTimeFrames: DEFW 0  ; сколько frame'ов прошло в state=PLAY (60Hz tick)

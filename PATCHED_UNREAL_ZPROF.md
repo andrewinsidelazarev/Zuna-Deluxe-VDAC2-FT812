@@ -35,11 +35,11 @@ This note exists to avoid rediscovering the patched Unreal workflow.
    Important anchors for the current build at the time of this note:
 
    ```text
-   Core.MainLoop.Loop = E8A9
-   Core.ZL_AfterChains = F581
-   Core.ZL_DrawFrogLayer = F526
-   ZL_DrawFrogLayer.draw_frog = F537
-   fade overlay call-site = F668
+   Core.MainLoop.Loop = E8C9
+   Core.ZL_AfterChains = F5CE
+   Core.ZL_DrawFrogLayer = F573
+   ZL_DrawFrogLayer.draw_frog = F584
+   fade overlay call-site = F6B5
    ```
 
 3. Build patched Unreal:
@@ -91,15 +91,24 @@ This note exists to avoid rediscovering the patched Unreal workflow.
   31-32-30-20-39-30
   ```
 
-- A valid L19 report should show:
+- A structurally valid L19 report should show:
 
   ```text
   frames=120 target=120
-  gate: CurrentLevel=18
   min_slots=90
-  frame PC Core.MainLoop.Loop #E8A9
+  frame PC Core.MainLoop.Loop #E8C9
   ```
 
+- For the 2026-07-02 runtime binary, do not treat the printed
+  `CurrentLevel=18` text as proof of the level. The binary was patched to NOP
+  the original level branch, while the report string still prints the old fixed
+  text.
+- Do not treat `slots=a+b` as proof that the visible second chain is empty.
+  The 2026-07-02 L19 capture printed `slots=210+0`, but the same report had
+  non-zero `ZLDF_chain2_over` and `ZLDF_chain2_under` samples on all 120 frames.
+  Use the section timings, and add explicit `VDC_HasSecondChain` /
+  `VDC_SecondActive` / unconditional `VDC2_SlotsLen` diagnostics before using
+  `slots=` for interpretation.
 - If `min_slots=0`, the request file was parsed wrong or stale.
 - If `frame PC` differs from the current `Core.MainLoop.Loop`, rebuild or update the profiler table.
 - `zprof.req` is consumed once per emulator launch. If it was written after the profiler already checked it, restart must be a visible user launch.
@@ -107,6 +116,39 @@ This note exists to avoid rediscovering the patched Unreal workflow.
 ## Do not use as current truth
 
 Old helper request files like `zgo_l19.req`, `vmouse.req`, and old copied `zprof.req` files may be stale. Treat them as obsolete unless their contents were just verified.
+
+## 2026-07-02 current runtime patch
+
+The profiler source path listed above was not present in this checkout during
+the L19 performance pass. The runtime binary was patched in place after backing
+up `Unreal.exe` to:
+
+```text
+C:\Users\Администратор\Desktop\unreal_x64\Unreal.exe.pre_zprof_E8C9_20260702_1738
+```
+
+Current patched runtime:
+
+```text
+C:\Users\Администратор\Desktop\unreal_x64\Unreal.exe
+SHA256 5325C2D9FF8ECA57D88E0ADCE2C7471BE9F299FE93FB6C0526107A485AA62C4B
+```
+
+Binary patch summary:
+
+```text
+zprof gate immediate: E921 -> E8C9
+CurrentLevel branch at VA 14005FC94 was NOPed for any-level capture
+report string: frame PC Core.MainLoop.Loop #E8C9
+zprof table rows: updated from current Build\main.lst / Build\zuma.sym
+```
+
+`zprof.req` for the next visible launch has been recreated as exact ASCII bytes
+for `120 90`:
+
+```text
+31-32-30-20-39-30
+```
 
 ## 2026-07-01 L12 debug launch
 

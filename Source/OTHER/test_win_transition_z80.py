@@ -291,6 +291,8 @@ def main() -> int:
         print("FAIL: WIN entry did not clear active shot/recoil")
         return 1
     sim.set_byte(sim.sym["Core.Bullet_Active"], 0)
+    sim.set_byte(sim.sym["Core.VDC_KzFrame"], 1)
+    sim.set_byte(sim.sym["Core.VDC2_KzFrame"], 1)
     sim.set_byte(sim.sym["Core.Frog_BallColor"], 2)
     sim.set_byte(sim.sym["Core.Frog_Angle"], 0)
     set_word(sim, sim.sym["Core.Frog_PosStartX"], 512)
@@ -335,6 +337,8 @@ def main() -> int:
         return 1
 
     sim.set_byte(sim.sym["Core.Bullet_Active"], 0)
+    sim.set_byte(sim.sym["Core.VDC_KzFrame"], 1)
+    sim.set_byte(sim.sym["Core.VDC2_KzFrame"], 1)
     sim.set_byte(sim.sym["Core.Frog_BallColor"], 2)
     sim.set_byte(sim.sym["Core.Frog_Angle"], 0)
     set_word(sim, sim.sym["Core.Frog_PosStartX"], 512)
@@ -372,8 +376,8 @@ def main() -> int:
     sim.call(sim.sym["Core.VDC_SwapChains"])
     ball = sim.get_byte(sim.sym["Core.Frog_BallColor"])
     next_ball = sim.get_byte(sim.sym["Core.Frog_NextBallColor"])
-    if (ball, next_ball) != (2, 2):
-        print(f"FAIL: remaining-chain color filter ignored chain2 mask, got {ball}/{next_ball}")
+    if (ball, next_ball) != (5, 5):
+        print(f"FAIL: remaining-chain refilter changed wrong frog colors, got {ball}/{next_ball}")
         return 1
 
     # Real input-order guard: Space/Enter/Kempston fire used to run in
@@ -391,6 +395,8 @@ def main() -> int:
     sim.set_byte(sim.sym["Core.Frog_KeySpacePrev"], 0)
     sim.set_byte(sim.sym["Core.Frog_IsFire"], 0)
     sim.set_byte(sim.sym["Core.Bullet_Active"], 0)
+    sim.set_byte(sim.sym["Core.VDC_KzFrame"], 1)
+    sim.set_byte(sim.sym["Core.VDC2_KzFrame"], 1)
     sim.set_byte(sim.sym["Core.Input_KSpace"], 1)
     sim.set_byte(sim.sym["Core.ZL_MouseMoved"], 0)
     sim.set_byte(sim.sym["Core.ZL_MotionGrace"], 0)
@@ -405,9 +411,9 @@ def main() -> int:
     ball = sim.get_byte(sim.sym["Core.Frog_BallColor"])
     next_ball = sim.get_byte(sim.sym["Core.Frog_NextBallColor"])
     shot_color = sim.get_byte(sim.sym["Core.Bullet_Color"])
-    if sim.get_byte(sim.sym["Core.Bullet_Active"]) != 1 or (ball, next_ball, shot_color) != (2, 2, 2):
+    if sim.get_byte(sim.sym["Core.Bullet_Active"]) != 1 or (ball, next_ball, shot_color) != (2, 2, 5):
         print(
-            "FAIL: fire-key did not use remaining chain2 context, "
+            "FAIL: fire-key did not keep visible shot color and use chain2 for next colors, "
             f"ball/next/shot={ball}/{next_ball}/{shot_color}"
         )
         return 1

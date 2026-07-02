@@ -36,6 +36,11 @@ def clear_array(sim: ZumaZ80Sim, name: str) -> None:
         sim.set_byte(base + i, 0)
 
 
+def set_chain2_explode_active(sim: ZumaZ80Sim, value: int) -> None:
+    off = sim.sym["Core.VDC_ExplodeActive"] - sim.sym["Core.VDC_ChainLocalStart"]
+    sim.set_byte(sim.sym["Core.VDC2_ChainLocal"] + off, value)
+
+
 def make_sim() -> ZumaZ80Sim:
     sim = ZumaZ80Sim()
     for name in (
@@ -129,6 +134,66 @@ def run_case(
     return ok
 
 
+def run_absorb_pending_explode_case() -> bool:
+    sim = make_sim()
+    s = sim.sym
+    sb(sim, "Core.VDC_GameState", 1)
+    sb(sim, "Core.VDC_KzFrame", 11)
+    sb(sim, "Core.VDC_LoseHoldCnt", 255)
+    sb(sim, "Core.VDC_ExplodeActive", 1)
+    sim.set_byte(s["Core.VDC_ExplodeMarker"] + 1, 0xFE)
+    sim.set_byte(s["Core.VDC_ExplodeFrame"] + 1, 1)
+    before_slots = list(sim.get_memory(s["Core.VDC_Slots"], 3))
+
+    sim.call(s["Core.VDC_UpdateAllChains"], max_steps=5_000_000)
+
+    after_slots = list(sim.get_memory(s["Core.VDC_Slots"], 3))
+    frames = list(sim.get_memory(s["Core.VDC_ExplodeFrame"], 3))
+    state = sim.get_byte(s["Core.VDC_GameState"])
+    active = sim.get_byte(s["Core.VDC_ExplodeActive"])
+    kz = sim.get_byte(s["Core.VDC_KzFrame"])
+    hold = sim.get_byte(s["Core.VDC_LoseHoldCnt"])
+    slots_len = sim.get_byte(s["Core.VDC_SlotsLen"])
+    ok = (
+        state == 1
+        and active == 1
+        and kz == 1
+        and hold == 24
+        and slots_len == 3
+        and after_slots == before_slots
+        and frames == [0, 2, 0]
+    )
+    print(
+        f"{'PASS' if ok else 'FAIL'}: absorb pending explode animates before absorb: "
+        f"state={state}, active={active}, kz={kz}, hold={hold}, "
+        f"len={slots_len}, slots={after_slots}, frames={frames}"
+    )
+    return ok
+
+
+def run_absorb_stale_explode_flag_case() -> bool:
+    sim = make_sim()
+    s = sim.sym
+    sb(sim, "Core.VDC_GameState", 1)
+    sb(sim, "Core.VDC_KzFrame", 11)
+    sb(sim, "Core.VDC_LoseHoldCnt", 255)
+    sb(sim, "Core.VDC_ExplodeActive", 1)
+
+    sim.call(s["Core.VDC_UpdateAllChains"], max_steps=5_000_000)
+
+    active = sim.get_byte(s["Core.VDC_ExplodeActive"])
+    state = sim.get_byte(s["Core.VDC_GameState"])
+    kz = sim.get_byte(s["Core.VDC_KzFrame"])
+    slots_len = sim.get_byte(s["Core.VDC_SlotsLen"])
+    frames = list(sim.get_memory(s["Core.VDC_ExplodeFrame"], 3))
+    ok = active == 0 and state == 1 and kz == 1 and slots_len == 3 and frames == [0, 0, 0]
+    print(
+        f"{'PASS' if ok else 'FAIL'}: absorb stale explode-active flag is cleared: "
+        f"state={state}, active={active}, kz={kz}, len={slots_len}, frames={frames}"
+    )
+    return ok
+
+
 def main() -> int:
     cases = [
         ("single ready starts absorb", lambda sim: None, 1),
@@ -170,6 +235,18 @@ def main() -> int:
             False,
             None,
             24,
+            1,
+        ),
+        (
+            "active explode-active flag blocks absorb after gap closure",
+            lambda sim: sb(sim, "Core.VDC_ExplodeActive", 1),
+            0,
+            30,
+            8,
+            False,
+            None,
+            24,
+            1,
         ),
         (
             "active gap marker blocks absorb",
@@ -280,6 +357,19 @@ def main() -> int:
             24,
         ),
         (
+            "dual inactive explode-active flag blocks absorb after gap closure",
+            lambda sim: (
+                sb(sim, "Core.VDC_HasSecondChain", 1),
+                set_chain2_explode_active(sim, 1),
+            ),
+            0,
+            30,
+            8,
+            False,
+            None,
+            24,
+        ),
+        (
             "dual inactive gap marker blocks absorb",
             lambda sim: (
                 sb(sim, "Core.VDC_HasSecondChain", 1),
@@ -333,6 +423,10 @@ def main() -> int:
     for case in cases:
         if not run_case(*case):
             failures += 1
+    if not run_absorb_pending_explode_case():
+        failures += 1
+    if not run_absorb_stale_explode_flag_case():
+        failures += 1
     return 1 if failures else 0
 
 
