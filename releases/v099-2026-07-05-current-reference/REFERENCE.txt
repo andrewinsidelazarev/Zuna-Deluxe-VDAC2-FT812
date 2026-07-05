@@ -22,7 +22,8 @@ v099-2026-07-05-current-reference
 
 3. Текущие runtime-артефакты
    - Сохранены SPG, symbol и PAK-файлы текущей сборки.
-   - Сохранены AY SFX артефакты, которые нужны текущей No-GS версии.
+   - AY SFX остаются в штатном пути `Sounds/AY/` и не дублируются отдельными
+     v099 release-артефактами.
 
 Проверки текущей сборки:
 - `build.cmd` PASS;
@@ -45,11 +46,8 @@ v099-2026-07-05-current-reference
   SHA256 72EF97514A816962D725193DC27C3232373505C859362784C469A8CF057FB017
 - `v099-2026-07-05-current-reference.zumasnd.pak`
   SHA256 8393DB5BB8EC2FDA98C970A3303C43BDEF86A5CA5B4CF09FF09F8FC0C53409DA
-- `v099-2026-07-05-current-reference.ay_sfx_data.bin`
-  SHA256 C19D09EFEED8F0FCCB4BC8DE0F4A123C28F97152E3F18127573C409C4188BB33
-- `v099-2026-07-05-current-reference.ay_sfx_report.txt`
-  SHA256 6676FD5B579069B11929FE6C9C4007BEB34B8BC862178B209AEE577E0613815B
 
 В GitHub-формате release-папка содержит только этот `REFERENCE.txt` и runtime
-артефакты. Исходники текущей версии находятся в обычных путях репозитория
-`Source/`, `Docs/`, `Graphics/`, `Sounds/AY/` и корневых конфигурациях.
+артефакты SPG/SYM/PAK. Исходники и генерируемые данные текущей версии находятся
+в обычных путях репозитория `Source/`, `Docs/`, `Graphics/`, `Sounds/AY/` и
+корневых конфигурациях.
