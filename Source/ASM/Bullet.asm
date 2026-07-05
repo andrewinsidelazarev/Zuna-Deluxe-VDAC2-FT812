@@ -181,7 +181,7 @@ Bullet_Update:      LD   A, (VDC_DialogState)
 
 
 ; ----------------------------------------------------------------------------
-; Bullet_CheckCollision — ZBT1 event stream reader in resident Main0.
+; Bullet_CheckCollision — чтение потока событий ZBT1 в resident Main0.
 ; Старый full scan Slots[] убран из hot path: таблица даёт VDC-cell кандидаты,
 ; а BulletTraj.asm валидирует их тем же bbox/manhattan тестом.
 ; ----------------------------------------------------------------------------
@@ -230,9 +230,9 @@ Bullet_HemisphereTarget:
                     DEC  A
                     JR   .ht_prev_loop
 .ht_prev_found:     LD   A, (Bullet_TmpScan)
-                    CALL VDC_SlotPos                   ; BC=X, DE=Y, CF=skip
+                    CALL VDC_SlotPos                   ; BC=X, DE=Y, CF=пропуск
                     JR   C, .ht_skip_prev
-                    CALL Bullet_ManhattanToBC_DE       ; A = |bx-X|+|by-Y| (clamped 255)
+                    CALL Bullet_ManhattanToBC_DE       ; A = |bx-X|+|by-Y| (ограничено 255)
                     LD   (Bullet_TmpDistP), A
 .ht_skip_prev:
                     ; Поиск следующего non-gap (k > hit).
@@ -307,7 +307,7 @@ Bullet_HemisphereTarget:
 
 
 ; ----------------------------------------------------------------------------
-; Bullet_ManhattanToBC_DE — A = |Bullet_X - BC| + |Bullet_Y - DE|, clamped 255.
+; Bullet_ManhattanToBC_DE — A = |Bullet_X - BC| + |Bullet_Y - DE|, ограничение 255.
 ; ----------------------------------------------------------------------------
 Bullet_ManhattanToBC_DE:
                     PUSH DE                            ; сохранить Y
@@ -319,7 +319,7 @@ Bullet_ManhattanToBC_DE:
                     OR   A
                     JR   Z, .mh_dx_ok
                     LD   L, 255
-.mh_dx_ok:          LD   B, L                          ; B = |dx| clamped
+.mh_dx_ok:          LD   B, L                          ; B = |dx| с ограничением
                     POP  DE                            ; восстановить Y
                     LD   HL, (Bullet_Y)
                     AND  A
@@ -337,7 +337,7 @@ Bullet_ManhattanToBC_DE:
 
 
 ; ----------------------------------------------------------------------------
-; Bullet_AbsHL — HL = |HL| (signed → unsigned magnitude).
+; Bullet_AbsHL — HL = |HL| (signed → unsigned magnitude; модуль).
 ; ----------------------------------------------------------------------------
 Bullet_AbsHL:       BIT  7, H
                     RET  Z
@@ -348,7 +348,7 @@ Bullet_AbsHL:       BIT  7, H
 
 
 ; ----------------------------------------------------------------------------
-; Bullet_SignExtendA_HL — HL = sign-extended A.
+; Bullet_SignExtendA_HL — HL = A с расширенным знаком.
 ; ----------------------------------------------------------------------------
 Bullet_SignExtendA_HL:
                     LD   H, 0
@@ -360,8 +360,8 @@ Bullet_SignExtendA_HL:
 
 
 ; ----------------------------------------------------------------------------
-; Bullet_Draw — вывод sprite пули в DL. Current level selects ARGB4 or L19 PALETTED atlas.
-; PALETTED L19 atlas uses local cell = color*12 (neutral phase).
+; Bullet_Draw — вывод sprite пули в DL. Current level выбирает ARGB4 или L19 PALETTED atlas.
+; PALETTED L19 atlas использует local cell = color*12 (neutral phase).
 ; Matrix должна быть identity/scale-only.
 ; ----------------------------------------------------------------------------
 Bullet_Draw:        LD   A, (Bullet_Active)
@@ -371,7 +371,7 @@ Bullet_Draw:        LD   A, (Bullet_Active)
                     ; Гарантируем identity matrix
                     ; перед draw — иначе если matrix унаследована от tongue/body
                     ; rotation, bullet sprite рисуется в неправильном месте экрана.
-                    ; 1024×768: normal atlas needs 32px→51px scale; L19 native 51px uses identity.
+                    ; 1024×768: обычному атласу нужен scale 32px→51px; L19 native 51px использует identity.
                     CALL ZL_EmitBallStaticMatrixCurrent
 
                     LD   A, (Bullet_Color)
@@ -418,7 +418,7 @@ Bullet_TmpDistP:    DEFB 0
 Bullet_TmpDistN:    DEFB 0
 Bullet_Frame:       DEFB 0                            ; fixed-speed bullet frame since spawn
 Bullet_PrevFrame:   DEFB 0
-Bullet_ExitFrame:   DEFB 0                            ; full-sprite screen exit from ZBT1 stream
+Bullet_ExitFrame:   DEFB 0                            ; выход полного sprite за экран из ZBT1 stream
 Bullet_EventPtr:    DEFW 0                            ; #8000-based pointer inside BULLET_TRAJ_PAGE
 Bullet_EventCount:  DEFB 0
 Bullet_NoHitMask:   DEFB 0                            ; bit0=track1 tunnel/no-hit, bit1=track2

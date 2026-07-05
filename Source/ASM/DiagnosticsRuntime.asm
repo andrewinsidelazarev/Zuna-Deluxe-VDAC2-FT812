@@ -1,8 +1,8 @@
 ; ============================================================================
 ; DiagnosticsRuntime.asm
 ; ----------------------------------------------------------------------------
-; Runtime diagnostics for patched/emulator runs. Normal builds exclude this file
-; through RUNTIME_DIAGNOSTICS_ENABLED = 0 in main.asm.
+; Runtime-диагностика для патченных/emulator-прогонов. Обычные сборки исключают
+; этот файл через RUNTIME_DIAGNOSTICS_ENABLED = 0 в main.asm.
 ; ============================================================================
 
                 ifdef DIAG_SECTION_GLOBAL_EQU
@@ -207,14 +207,14 @@ BuildCanaryBytesEnd:
                 endif
 
                 ifdef DIAG_SECTION_RESIDENT_VARS
-; --- Resident diagnostics captured by F12 dumps ------------------------------
-; VDC invariant latch. First fault survives until the next VDC_Init.
+; --- Резидентная диагностика, сохраняемая F12 dumps --------------------------
+; Защёлка инвариантов VDC. Первый сбой живёт до следующего VDC_Init.
 ;   code 1: SlotsLen > VDC_MAX_SLOTS
 ;   code 2: HSA > TrackNumSlots
-;   code 3: Slots[i] is neither color nor GAP marker
-;   code 4: Offsets[i] outside [-CELL_SIZE..CELL_SIZE]
-;   code 5: ExplodeFrame[i] has invalid ExplodeMarker
-;   code 6: Shot2[i] is not 0/1
+;   code 3: Slots[i] не color и не GAP marker
+;   code 4: Offsets[i] вне [-CELL_SIZE..CELL_SIZE]
+;   code 5: ExplodeFrame[i] содержит неверный ExplodeMarker
+;   code 6: Shot2[i] не 0/1
 VDC_AssertCode:      DEFB 0
 VDC_AssertCtx:       DEFB 0
 VDC_AssertLen:       DEFB 0
@@ -222,7 +222,7 @@ VDC_AssertHSA:       DEFB 0
 VDC_AssertValue:     DEFB 0
 VDC_AssertFrame:     DEFW 0
 
-; Loader trace is resident because F12 captures slot 1/Core, not loader overlay.
+; Loader trace резидентный, потому что F12 снимает slot 1/Core, а не loader overlay.
 ZiFiTraceStep:       DEFB 0
 ZiFiTraceBgOff:      DEFW 0
 ZiFiTraceBgSize:     DEFW 0
@@ -236,13 +236,13 @@ ZiFiTracePakSizeH:   DEFW 0
 
                 ifdef DIAG_SECTION_QUIT_TRACE_VARS
 QuitTraceStage:      DEFB 0         ; #10 probe, #20 copy, #30 params, #40 jump, #80+ stub
-QuitTraceSectors:    DEFB 0         ; sectors read by quit stub
+QuitTraceSectors:    DEFB 0         ; sectors, прочитанные quit stub
                 endif
 
                 ifdef DIAG_SECTION_VDC
 ; ============================================================================
-; VDC_CheckInvariants — passive state-rule verifier after a frame.
-; It only latches the first violation into VDC_Assert* for F12 dumps.
+; VDC_CheckInvariants — пассивная проверка правил state после кадра.
+; Только защёлкивает первое нарушение в VDC_Assert* для F12 dump.
 ; ============================================================================
 VDC_CheckInvariants:
                 PUSH AF
@@ -363,7 +363,7 @@ VDC_CheckInvariants:
                 POP  AF
                 RET
 
-; In: C=code, A=index/context, E=value.
+; Вход: C=code, A=index/context, E=value.
 VDC_LatchAssert:
                 LD   (VDC_AssertCtx), A
                 LD   A, C

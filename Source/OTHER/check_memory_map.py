@@ -53,6 +53,14 @@ class SpgBlock:
         offset_in_page = self.offset & 0x3FFF
         return self.page + (offset_in_page + self.size + 0x3FFF) // 0x4000
 
+    @property
+    def phys_start(self) -> int:
+        return self.page * 0x4000 + (self.offset & 0x3FFF)
+
+    @property
+    def phys_end(self) -> int:
+        return self.phys_start + self.size
+
 
 def hx(value: int, width: int = 6) -> str:
     return f"#{value:0{width}X}"
@@ -100,17 +108,17 @@ def check_spg_pages(errors: list[str]) -> None:
     existing = [b for b in blocks if b.path.exists()]
     by_start: dict[int, list[SpgBlock]] = {}
     for block in existing:
-        by_start.setdefault(block.page, []).append(block)
-    for page, rows in sorted(by_start.items()):
+        by_start.setdefault(block.phys_start, []).append(block)
+    for start, rows in sorted(by_start.items()):
         if len(rows) > 1:
             detail = "\n".join(f"    line {b.line}: {b.text}" for b in rows)
-            errors.append(f"SPG page {hx(page, 2)} has multiple Block starts:\n{detail}")
+            errors.append(f"SPG physical address {hx(start, 6)} has multiple Block starts:\n{detail}")
     for idx, a in enumerate(existing):
         for b in existing[idx + 1 :]:
-            if max(a.page_start, b.page_start) < min(a.page_end, b.page_end):
+            if max(a.phys_start, b.phys_start) < min(a.phys_end, b.phys_end):
                 errors.append(
-                    f"SPG page range overlap: line {a.line} {hx(a.page_start, 2)}..{hx(a.page_end - 1, 2)} "
-                    f"vs line {b.line} {hx(b.page_start, 2)}..{hx(b.page_end - 1, 2)}"
+                    f"SPG physical range overlap: line {a.line} {hx(a.phys_start, 6)}..{hx(a.phys_end - 1, 6)} "
+                    f"vs line {b.line} {hx(b.phys_start, 6)}..{hx(b.phys_end - 1, 6)}"
                 )
     print(f"[spg] {len(existing)} Block ranges checked")
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Z80 harness for the 24-bit cumulative score + 50000 extra-life mechanic.
+"""Z80 harness для 24-bit cumulative score + 50000 extra-life.
 
-Drives the real Score_Reset / Score_Add24 (Core, resident) in the emulator and
-checks VDC_PlayerScore (3-byte LE) carry propagation past 65535 and the
-+1-life-per-50000 award (including a single add that crosses two thresholds).
+Гоняет реальные Score_Reset / Score_Add24 (Core, resident) в эмуляторе и
+проверяет VDC_PlayerScore (3-byte LE), перенос за 65535 и cap жизней:
++1 жизнь за 50000 очков только если VDC_Lives < 3.
 """
 import sys
 from pathlib import Path
@@ -40,7 +40,7 @@ def main() -> int:
     def add(delta):
         emu.call(sym["Score_Add24"], h=(delta >> 8) & 0xFF, l=delta & 0xFF)
 
-    # New run reset must restore lives as well as score/extra-life threshold.
+    # Новый run должен восстановить lives, score и extra-life threshold.
     emu.set_byte(sym["Core.VDC_Lives"], 1)
     emu.call(sym["Score_Reset"])
 
@@ -59,28 +59,29 @@ def main() -> int:
     add(30000)
     check("+30000 (no life)", 30000, 3, 50000)
 
-    add(30000)  # 60000 -> crosses 50000 (also proves >16-bit add: 60000 < 65536 still)
-    check("+30000 -> 60000 (1 life)", 60000, 4, 100000)
+    add(30000)  # 60000 -> crosses 50000, но lives уже 3: cap, threshold consumed.
+    check("+30000 -> 60000 (cap at 3)", 60000, 3, 100000)
 
-    add(50000)  # 110000 -> exceeds 65535 (24-bit), crosses 100000
-    check("+50000 -> 110000 (carry past 65535, 1 life)", 110000, 5, 150000)
+    emu.set_byte(sym["Core.VDC_Lives"], 2)
+    add(50000)  # 110000 -> exceeds 65535 (24-bit), crosses 100000, 2->3.
+    check("+50000 -> 110000 (carry past 65535, 2->3 lives)", 110000, 3, 150000)
 
-    # single add crossing TWO thresholds: from 110000 add 65535 -> 175535,
-    # crosses 150000 and 200000? 175535 < 200000 -> only 150000 -> 1 life.
+    # Single add crossing one threshold at cap: threshold advances, lives stays 3.
     add(65535)
-    check("+65535 -> 175535 (1 life)", 175535, 6, 200000)
+    check("+65535 -> 175535 (cap at 3)", 175535, 3, 200000)
 
-    # craft a double-threshold crossing: reset, set score near, add big.
+    # Single add crossing TWO thresholds: lives 1 -> 3, not above 3.
     emu.set_byte(sym["Core.VDC_Lives"], 1)
     emu.call(sym["Score_Reset"])
+    emu.set_byte(sym["Core.VDC_Lives"], 1)
     add(40000)            # 40000, next=50000
     add(65000)            # 105000 -> crosses 50000 AND 100000 -> +2 lives, next=150000
-    check("40000+65000 -> 105000 (two thresholds, +2 lives)", 105000, 5, 150000)
+    check("40000+65000 -> 105000 (two thresholds, cap at 3)", 105000, 3, 150000)
 
     if fails:
         print(f"FAIL: {len(fails)} case(s): {', '.join(fails)}")
         return 1
-    print("PASS: 24-bit score carry + 50000 extra-life mechanic correct")
+    print("PASS: 24-bit score carry + 50000 extra-life cap correct")
     return 0
 
 

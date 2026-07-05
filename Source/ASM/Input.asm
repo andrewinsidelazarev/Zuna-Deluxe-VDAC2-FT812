@@ -51,7 +51,7 @@ Input_KQ:       DEFB 0
 Input_KA:       DEFB 0
 Input_KO:       DEFB 0
 Input_KP:       DEFB 0
-Input_EvUp:     DEFB 0          ; PS/2 make seen during this Input_Scan
+Input_EvUp:     DEFB 0          ; PS/2 make замечен во время этого Input_Scan
 Input_EvDown:   DEFB 0
 Input_EvFireKey: DEFB 0
 Input_PS2Brk:   DEFB 0          ; ожидается префикс отпускания (#F0)

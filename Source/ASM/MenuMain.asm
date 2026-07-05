@@ -176,6 +176,7 @@ MenuMain:
 .start_gauntlet:
                 LD   A, 1
                 LD   (CurrentGameMode), A
+                CALL LevelSelectClampCurrent             ; Space/22-4 re-enters Gauntlet as last selectable 21-4
                 JP   FadeMenuToLevelSelect
 .show_more:     JP   FadeMenuToMoreGames
 
@@ -323,8 +324,8 @@ MenuAdvanceSky:
                 INC  A
 .store?:        LD   (State?), A
                 if ClickVar?
-                ; Activate on first press edge. Also accept release edge so a
-                ; press that began outside and ends inside still behaves like a click.
+                ; Активировать по первому press edge. Также принять release edge,
+                ; чтобы press снаружи и release внутри всё равно считались click.
                 LD   A, (MenuLmbNow)
                 OR   A
                 JR   NZ, .press_edge?
@@ -406,15 +407,15 @@ MenuUpdateHoverFocus:
                 CP   #FF
                 JR   Z, .hf_lmb
                 XOR  A
-                LD   (MenuInputMode), A                     ; entering another button gives focus to mouse
+                LD   (MenuInputMode), A                     ; вход на другую кнопку отдаёт focus мыши
 .hf_lmb:        LD   A, (MenuLmbNow)
                 OR   A
                 JR   Z, .hf_mode
                 XOR  A
-                LD   (MenuInputMode), A                     ; LMB gives focus to mouse even without hover change
+                LD   (MenuInputMode), A                     ; LMB отдаёт focus мыши даже без hover change
 .hf_mode:       LD   A, (MenuInputMode)
                 OR   A
-                JP   NZ, MenuClearButtonStates              ; keyboard focus: stationary cursor cannot own hover
+                JP   NZ, MenuClearButtonStates              ; keyboard focus: неподвижный cursor не владеет hover
                 LD   A, (MenuMouseHoverNow)
                 CP   0
                 JR   NZ, .hf_not_adv
@@ -455,6 +456,7 @@ MenuKeyboardNav:
                 JR   Z, .chk_down                          ; уже на верхней (Adventure)
                 DEC  A
                 LD   (MenuSelection), A
+                CALL MenuButtonSfx
 .chk_down:      ; nav-вниз = Down
                 LD   A, (Input_EvDown)
                 OR   A
@@ -472,6 +474,7 @@ MenuKeyboardNav:
                 JR   NC, .highlight                        ; уже на нижней активной (More)
                 INC  A
                 LD   (MenuSelection), A
+                CALL MenuButtonSfx
 .highlight:     CALL MenuHighlightSelection
                 ; огонь = выбор текущей кнопки
                 LD   A, (Input_EvFireKey)
@@ -582,16 +585,17 @@ MenuDrawCredit:
 .txt:           DB   "Italy, 2026", 0                  ; 11+NUL = 12 байт — ровно 3 CMD-слова
 
 MenuSwapFrame:
-                ; UI frame pacing: build frame first, then submit immediately
-                ; after the next FT812 swap event when the edge is available.
-                ; The wait is bounded: after a static screen (More Games) or a
-                ; lost clear-on-read INT edge, an infinite wait here freezes the
-                ; transition. Fallback to DLSWAP==0 keeps the old safe path.
+                CALL Core.AY_Game.AY_Update
+                ; UI frame pacing: сначала строим frame, затем submit сразу после
+                ; следующего FT812 swap event, когда edge доступен.
+                ; Ожидание bounded: после static screen (More Games) или потерянного
+                ; clear-on-read INT edge бесконечное ожидание здесь замораживает
+                ; transition. Fallback на DLSWAP==0 сохраняет старый безопасный путь.
                 ;
-                ; Keep INT_FLAGS reads centralized here. On real FT812 the read
-                ; clears the flag; the write below is for Unreal, where clear is
-                ; write-based. DrawBlackTransitionFrame waits only on DLSWAP, so
-                ; it does not consume a second INT_SWAP event.
+                ; Держать чтения INT_FLAGS централизованно здесь. На реальном FT812
+                ; чтение очищает flag; write ниже нужен для Unreal, где очистка
+                ; по записи. DrawBlackTransitionFrame ждёт только DLSWAP, поэтому
+                ; не потребляет второй INT_SWAP event.
 .wait_int_init:
                 LD   L, 64
 .wait_int:      FT_RD_REG8 FT_REG_INT_FLAGS
@@ -828,7 +832,7 @@ MenuDrawCursor:
                 JP   FT.Coprocessor.Vertex2f
 
 MenuPointInside:
-                ; In: BC=x0, DE=x1, IX=y0, IY=y1. Out: C=1 inside, C=0 outside.
+                ; Вход: BC=x0, DE=x1, IX=y0, IY=y1. Выход: C=1 внутри, C=0 снаружи.
                 LD   HL, (Input.Mouse.PositionX)
                 AND  A
                 SBC  HL, BC

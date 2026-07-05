@@ -10,10 +10,22 @@ from __future__ import annotations
 
 import os
 import sys
+import math
 
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from zuma_full_z80_emulator import ZumaFullZ80Emulator  # noqa: E402
+
+
+def angle_brad(dx: int, dy: int) -> int:
+    deg = math.degrees(math.atan2(dy, dx))
+    brad = int(round((deg % 360.0) * 256.0 / 360.0)) & 0xFF
+    return brad
+
+
+def angle_diff(a: int, b: int) -> int:
+    d = abs((a - b) & 0xFF)
+    return min(d, 256 - d)
 
 
 def main() -> int:
@@ -47,6 +59,37 @@ def main() -> int:
         f"{checked} frog ratio inputs; worst={worst_tstates} tstates "
         f"at min={worst_case[0]} max={worst_case[1]} q={worst_case[2]}"
     )
+
+    S = emu.sym
+    frog_x = 327
+    frog_y = 231
+    far_cases = [
+        (frog_x + 600, frog_y + 300),
+        (frog_x + 600, frog_y - 180),
+        (frog_x - 300, frog_y + 500),
+        (frog_x - 320, frog_y - 220),
+        (frog_x + 696, frog_y + 536),
+        (frog_x - 326, frog_y + 536),
+    ]
+    for target_x, target_y in far_cases:
+        dx = target_x - frog_x
+        dy = target_y - frog_y
+        expected = angle_brad(dx, dy)
+        emu.set_word(S["Core.Frog_PosStartX"], frog_x)
+        emu.set_word(S["Core.Frog_PosStartY"], frog_y)
+        emu.set_word(S["Core.ZL_SmoothX"], target_x & 0xFFFF)
+        emu.set_word(S["Core.ZL_SmoothY"], target_y & 0xFFFF)
+        emu.set_byte(S["Core.Frog_Angle"], (expected + 16) & 0xFF)
+        emu.call(S["Core.Frog_ComputeAngle"], max_steps=5000)
+        got = emu.get_byte(S["Core.Frog_Angle"])
+        if angle_diff(got, expected) > 2:
+            print(
+                "FAIL: Frog_ComputeAngle far target "
+                f"dx={dx} dy={dy} got={got} expected≈{expected}"
+            )
+            return 1
+
+    print(f"PASS: Frog_ComputeAngle preserves far-target ratios ({len(far_cases)} cases)")
     return 0
 
 

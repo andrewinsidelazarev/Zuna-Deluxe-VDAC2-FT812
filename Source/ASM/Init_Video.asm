@@ -18,10 +18,10 @@
 ;   ResolutionWidthPtr   EQU <addr_word_in_RAM>   ; куда FT_RESOLUTION пишет ширину
 ;   ResolutionHeightPtr  EQU ResolutionWidthPtr+2 ; высоту
 ;
-; Out:
+; Выход:
 ;   A=0, Z=1   — успех (640×480 включён через FT812)
 ;   A=1, Z=0   — VDAC2 на этой плате не обнаружен (вызывающий выбирает fallback)
-; Corrupts: AF, BC, DE, HL
+; Клобает: AF, BC, DE, HL
 ; ============================================================================
 
 Init_Video:     ; --- 1. Sanity-check: VDAC2 присутствует на плате? --------
@@ -61,8 +61,8 @@ Init_Video:     ; --- 1. Sanity-check: VDAC2 присутствует на пл�
 
                 ; --- 5. Залить минимальный пустой DL: чёрный экран -------
                 ; До первого FT_CMD_Write из MainLoop'а на экране может быть
-                ; garbage (RAM_DL после reset не определена). Заливаем 12 байт:
-                ; CLEAR_COLOR_RGB(0,0,0); CLEAR(1,1,1); DISPLAY().
+                ; мусор (RAM_DL после reset не определена). Заливаем 12 байт:
+                ; Команды: CLEAR_COLOR_RGB(0,0,0); CLEAR(1,1,1); DISPLAY().
                 LD   HL, .EmptyDL
                 LD   BC, .EmptyDL_Size
                 LD   DE, 0                             ; offset 0 от FT_RAM_DL

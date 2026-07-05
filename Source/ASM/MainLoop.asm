@@ -7,7 +7,7 @@
 ; ----------------------------------------------------------------------------
 ; Каркас: на этом этапе DL содержит только тёмный фон + анимированную точку
 ; (proof-of-life). По мере добавления game-state'а сюда подключатся:
-;   • VDC engine update (move_chain, animate_chain, try_spawn, scan_match…)
+;   • обновление VDC engine (move_chain, animate_chain, try_spawn, scan_match…)
 ;   • Background bitmap из RAM_G
 ;   • Цикл по slots[] → BITMAP cells шаров (FT_Vertex2ii)
 ;   • Frog с rotation matrix к курсору
@@ -28,33 +28,34 @@
 ZL_SCR_W        EQU 1024
 ZL_SCR_H        EQU 768
 ZL_SUB          EQU 16                                ; subpixel множитель
-ZL_FT_CMD_DMA_ENABLED EQU 1                           ; send frame CMD buffer to FT812 via TS-Config DMA_RAM_SPI
-ZL_FROG_DRAW_ENABLED EQU 1                            ; canary master: isolate frog tearing source
-ZL_FROG_DRAW_PLATE   EQU 1                            ; no rotation
-ZL_FROG_DRAW_BODY    EQU 1                            ; rotated main body
-ZL_FROG_DRAW_TONGUE  EQU 1                            ; rotated tongue
-ZL_FROG_DRAW_BALL_NOW  EQU 1                          ; ball on tongue / in mouth
-ZL_FROG_DRAW_NEXT_BALL EQU 1                          ; next ball on frog back
-ZL_FROG_DRAW_OVERLAY EQU 1                            ; rotated face overlay
-ZL_SPACE_LEVEL_INDEX EQU LEVEL_RUNTIME_COUNT - 1       ; Space is the last runtime board
+ZL_FT_CMD_DMA_ENABLED EQU 1                           ; отправлять frame CMD buffer в FT812 через TS-Config DMA_RAM_SPI
+ZL_FROG_DRAW_ENABLED EQU 1                            ; общий canary: изолировать источник frog tearing
+ZL_FROG_DRAW_PLATE   EQU 1                            ; без rotation
+ZL_FROG_DRAW_BODY    EQU 1                            ; повернутое основное body
+ZL_FROG_DRAW_TONGUE  EQU 1                            ; повернутый tongue
+ZL_FROG_DRAW_BALL_NOW  EQU 1                          ; шар на tongue / во рту
+ZL_FROG_DRAW_NEXT_BALL EQU 1                          ; следующий шар на спине frog
+ZL_FROG_DRAW_OVERLAY EQU 1                            ; повернутый face overlay
+ZL_SPACE_LEVEL_INDEX EQU LEVEL_RUNTIME_COUNT - 1       ; Space — последний runtime board
 ZL_SPACE_STARS_PER_LAYER EQU 24
-ZL_TRACKF_TUNNEL     EQU #01                           ; track flags bit0: no bullet hit
-ZL_TRACKF_DRAW_ABOVE EQU #02                           ; track flags bit1: draw after top layer
-ZL_SPIN12_LOW_LUT    EQU #4B80                         ; 256-byte runtime LUT after dual ball caches
-ZL_SPIN12_LOW_LUT_END EQU ZL_SPIN12_LOW_LUT + 256       ; ends before #4C80 service bytes
+ZL_TRACKF_TUNNEL     EQU #01                           ; track flags bit0: bullet не попадает
+ZL_TRACKF_DRAW_ABOVE EQU #02                           ; track flags bit1: рисовать после top layer
+ZL_SPIN12_LOW_LUT    EQU #4B80                         ; 256-byte runtime LUT после dual ball caches
+ZL_SPIN12_LOW_LUT_END EQU ZL_SPIN12_LOW_LUT + 256       ; заканчивается перед service bytes #4C80
 
 ; ----------------------------------------------------------------------------
 ; MainLoop — точка входа. Никогда не возвращается.
 ; ----------------------------------------------------------------------------
-MainLoop:       ; --- Init game state (одноразово при первом входе) ---
+MainLoop:       ; --- Инициализация game state (одноразово при первом входе) ---
+                CALL AY_Game.AY_Init
                 LD   HL, 0
                 LD   (ZL_FrameCounter), HL
-                ; Spin K — runtime (per-level калибровка). Default = level 1.
+                ; Spin K — runtime (per-level калибровка). По умолчанию = level 1.
                 LD   A, ZL_SPIN_K_DEFAULT
                 LD   (ZL_SpinK), A
                 CALL ZL_InitSpin12LowLut
 
-.Loop           ; --- 1. Update input + game state (Z80-only, параллельно с FT812 render) ---
+.Loop           ; --- 1. Обновить input + game state (Z80-only, параллельно с FT812 render) ---
                 CALL Input_Scan                      ; единый опрос ввода: мышь + PS/2-клавиатура
                 CALL EscToMenu                       ; ESC = нажатие кнопки MENU (открыть pause-меню)
                 CALL ZL_AimUpdate
@@ -96,7 +97,7 @@ MainLoop:       ; --- Init game state (одноразово при первом 
                 CALL VDC_CheckInvariants
                 endif
 
-                ; --- 2. Build DL в Z80 buffer (тоже параллельно с render). Тяжёлый
+                ; --- 2. Собрать DL в Z80 buffer (тоже параллельно с render). Тяжёлый
                 ; build (mouse motion → ComputeFrogAngle/atan2) не съедает FT812
                 ; vblank window — write всегда попадает строго в vblank.
                 FT_CMD_Start
@@ -134,7 +135,7 @@ MainLoop:       ; --- Init game state (одноразово при первом 
                 JR   .WaitGameplaySwap
 .SubmitGameplayFrame:
                 ; Burst write Z80 buffer → FT812 RAM_CMD; дождаться, пока
-                ; coprocessor построит RAM_DL, затем request swap.
+                ; coprocessor построит RAM_DL, затем запросить swap.
                 if ZL_FT_CMD_DMA_ENABLED
                 CALL ZL_FT_CMD_Write_DMA
                 else
@@ -143,7 +144,7 @@ MainLoop:       ; --- Init game state (одноразово при первом 
                 CALL FT.Coprocessor.WaitFlush
                 FT_WR_REG8 FT_REG_DLSWAP, FT_DLSWAP_FRAME
 
-                ; --- 4. Frame counter ---
+                ; --- 4. Счётчик кадров ---
                 LD   HL, (ZL_FrameCounter)
                 INC  HL
                 LD   (ZL_FrameCounter), HL
@@ -183,7 +184,7 @@ ZL_BALL_L19_NEG_HALF_FP EQU #FFE68000                  ; -25.5 in CMD_TRANSLATE 
 ; Для CELL_SIZE=32, phases=16:
 ;   K = 256*16*113/(355*16) ≈ 81.49 → 81.
 ;
-; K держится в RAM (ZL_SpinK) — runtime, можно менять per-level. Default = compile-time.
+; K держится в RAM (ZL_SpinK) — runtime, можно менять per-level. По умолчанию = compile-time.
 ZL_ATLAS_PHASES            EQU 16                     ; normal ARGB4 atlas only
 ZL_SPIN_DIAM_SAMPLES       EQU VDC_CELL_SIZE / 2
 ZL_SPIN_K_NUM              EQU 256 * ZL_ATLAS_PHASES * 113
@@ -191,13 +192,13 @@ ZL_SPIN_K_DEN              EQU 355 * ZL_SPIN_DIAM_SAMPLES
 ZL_SPIN_K_DEFAULT          EQU (ZL_SPIN_K_NUM + ZL_SPIN_K_DEN / 2) / ZL_SPIN_K_DEN
 ZL_SPIN_MASK               EQU ZL_ATLAS_PHASES - 1
 
-; --- Bucket-based tangent rotation: цепь группирована по buckets, 1 cmd_rotate per bucket.
-; ZL_BUCKETS = 8/16/32/64. Чем больше — тем плавнее rotation, но больше cmd_rotate/frame.
+; --- Bucket-based tangent rotation: цепь группирована по buckets, 1 cmd_rotate на bucket.
+; ZL_BUCKETS = 8/16/32/64. Чем больше — тем плавнее rotation, но больше cmd_rotate/кадр.
 ; bucket = (tangent + step/2) / step mod N. step = 256/N BRAD.
-ZL_BUCKETS      EQU 32                                ; (dead-code legacy; per-ball replaced bucket loop 2026-05-18)
+ZL_BUCKETS      EQU 32                                ; старый dead-code; per-ball заменил bucket loop 2026-05-18
 
-; Legacy PALETTED4444 split-handle offset kept for helper compatibility.
-; Current L19 experiment is 6×12 = 72 cells, so it uses handle 0 only.
+; Legacy PALETTED4444 split-handle offset сохранён для совместимости helper.
+; Текущий L19-вариант — 6×12 = 72 cells, поэтому использует только handle 0.
 BALLS_HANDLE9_OFFSET EQU 128 * ZL_BALL_W * ZL_BALL_H        ; PALETTED = 1 byte/pixel cell
 ZL_DESTROY_HANDLE EQU 10                             ; match-3 серый animBallDestroy
 ZL_DESTROY_W      EQU 48                               ; atlas cell (layout) — НЕ масштабировать
@@ -215,17 +216,17 @@ ZL_WINEXP_HANDLE  EQU 9                               ; handle шаров (в WI
                                                      ; эмулятор залипание per-handle source не моделирует).
 ZL_WINEXP_FRAMES  EQU 17                              ; HD-ref animExplosion: 17 кадров
 ZL_WINEXP_DRAW    EQU 128                             ; 1024×768: 80×1.6 (рисуется при scale(1.6)-матрице)
-ZL_WINEXP_XOFF    EQU 2                               ; 1×1.6 manual screen offset
+ZL_WINEXP_XOFF    EQU 2                               ; 1×1.6 ручной screen offset
 ZL_WINEXP_YOFF    EQU -3                              ; -2×1.6
-ZL_BG_W         EQU 400                               ; native bg storage, upscaled to 1024x768
+ZL_BG_W         EQU 400                               ; native storage фона, upscaled to 1024x768
 ZL_BG_H         EQU 300
 ZL_BG_DRAW_W    EQU 1024
 ZL_BG_DRAW_H    EQU 768
-ZL_BG_SCALE     EQU #00028F5C                         ; 2.56 in f16.16 (1024/400 = 768/300)
+ZL_BG_SCALE     EQU #00028F5C                         ; 2.56 в f16.16 (1024/400 = 768/300)
 ZL_BG_HANDLE    EQU 1
 
-; Local DL command constants not covered by existing TSLib macros.
-ZL_FT_L2        EQU FT_L4                              ; legacy DXT boot-mask constant; gameplay top-cover uses ARGB4 meta
+; Локальные DL command constants, которых нет в существующих TSLib macros.
+ZL_FT_L2        EQU FT_L4                              ; старая DXT boot-mask constant; gameplay top-cover использует ARGB4 meta
 ZL_DL_BLEND_FUNC EQU #0B000000
 ZL_DL_COLOR_A   EQU #10000000
 ZL_DL_COLOR_MASK EQU #20000000
@@ -245,10 +246,10 @@ ZL_BALL_COLORS  EQU 6
 ; DrawHudClock — HH:MM:SS в левом нижнем углу над bottom frame.
 ; Bottom frame занимает Y=456..479 (24 px). Clock на Y=438 (18 px выше).
 ; X=28 — сразу за left frame (24 px) + 4 px отступ.
-; Font 26 = FT812 ROM 8×16, "HH:MM:SS" ≈ 64 px wide.
+; Font 26 = FT812 ROM 8×16, "HH:MM:SS" ≈ 64 px шириной.
 ; ============================================================================
 DrawHudClock:
-                ; Tint white
+                ; Белый tint
                 LD   C, 255 : LD D, 255 : LD E, 255
                 CALL FT.Coprocessor.ColorRGB
                 ; Компактно (1024-порт): форматируем "HH:MM:SS" в буфер и рисуем
@@ -562,14 +563,14 @@ EnsureDialogFrameUploaded:
 ;
 ; Host-side CMD buffer живёт в RAM #4CB0..#5C00; сразу после него начинается Core.
 ; В длинных кадрах (много шаров, dual-chain, tunnel/top-mask passes, ARGB4 runtime
-; rotation) один frame-command stream может подойти к концу этого RAM-окна до того,
+; rotation) один поток frame-command может подойти к концу этого RAM-окна до того,
 ; как весь display list кадра собран. Старый "быстрый" вариант с RET здесь делал
-; вызовы flush фиктивными, а draw-loop доходил до hard guard и начинал .PBSkip-ать
+; вызовы flush фиктивными, а draw-loop доходил до жёсткого guard и начинал .PBSkip-ать
 ; оставшиеся шары, чтобы не затереть Core. На экране это выглядит как обрыв
 ; отрисовки цепи, хотя VDC slots и логика шаров при этом целые.
 ;
 ; Правильный контракт другой: при давлении на host CMD buffer надо отправить уже
-; накопленный chunk в FT812, дождаться drain FIFO, сбросить FT.Coprocessor.BufferPtr
+; накопленный chunk в FT812, дождаться освобождения FIFO, сбросить FT.Coprocessor.BufferPtr
 ; обратно на CMD_ADDRESS_PTR и продолжить генерировать тот же кадр. Это сохраняет
 ; все sprites и одновременно не даёт RAM command stream перейти через #5C00.
 ;
@@ -604,11 +605,11 @@ ZL_DrawActiveChainsUnified:
                 JR   NZ, .dialog_state
 
 .gameplay_top_mask:
-                ; Dialog frame and tunnel top-mask share DIALOG_FRAME_RAMG.
-                ; When retry dialog closes, the previous display list can still
-                ; be scanning the dialog bitmap while the Z80 builds the next
-                ; frames. Defer reclaiming the swap window to avoid visible
-                ; RAM_G overwrite artifacts under the closing dialog.
+                ; Dialog frame и tunnel top-mask делят DIALOG_FRAME_RAMG.
+                ; Когда retry-dialog закрывается, предыдущий display list ещё может
+                ; сканировать bitmap диалога, пока Z80 строит следующие кадры.
+                ; Откладываем возврат swap window, чтобы не было видимого
+                ; RAM_G overwrite под закрывающимся диалогом.
                 LD   A, (DialogFrameLoaded)
                 OR   A
                 JR   Z, .topmask_close_guard
@@ -628,7 +629,7 @@ ZL_DrawActiveChainsUnified:
                 CALL ZL_UploadTopMasksMaybe
                 CALL ZL_BuildTopMaskChainCaches
                 
-                ; Pass 1: Under
+                ; Pass 1: нижний слой
                 LD   A, 1
                 LD   (ZL_ChainDrawPass), A
                 CALL ZL_DrawPreparedChain1
@@ -958,11 +959,11 @@ ZL_BuildActiveChainCache:
                 
                 LD   A, (CurrentLevel)
                 CP   18                               ; L19 serpents (0-indexed)
-                LD   A, #C0                           ; force 4 buckets (90 deg) for Level 19 orthogonal tracks
+                LD   A, #C0                           ; принудительно 4 buckets (90 deg) для ортогональных tracks Level 19
                 LD   E, #20
                 JR   Z, .PrePassMaskReady
                 
-                LD   A, #E0                           ; force 8 buckets for dual-chain tunnel levels to fix tearing
+                LD   A, #E0                           ; принудительно 8 buckets для dual-chain tunnel уровней против tearing
                 LD   E, #10
                 JR   .PrePassMaskReady
                 
@@ -972,7 +973,7 @@ ZL_BuildActiveChainCache:
                 LD   A, #F0                           ; <70 balls: 16 tangent buckets
                 LD   E, #08
                 JR   C, .PrePassMaskReady
-                LD   A, #E0                           ; full chain: 8 buckets, fewer matrix emits
+                LD   A, #E0                           ; полная цепь: 8 buckets, меньше emit'ов matrix
                 LD   E, #10
 .PrePassMaskReady:
                 LD   (ZL_TangentQuantMask), A
@@ -989,10 +990,10 @@ ZL_BuildActiveChainCache:
                 LD   E, A : LD D, 0
                 ADD  HL, DE                            ; baseT = HSA*CELL_SIZE + HSub
                 LD   (ZL_PrePassBaseT), HL
-                LD   IX, (VDC_pSlots)                  ; keep hot array pointers in index regs
+                LD   IX, (VDC_pSlots)                  ; держать hot pointers массивов в index regs
                 LD   IY, (VDC_pOffsets)
-                LD   HL, (ZL_CacheBasePtr)             ; cache write ptr
-.PrePassLoop:   PUSH BC                               ; save count+i
+                LD   HL, (ZL_CacheBasePtr)             ; указатель записи cache
+.PrePassLoop:   PUSH BC                               ; сохранить count+i
                 LD   A, C
                 LD   (ZL_TmpSlotIdx), A
                 ; --- gap-проверка ---
@@ -1000,11 +1001,11 @@ ZL_BuildActiveChainCache:
                 INC  IX
                 CP   VDC_NUM_COLORS                   ; ≥ 6 → gap
                 JR   C, .PrePassNotGap
-                INC  IY                               ; keep Offsets ptr aligned with slot index
+                INC  IY                               ; держать Offsets ptr синхронным со slot index
                 JP   .PrePassMark
 .PrePassNotGap:
                 LD   (ZL_TmpFrame), A                 ; color
-                PUSH HL                               ; save cache ptr
+                PUSH HL                               ; сохранить cache ptr
                 LD   HL, (ZL_PrePassBaseT)
                 PUSH HL                               ; baseT для add offset после чтения offsets[i]
                 LD   A, (IY+0)                        ; Offsets[i]
@@ -1019,7 +1020,7 @@ ZL_BuildActiveChainCache:
                 ADD  HL, DE                            ; HL = t = baseT + sext(offset[i])
                 BIT  7, H
                 JR   Z, .PrePassTNonNeg
-                POP  HL                               ; restore cache ptr
+                POP  HL                               ; восстановить cache ptr
                 JP   .PrePassMark
 .PrePassTNonNeg:
                 PUSH HL
@@ -1031,8 +1032,8 @@ ZL_BuildActiveChainCache:
                 LD   HL, (VDC_ActiveTrackSamples)
                 DEC  HL
 .PrePassTIn:
-                ; Inline render-sample reader: same Track V2 ABI as VDC_ReadRenderSampleAtHL,
-                ; but avoids the resident trampoline in the per-ball cache-build loop.
+                ; Inline reader render-sample: тот же Track V2 ABI, что у VDC_ReadRenderSampleAtHL,
+                ; но без resident trampoline в per-ball cache-build loop.
                 LD   (VDC_LastT), HL
                 PUSH HL
                 LD   A, H
@@ -1055,7 +1056,7 @@ ZL_BuildActiveChainCache:
                 POP  HL
                 LD   A, H
                 AND  #07
-                LD   H, A                              ; local sample = t & #07FF
+                LD   H, A                              ; локальный sample = t & #07FF
                 ADD  HL, HL
                 ADD  HL, HL
                 ADD  HL, HL                            ; local * 8
@@ -1068,11 +1069,11 @@ ZL_BuildActiveChainCache:
                 LD   (VDC_LastTangent), A : INC HL
                 LD   A, (HL)
                 LD   (VDC_LastTrackFlags), A
-                POP  HL                               ; restore cache ptr
+                POP  HL                               ; восстановить cache ptr
                 LD   (ZL_TmpBallX), BC
                 LD   (ZL_TmpBallY), DE
-                ; 1024×768: V2 already stores VERTEX2F corner coords.
-                ; Cull by Vx/Vy directly to keep vertices inside signed field.
+                ; 1024×768: V2 уже хранит corner coords VERTEX2F.
+                ; Cull прямо по Vx/Vy, чтобы vertices оставались внутри signed field.
                 PUSH HL                               ; cache ptr
                 LD   HL, (ZL_TmpBallX)                 ; Vx
                 BIT  7, H
@@ -1107,7 +1108,7 @@ ZL_BuildActiveChainCache:
                 LD   (ZL_TmpTrackFlags), A
                 ; --- spin --- (1024×768: полная анимация на ВСЕХ уровнях,
                 ; гейты tunnel/top-mask и heavy-dual≥70 сняты по решению юзера)
-                PUSH HL                               ; save cache ptr
+                PUSH HL                               ; сохранить cache ptr
                 LD   HL, (VDC_LastT)
                 LD   A, (ZL_BallsPalettedActive)
                 OR   A
@@ -1143,15 +1144,15 @@ ZL_BuildActiveChainCache:
                 ADD  A, D                             ; cell = color*12 + spin12
 .PrePassCellReady:
                 LD   (ZL_TmpFrame), A
-                POP  HL                               ; restore cache ptr
+                POP  HL                               ; восстановить cache ptr
                 LD   A, (ZL_TmpAngleByte)
                 LD   (HL), A : INC HL                 ; +0 quantized tangent
                 LD   A, (ZL_TmpFrame)
                 LD   (HL), A : INC HL                 ; +1 global cell (0..191, или 0xFF=gap)
-                LD   DE, (ZL_TmpBallX)                 ; Vx already baked
+                LD   DE, (ZL_TmpBallX)                 ; Vx уже запечён
                 LD   (HL), E : INC HL                 ; +2 Vx lo
                 LD   (HL), D : INC HL                 ; +3 Vx hi
-                LD   DE, (ZL_TmpBallY)                 ; Vy already baked
+                LD   DE, (ZL_TmpBallY)                 ; Vy уже запечён
                 LD   (HL), E : INC HL                 ; +4 Vy lo
                 LD   (HL), D : INC HL                 ; +5 Vy hi
                 LD   A, (ZL_TmpTrackFlags)
@@ -1177,7 +1178,7 @@ ZL_BuildActiveChainCache:
 .PrePassMark:   ; gap / off-track: cell (+1) = 0xFF (per-ball loop тест на gap по cell).
                 LD   (HL), 0                          ; +0 tangent (ignored для gap)
                 INC  HL
-                LD   (HL), #FF                        ; +1 cell = gap marker
+                LD   (HL), #FF                        ; +1 cell = маркер gap
                 LD   BC, 6
                 ADD  HL, BC
                 LD   A, (ZL_PrePassBaseT)
@@ -1199,19 +1200,19 @@ ZL_BuildActiveChainCache:
 ; ZL_DrawCachedActiveChain — draw-pass по cache из ZL_BuildActiveChainCache.
 ; Для каждого шара: matrix bucket + handle select + cell + vertex2f.
 ; Стоимость ~52 байта RAM_CMD/шар × 85 = ~4.4KB/кадр (FIFO).
-; Dual handle: cell<128 → handle 0; cell>=128 → handle 9 (colors 4-5).
+; Двойной handle: cell<128 → handle 0; cell>=128 → handle 9 (colors 4-5).
 ; ============================================================================
 ZL_DrawCachedActiveChain:
                 LD   A, (ZL_BallCount)
                 OR   A
                 RET  Z
-                ; Init sentinels: tangent #01 never matches quantized buckets,
-                ; handle #FF forces first BITMAP_HANDLE emit.
+                ; Инициализировать sentinels: tangent #01 никогда не совпадает с quantized buckets,
+                ; handle #FF принудительно эмитит первый BITMAP_HANDLE.
                 LD   A, #01
                 LD   (ZL_TmpLastTangent), A
                 LD   A, #FF
-                LD   (ZL_TmpLastHandle), A              ; lazy BITMAP_HANDLE switch
-                LD   HL, .PBCheckHeadAbsorb             ; no active match-3 fade: skip ExplodeFrame[] read
+                LD   (ZL_TmpLastHandle), A              ; lazy-переключение BITMAP_HANDLE
+                LD   HL, .PBCheckHeadAbsorb             ; нет активного match-3 fade: не читать ExplodeFrame[]
                 LD   A, (VDC_ExplodeActive)
                 OR   A
                 JR   Z, .PBExplodePtrReady
@@ -1255,17 +1256,17 @@ ZL_DrawCachedActiveChain:
                 POP  IX
                 POP  BC
 .PBRoomOk:
-                LD   A, (IX+1)                        ; cell (+1) — 0xFF = gap marker
+                LD   A, (IX+1)                        ; cell (+1) — 0xFF = маркер gap
                 CP   #FF
                 JP   Z, .PBSkip                       ; (JR out of range — body grew)
 .PBPassGate:    LD   HL, (ZL_PassFilterPtr)
                 JP   (HL)
 .PBPassOver:    LD   A, (IX+6)
                 AND  ZL_TRACKF_TUNNEL
-                JP   NZ, .PBSkip                      ; pass 2: tunnel balls stay under the top mask
+                JP   NZ, .PBSkip                      ; pass 2: tunnel balls остаются под top mask
                 LD   A, (IX+6)
                 AND  ZL_TRACKF_DRAW_ABOVE
-                JP   Z, .PBSkip                       ; pass 2: only priority/above balls
+                JP   Z, .PBSkip                       ; pass 2: только priority/above balls
                 JR   .PBPassOk
 .PBPassSkipTunnel:
                 LD   A, (IX+6)
@@ -1277,7 +1278,7 @@ ZL_DrawCachedActiveChain:
                 JR   NZ, .PBPassOk                    ; tunnel wins over drawAbove
                 LD   A, (IX+6)
                 AND  ZL_TRACKF_DRAW_ABOVE
-                JP   NZ, .PBSkip                      ; pass 1: only under/top-covered balls
+                JP   NZ, .PBSkip                      ; pass 1: только under/top-covered balls
                 JR   .PBPassOk
 .PBPassOk:
                 LD   A, C
@@ -1294,20 +1295,20 @@ ZL_DrawCachedActiveChain:
                 LD   A, (FT.Coprocessor.BufferPtr + 1)
                 CP   #58                              ; BufferPtr ≥ #5800 → запас 1024б на хвост кадра
                 JP   NC, .PBNoMatrix
-                ; --- Skip matrix emit если quantized tangent совпал с предыдущим
+                ; --- Пропустить matrix emit, если quantized tangent совпал с предыдущим
                 ; emit'ом (соседи цепи часто в одном bucket'е).
                 LD   A, (IX+0)
                 LD   HL, ZL_TmpLastTangent
                 CP   (HL)
-                JR   Z, .PBNoMatrix                   ; same bucket → reuse matrix
-                LD   (HL), A                          ; save new emitted tangent
-                ; --- Emit matrix: current PALETTED4444 path uses baked TRANSFORM LUT ---
+                JR   Z, .PBNoMatrix                   ; тот же bucket → повторно использовать matrix
+                LD   (HL), A                          ; сохранить новый emitted tangent
+                ; --- Emit matrix: текущий PALETTED4444 path использует baked TRANSFORM LUT ---
                 LD   A, (ZL_TmpLastTangent)
                 CALL ZL_EmitBallMatrixFromBRAD
 .PBNoMatrix:
-                ; normal ARGB4 and L19 72-cell PALETTED4444 both use handle 0.
+                ; normal ARGB4 и L19 72-cell PALETTED4444 оба используют handle 0.
                 XOR  A
-.PBHSet:        ; lazy: skip BITMAP_HANDLE emit если same как previous ball
+.PBHSet:        ; lazy: пропустить BITMAP_HANDLE emit, если same как previous ball
                 LD   HL, ZL_TmpLastHandle
                 CP   (HL)
                 JR   Z, .PBHandleSame
@@ -1348,7 +1349,7 @@ ZL_DrawCachedActiveChain:
                 JR   NZ, .PBNormalDraw
                 LD   A, (VDC_KzFrame)
                 CP   11
-                JR   NZ, .PBNormalDraw                ; rush-to-killzone: no fade until the head reaches the skull
+                JR   NZ, .PBNormalDraw                ; rush-to-killzone: fade только когда head дошёл до skull
                 LD   A, (VDC_HeadAbsorbAlpha)
                 CP   255
                 JR   Z, .PBNormalDraw                 ; absorb not visually fading yet
@@ -1513,7 +1514,7 @@ ZL_DrawFrogLayer:
                 RET
 
 ZL_AfterChains:
-                CALL ZL_DrawFrogLayer                 ; frog/bullet are above tunnel top-cover
+                CALL ZL_DrawFrogLayer                 ; frog/bullet находятся выше tunnel top-cover
 
                 LD   A, (VDC_GameState)
                 CP   VDC_STATE_WIN
@@ -1560,9 +1561,9 @@ ZL_AfterChains:
                 ; Cursor рисуем по SMOOTHED мыши (как и Frog_Angle aim).
                 ; 2026-05-16: переключено с raw на smoothed чтобы устранить
                 ; wrong-target glitch — раньше курсор показывал raw position
-                ; (instant), а bullet летел в направлении smoothed (alpha=1/8
-                ; lag ~7 frames). Юзер видел курсор в новой точке, bullet
-                ; летел в старую = "не туда". Теперь курсор и aim sync.
+                ; (мгновенно), а bullet летел в направлении smoothed (alpha=1/8,
+                ; задержка ~7 frames). Юзер видел курсор в новой точке, bullet
+                ; летел в старую = "не туда". Теперь курсор и aim синхронны.
                 ; Vertex2f((SmoothX - CURSOR_TIP_X)*16, (SmoothY - CURSOR_TIP_Y)*16)
                 LD   HL, (ZL_SmoothX)
                 LD   DE, CURSOR_TIP_X
@@ -1609,8 +1610,8 @@ ZL_AfterChains:
 ; ----------------------------------------------------------------------------
 ; (ZL_StableBallBucket удалён 2026-05-18 — per-ball loop не использует buckets.)
 
-; ZL_EmitBitmapHandle: emit DL command BITMAP_HANDLE(A) runtime.
-;   In:  A = handle (0..31). Out: nothing. Clobbers AF, BC, DE, HL.
+; ZL_EmitBitmapHandle: runtime emit DL command BITMAP_HANDLE(A).
+;   Вход:  A = handle (0..31). Выход: нет. Клобает AF, BC, DE, HL.
 ZL_EmitBitmapHandle:
                 AND  #1F
                 LD   E, A
@@ -1618,9 +1619,9 @@ ZL_EmitBitmapHandle:
                 LD   BC, #0500
                 JP   FT.Coprocessor.Command_BCDE
 
-; ZL_EmitBallHandle: setup ball atlas — emit BITMAP_HANDLE + BITMAP_SOURCE.
-;   In:  A = 0 (handle 0, cells 0..127) или 9 (handle 9, cells 128..191).
-;   Clobbers AF, BC, DE, HL.
+; ZL_EmitBallHandle: настроить atlas шаров — emit BITMAP_HANDLE + BITMAP_SOURCE.
+;   Вход:  A = 0 (handle 0, cells 0..127) или 9 (handle 9, cells 128..191).
+;   Клобает AF, BC, DE, HL.
 ZL_EmitBallHandle:
                 PUSH AF
                 CALL ZL_EmitBitmapHandle
@@ -1644,12 +1645,12 @@ ZL_EmitBallLayoutCurrent:
                 FT_BitmapLayout FT_PALETTED4444, ZL_BALL_L19_W, ZL_BALL_L19_H
                 RET
 
-; In: A=color 0..5. Out: A=FT bitmap handle for current balls atlas.
+; Вход: A=color 0..5. Выход: A=FT bitmap handle для текущего atlas шаров.
 ZL_BallHandleFromColor:
                 XOR  A
                 RET
 
-; In: A=color 0..5. Out: A=local cell for held/next/bullet ball.
+; Вход: A=color 0..5. Выход: A=local cell для held/next/bullet ball.
 ZL_BallNeutralCellFromColor:
                 LD   E, A
                 LD   A, (ZL_BallsPalettedActive)
@@ -1666,9 +1667,9 @@ ZL_BallNeutralCellFromColor:
                 RET
 
 ; ZL_EmitBallColorRGB: emit COLOR_RGB(table[A]) для tinting L8 ball.
-;   In: A = color index (0..5). Out: nothing. Clobbers AF, BC, DE, HL.
+;   Вход: A = color index (0..5). Выход: нет. Клобает AF, BC, DE, HL.
 ZL_EmitBallColorRGB:
-                AND  #07                              ; clamp 0..7
+                AND  #07                              ; ограничить 0..7
                 LD   E, A
                 ADD  A, A                             ; *2
                 ADD  A, E                             ; *3
@@ -1678,7 +1679,7 @@ ZL_EmitBallColorRGB:
                 LD   C, (HL) : INC HL                 ; R
                 LD   D, (HL) : INC HL                 ; G — wait, ColorRGB ждёт C=R, D=G, E=B.
                 LD   E, (HL)                          ; B
-                ; FT.Coprocessor.ColorRGB: in C=R, D=G, E=B → emits COLOR_RGB
+                ; FT.Coprocessor.ColorRGB: вход C=R, D=G, E=B → эмитит COLOR_RGB
                 JP   FT.Coprocessor.ColorRGB
 
 ZL_BallColorRGB:
@@ -1833,9 +1834,9 @@ ZL_AimUpdate:
                 ADD  A, ZL_KBD_STEP
                 LD   (Frog_Angle), A
 
-                ; --- 2. Detect mouse motion (|raw - prev| ≥ ZL_MOTION_THR) ---
+                ; --- 2. Детект mouse motion (|raw - prev| ≥ ZL_MOTION_THR) ---
 .check_motion:  XOR  A
-                LD   (ZL_MouseMoved), A               ; default = 0
+                LD   (ZL_MouseMoved), A               ; по умолчанию = 0
                 LD   HL, (Input.Mouse.PositionX)
                 LD   DE, (ZL_PrevRawX)
                 AND  A
@@ -1855,7 +1856,7 @@ ZL_AimUpdate:
                 SBC  HL, DE
                 JR   C, ZL_FmEnRestore                ; |dy| < threshold → нет motion
 
-.motion:        ; Mouse moved: ставим flag, reset grace counter, сохраняем prev_raw.
+.motion:        ; Mouse moved: ставим flag, сбрасываем grace counter, сохраняем prev_raw.
                 LD   A, 1
                 LD   (ZL_MouseMoved), A
                 LD   A, 8                             ; grace: после motion stop ещё 8 кадров обновлять angle (Smooth догоняет raw)
@@ -1871,11 +1872,11 @@ ZL_AimUpdate:
 ZL_FmEnRestore: RET
 
 ; ----------------------------------------------------------------------------
-; ZL_Mul16x8 — unsigned 16x8 multiply, low 16 bits of result.
-;   In:  HL = multiplicand (unsigned 16-bit), A = multiplier (unsigned 8-bit)
-;   Out: HL = (HL_in * A_in) & #FFFF
-;   Scratch: BC, A, F. ~14 байт, ~155 t-states avg.
-;   Используется для runtime K в spin formula (по 1 вызову на шар цепи).
+; ZL_Mul16x8 — unsigned 16x8 multiply, младшие 16 бит результата.
+;   Вход: HL = multiplicand (unsigned 16-bit), A = multiplier (unsigned 8-bit)
+;   Выход: HL = (HL_in * A_in) & #FFFF
+;   Рабочие: BC, A, F. ~14 байт, ~155 t-states avg.
+;   Используется для runtime K в формуле spin (по 1 вызову на шар цепи).
 ; ----------------------------------------------------------------------------
 ZL_Mul16x8:     LD   C, L : LD B, H                   ; BC = multiplicand
                 LD   HL, 0                             ; HL = accumulator
@@ -1889,10 +1890,10 @@ ZL_Mul16x8:     LD   C, L : LD B, H                   ; BC = multiplicand
                 RET
 
 ; ----------------------------------------------------------------------------
-; ZL_SpinPhase — A = ((t * ZL_SPIN_K_DEFAULT) >> 8) & ZL_SPIN_MASK.
+; ZL_SpinPhase — вычисляет A = ((t * ZL_SPIN_K_DEFAULT) >> 8) & ZL_SPIN_MASK.
 ;   Вход: HL = VDC_LastT. Выход: A = spin phase. Scratch: BC, DE, HL, AF.
-;   Current ARGB4 build имеет 16 phases/K=81, поэтому избегаем 8-iteration generic multiply
-;   в per-ball render hot path. Если compile-time K изменится, fallback безопасен.
+;   Текущий ARGB4 build имеет 16 phases/K=81, поэтому избегаем 8-iteration generic multiply
+;   в горячем per-ball render path. Если compile-time K изменится, fallback безопасен.
 ; ----------------------------------------------------------------------------
 ZL_SpinPhase:
                 if ZL_SPIN_K_DEFAULT = 81
@@ -1919,7 +1920,7 @@ ZL_SpinPhase:
 
 ZL_SpinPhase12:
                 ; q = floor(t*61/256) mod 12.
-                ; Since 61 mod 12 = 1:
+                ; Так как 61 mod 12 = 1:
                 ;   (H*61 + floor(L*61/256)) mod 12 = (H + floor(L*61/256)) mod 12.
                 LD   C, H                              ; C = high(t)
                 LD   A, L
@@ -1962,7 +1963,7 @@ ZL_InitSpin12LowLut:
 ;  DMA-путь отправки кадра вместо медленного OTIR в сценах меню.]
 
 ; ----------------------------------------------------------------------------
-; ZL_AbsHL — HL = |HL| (16-bit signed → unsigned magnitude).
+; ZL_AbsHL — HL = |HL| (16-bit signed → unsigned magnitude; модуль).
 ; ----------------------------------------------------------------------------
 ZL_AbsHL:       BIT  7, H
                 RET  Z
@@ -1973,9 +1974,9 @@ ZL_AbsHL:       BIT  7, H
 
 
 ; ----------------------------------------------------------------------------
-; ZL_SmoothMouse — low-pass filter disabled:
-;   smoothed coordinates mirror raw mouse position each frame.
-; Latency from software filtering is 0 frames; FT812 frame/swap latency remains.
+; ZL_SmoothMouse — low-pass filter выключен:
+;   smoothed coordinates каждый кадр равны raw mouse position.
+; Latency от software filtering = 0 кадров; FT812 frame/swap latency остаётся.
 ; ----------------------------------------------------------------------------
 ZL_SmoothMouse:
                 LD   BC, (Input.Mouse.PositionX)
@@ -1992,20 +1993,20 @@ ZL_SmoothMouse:
 ZL_FrameCounter:DEFW 0
 ZL_PrevRawX:    DEFW 512                              ; raw mouse prev — для motion detection (центр 1024×768)
 ZL_PrevRawY:    DEFW 384
-ZL_MouseMoved:  DEFB 0                                ; 0=stationary, 1=moved (≥THR per axis)
-ZL_MotionGrace: DEFB 0                                ; frames left для догоняющего Smooth после mouse motion
+ZL_MouseMoved:  DEFB 0                                ; 0=stationary, 1=moved (≥THR по axis)
+ZL_MotionGrace: DEFB 0                                ; осталось frames для догоняющего Smooth после mouse motion
 ZL_ChainHSA:    DEFW 0                                ; head sample на треке
 ZL_ChainTick:   DEFB 0                                ; subdivider 4 для медленного движения
 ZL_ColorIdx:    DEFB 0                                ; текущий cell для CELL()-эмита в цепи
 ZL_TmpFrame:    DEFB 0                                ; cell/spin frame scratch (chain rendering)
 ZL_TmpSlotIdx:  DEFB 0                                ; текущий VDC slot index в prepass
-ZL_TmpTrackFlags: DEFB 0                              ; track flags captured from VDC_LastTrackFlags
-ZL_ExplodeCheckPtr: DEFW 0                            ; draw hot-path gate for match-3 fade
+ZL_TmpTrackFlags: DEFB 0                              ; track flags, снятые из VDC_LastTrackFlags
+ZL_ExplodeCheckPtr: DEFW 0                            ; gate горячего draw path для match-3 fade
 ZL_ChainDrawPass: DEFB 0                              ; 0=all, 1=under top layer, 2=above top layer
-ZL_TangentQuantMask: DEFB #F0                         ; cache-build mask: #F0 normal, #E0 for full chains
-ZL_TangentQuantAdd:  DEFB #08                         ; addend for round-to-nearest quantization
-ZL_PrePassBaseT: DEFW 0                               ; running (HSA-i)*CELL_SIZE+HSub during chain cache build
-ZL_TopMaskUploadedLevel: DEFB #FF                     ; current level whose tunnel top masks are in RAM_G
+ZL_TangentQuantMask: DEFB #F0                         ; cache-build mask: #F0 normal, #E0 для полных цепей
+ZL_TangentQuantAdd:  DEFB #08                         ; addend для round-to-nearest quantization
+ZL_PrePassBaseT: DEFW 0                               ; running (HSA-i)*CELL_SIZE+HSub во время build cache цепи
+ZL_TopMaskUploadedLevel: DEFB #FF                     ; текущий уровень, чьи tunnel top masks лежат в RAM_G
 ZL_TopMaskCount: DEFB 0
 ZL_TopMaskTablePtr: DEFW 0
 ZL_TopMaskSrcPage: DEFB 0
@@ -2018,23 +2019,23 @@ ZL_TmpBallY:    DEFW 0                                ; chain render: текущ
 ZL_TmpAngleByte:DEFB 0                                ; chain render: combined rotation byte
 ZL_SpinK:       DEFB ZL_SPIN_K_DEFAULT                ; runtime spin multiplier (per-level)
 ; [ZL_CmdDmaWordsHi/Lo переехали в shared_render.asm вместе с DMA-функцией]
-ZL_BallCount:   DEFB 0                                ; cached VDC_SlotsLen для bucket prepass
-ZL_TmpBucket:   DEFB 0                                ; current bucket в outer loop
-ZL_TmpLastTangent: DEFB 0                             ; per-ball loop: last emitted quantized tangent
-ZL_TmpLastHandle:  DEFB 0xFF                          ; lazy BITMAP_HANDLE — last emitted ball handle (0/9, #FF=reset)
-ZL_BallRotationDisabled: DEFB 0                       ; pause/dialog guard: skip per-ball matrix state
-ZL_BallsPalettedActive: DEFB 0                        ; 1: use global native 51px PALETTED4444 balls atlas
-ZL_HeavyTunnelDual: DEFB 0                            ; heavy level: second chain or current level has top mask
-ZL_HasTopMaskLevel: DEFB 0                            ; current level has tunnel top-mask: disable ball anim/rotation
-ZL_HeavyBallCount: DEFB 0                             ; dual heavy levels use chain1+chain2 count for threshold
-ZL_Chain1BallCount: DEFB 0                            ; prepared top-mask chain1 cache count
-ZL_Chain2BallCount: DEFB 0                            ; prepared top-mask chain2 cache count
+ZL_BallCount:   DEFB 0                                ; кэш VDC_SlotsLen для bucket prepass
+ZL_TmpBucket:   DEFB 0                                ; текущий bucket во внешнем loop
+ZL_TmpLastTangent: DEFB 0                             ; per-ball loop: последний emitted quantized tangent
+ZL_TmpLastHandle:  DEFB 0xFF                          ; lazy BITMAP_HANDLE — последний emitted ball handle (0/9, #FF=reset)
+ZL_BallRotationDisabled: DEFB 0                       ; pause/dialog guard: пропустить per-ball matrix state
+ZL_BallsPalettedActive: DEFB 0                        ; 1: использовать global native 51px PALETTED4444 balls atlas
+ZL_HeavyTunnelDual: DEFB 0                            ; heavy level: есть second chain или текущий level имеет top mask
+ZL_HasTopMaskLevel: DEFB 0                            ; текущий level имеет tunnel top-mask: отключить ball anim/rotation
+ZL_HeavyBallCount: DEFB 0                             ; dual heavy levels используют chain1+chain2 count для threshold
+ZL_Chain1BallCount: DEFB 0                            ; подготовленный top-mask chain1 cache count
+ZL_Chain2BallCount: DEFB 0                            ; подготовленный top-mask chain2 cache count
 ZL_CacheBasePtr: DEFW 0                               ; active per-ball cache base
 ZL_CacheWPtr:   DEFW 0                                ; write ptr в prepass
-ZL_PassFilterPtr: DEFW 0                              ; draw-pass filter target for cached chain loop
+ZL_PassFilterPtr: DEFW 0                              ; цель draw-pass filter для loop cached chain
 ; (WIN-частицы хранятся резидентно в VDC_WinPrtcl; рабочих ZL-переменных нет.)
                 ; Per-ball cache: tangent, cell, Vx_lo, Vx_hi, Vy_lo, Vy_hi, flags = 7 bytes.
-                ; bucket = #FF → skip (gap/off-track).
+                ; bucket = #FF → пропуск (gap/off-track).
                 ; Размещён в свободной зоне slot 1 ниже Core (page 5 #4000-#5FFF),
                 ; чтобы per-ball cache не раздувал Core за границу 8 КБ (#7FFF).
 ZL_BALL_CACHE_ADDR EQU #4100
@@ -2053,9 +2054,9 @@ ZL_BALL_CACHE2_END EQU ZL_BALL_CACHE2_ADDR + ZL_BALL_CACHE_BYTES
 ; В диагностической сборке сразу после cache2 начинается circular RAM event log.
 
 ; ----------------------------------------------------------------------------
-; ZL_ChainMatrixLUT — pre-baked rotation matrices.
-; Каждый bucket = 24 байта = 6 BITMAP_TRANSFORM_A..F opcodes. Generated by
-; make_chain_matrix_lut.py. Bypass FT812 coprocessor — LDIR прямо в CMD буфер.
+; ZL_ChainMatrixLUT — заранее запечённые rotation matrices.
+; Каждый bucket = 24 байта = 6 BITMAP_TRANSFORM_A..F opcodes. Сгенерировано
+; make_chain_matrix_lut.py. Обход FT812 coprocessor — LDIR прямо в CMD буфер.
 ; ----------------------------------------------------------------------------
                 if BALLS_ARGB4_ENABLED
 ZL_ChainMatrixLUT:
@@ -2064,8 +2065,8 @@ ZL_ChainMatrixLUT_END:
                 endif
 ZL_CHAIN_MATRIX_LUT_STRIDE EQU 24
 
-; Current PALETTED4444 ball atlas: native 51x51 cells, pivot 25.5px.
-; Angle is quantized by AND #F0, so only 16 buckets are needed.
+; Текущий PALETTED4444 ball atlas: native 51x51 cells, pivot 25.5px.
+; Angle квантуется через AND #F0, поэтому нужны только 16 buckets.
 ZL_ChainMatrixL19LUT:
                 INCBIN "Graphics/Converted/chain_matrix_lut_l19_51_16.bin"
 ZL_ChainMatrixL19LUT_END:
@@ -2074,7 +2075,7 @@ ZL_ChainMatrixL19LUT_END:
 ; ZL_EmitBallMatrixFromBRAD — LDIR matrix block в CMD буфер.
 ;   In: A = BRAD (0..255), любые битья. Внутри квантуется к 16 BRAD.
 ;   Out: matrix эмитнут в FT BufferPtr.
-;   Clobbers: AF, BC, DE, HL.
+;   Клобает: AF, BC, DE, HL.
 ; Reusable между chain rendering и FrogBallNow.
 ; ----------------------------------------------------------------------------
 ZL_EmitBallMatrixFromBRAD:

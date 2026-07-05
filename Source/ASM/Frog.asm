@@ -14,9 +14,9 @@
 ;   recoil = sin(tick); пока recoil ≥ 0:
 ;     tongueExpand = 24 - (recoil * 24) >> 7         ; язык втянут в рот
 ;     ballExpand   = min(32, ballExpand + 2)         ; вылет шара
-;     pos.x = posStart.x - (cos(angle) * recoil) / 2048    ; ≈ -dir*recoil*8/128
+;     pos.x = posStart.x - (cos(angle) * recoil) / 2048    ; смещение назад, ≈ -dir*recoil*8/128
 ;     pos.y = posStart.y - (sin(angle) * recoil) / 2048
-;   recoil < 0 → end: tongueExpand=24, ballExpand=32, pos=posStart, isFire=0.
+;   recoil < 0 → конец: tongueExpand=24, ballExpand=32, pos=posStart, isFire=0.
 ;
 ; FT812 BITMAP_HANDLE: 2=body, 4=plate, 5=tongue.
 ; Формат слоя выбирается через FROG_ARGB4_ENABLED в main.asm.
@@ -50,7 +50,7 @@ FROG_RECOIL_STEP  EQU 10                                ; BRAD/frame; π/0.25 �
 
 FROG_BALL_IDLE    EQU 38                                ; 1024×768: HD idle 24 ×1.6 (орбита held-ball от центра 195px-тела)
 FROG_NEXT_OFFSET  EQU 45                                ; 1024×768: HD 28 ×1.6 — окно спины (next ball) уехало ×1.6
-FROG_BALL_W       EQU 32                                ; native classic cell ball atlas 32×32
+FROG_BALL_W       EQU 32                                ; native classic cell атлас шаров 32×32
 FROG_BALL_DST_W   EQU 51                                ; 1024×768: экранный размер = round(32×8/5) (как chain ball)
 FROG_BALL_DST_HALF EQU 26                               ; round(51/2) — центр draw-rect'а
 
@@ -107,7 +107,7 @@ Frog_Update:      LD   A, (ZL_MouseMoved)
                   LD   (ZL_MotionGrace), A             ; tick down
 .fu_compute:      CALL Frog_ComputeAngle
 .fu_skip:         ; Refilter здесь теперь только sanitizer: валидные цвета лягушки
-                  ; не меняются без выстрела, invalid значения чинятся в PLAY.
+                  ; не меняются без выстрела, некорректные значения чинятся в PLAY.
                   ; INTRO/PREVIEW/CLOSING/ABSORB/GAMEOVER → колайс жабы остаются стабильные.
                   LD   A, (VDC_GameState)
                   OR   A
@@ -138,7 +138,7 @@ Frog_FireKeyboard:
                   LD   A, (Frog_IsFire)
                   OR   A
                   RET  NZ                              ; уже стреляем (recoil идёт)
-                  ; Start fire: тот же порядок state updates, что в Frog_HandleMouse.
+                  ; Старт выстрела: тот же порядок state updates, что в Frog_HandleMouse.
                   CALL Bullet_Spawn                    ; spawn с CURRENT BallColor (= шар изо рта)
                   RET  C
                   ; Promote фильтруется только в момент выстрела: показанный
@@ -146,7 +146,7 @@ Frog_FireKeyboard:
                   ; цветом из активной цепи, если старый next уже исчез.
                   LD   A, (Frog_NextBallColor)
                   CALL Frog_FilteredRandomColor
-                  LD   (Frog_BallColor), A             ; promote/refilter next → ball-now
+                  LD   (Frog_BallColor), A             ; promote/refilter next → текущий шар
                   CALL Frog_NewNextColor               ; новый filtered NextBallColor
                   LD   A, 1
                   LD   (Frog_IsFire), A
@@ -191,7 +191,7 @@ Frog_HandleMouse:
                   LD   A, (Frog_IsFire)
                   OR   A
                   RET  NZ                               ; уже стреляем
-                  ; Start fire (HD): promote nextBall → ballColor, new next 0..3,
+                  ; Старт выстрела (HD): promote nextBall → ballColor, новый next 0..3,
                   ; ballExpand=0, recoilTick=0, isFire=1.
                   CALL Bullet_Spawn                    ; spawn с CURRENT BallColor (= шар изо рта)
                   RET  C
@@ -200,7 +200,7 @@ Frog_HandleMouse:
                   ; цветом из активной цепи, если старый next уже исчез.
                   LD   A, (Frog_NextBallColor)
                   CALL Frog_FilteredRandomColor
-                  LD   (Frog_BallColor), A             ; promote/refilter next → ball-now
+                  LD   (Frog_BallColor), A             ; promote/refilter next → текущий шар
                   CALL Frog_NewNextColor               ; новый filtered NextBallColor
                   LD   A, 1
                   LD   (Frog_IsFire), A
@@ -296,7 +296,7 @@ Frog_TickRecoil:
 
 
 ; ----------------------------------------------------------------------------
-; Frog_LookupSin — A = Frog_SinTable[A]. Clobbers D, E, HL.
+; Frog_LookupSin — A = Frog_SinTable[A]. Портит D, E, HL.
 ; ----------------------------------------------------------------------------
 Frog_LookupSin:   LD   HL, Frog_SinTable
                   LD   D, 0 : LD E, A
@@ -306,7 +306,7 @@ Frog_LookupSin:   LD   HL, Frog_SinTable
 
 
 ; ----------------------------------------------------------------------------
-; Frog_SignExtendA_HL — HL = sign-extended A.
+; Frog_SignExtendA_HL — HL = A с расширенным знаком.
 ; ----------------------------------------------------------------------------
 Frog_SignExtendA_HL:
                   LD   H, 0
@@ -318,9 +318,9 @@ Frog_SignExtendA_HL:
 
 
 ; ----------------------------------------------------------------------------
-; Frog_SignedScale_div128 — signed (B*C) / 128, range ±127.
-;   In:  B = signed multiplier, C = unsigned (0..127, обычно 0..24)
-;   Out: A = signed result
+; Frog_SignedScale_div128 — знаковое (B*C) / 128, диапазон ±127.
+;   Вход: B = знаковый множитель, C = unsigned (0..127, обычно 0..24)
+;   Выход: A = знаковый результат
 ; ----------------------------------------------------------------------------
 Frog_SignedScale_div128:
                   LD   A, B
@@ -343,9 +343,9 @@ Frog_SignedScale_div128:
 
 
 ; ----------------------------------------------------------------------------
-; Frog_SignedScale_div2048 — signed (B*C) / 2048, range ±8.
-;   In:  B = signed multiplier (cos/sin), C = unsigned (0..127, recoil)
-;   Out: A = signed result (-8..+8 px)
+; Frog_SignedScale_div2048 — знаковое (B*C) / 2048, диапазон ±8.
+;   Вход: B = знаковый множитель (cos/sin), C = unsigned (0..127, recoil)
+;   Выход: A = знаковый результат (-8..+8 px)
 ; ----------------------------------------------------------------------------
 Frog_SignedScale_div2048:
                   LD   A, B
@@ -368,7 +368,7 @@ Frog_SignedScale_div2048:
 
 
 ; ----------------------------------------------------------------------------
-; Frog_Mul8x8u — D × E → HL (unsigned 16-bit). Clobbers A, B, DE.
+; Frog_Mul8x8u — D × E → HL (unsigned 16-bit). Портит A, B, DE.
 ; ----------------------------------------------------------------------------
 Frog_Mul8x8u:     LD   A, D
                   LD   HL, 0
@@ -557,7 +557,7 @@ Frog_PlateMatrixBlock:
 ; LUT. Математика валидирована в Source/OTHER/sim_frog_matrix.py (int=float ±0.22px):
 ;   A=E=(cos·323)>>8, B=(sin·323)>>8, D=-B  (cos/sin в *127 из Frog_SinTable)
 ;   C=15616-(cos+sin)·123, F=15616-(cos-sin)·123   (15616=61·256, 123≈61·256/127)
-;   In: A = angle BRAD, вызывающий уже добавил face-offset.
+;   Вход: A = angle BRAD, вызывающий уже добавил face-offset.
 ; ----------------------------------------------------------------------------
 Frog_EmitFrogMatrix:
                   LD   C, A
@@ -632,7 +632,7 @@ Frog_EmitMatrixBlock:
                   LD   (FT.Coprocessor.BufferPtr), DE
                   RET
 
-; Frog_Mul323Sh8 — In A=signed(-127..127), Out HL=signed A·323/256 (точно).
+; Frog_Mul323Sh8 — Вход A=signed(-127..127), выход HL=signed A·323/256 (точно).
 ; 323/256 = 1.2617 ≈ 160/127: при cos=127 даёт РОВНО 160 (канон 1/1.6 = 160/256).
 ; Прежний шорткат A·1.25 давал 158 → эффективный масштаб 256/158 = 1.6203 →
 ; спрайт 122px рисовался на 197.7px при окне 195 → тарелка резалась справа/снизу.
@@ -658,7 +658,7 @@ Frog_Mul323Sh8:   LD   C, A                            ; C = исходное si
                   LD   H, A                            ; HL = -magnitude
                   RET
 
-; Frog_StoreX17 — In A=opcode, HL=signed value → cache (op<<24)|(val&0x1FFFF).
+; Frog_StoreX17 — Вход A=opcode, HL=signed value → cache (op<<24)|(val&0x1FFFF).
 Frog_StoreX17:    LD   B, A
                   LD   C, 0
                   BIT  7, H : JR Z, .sx17p
@@ -666,8 +666,8 @@ Frog_StoreX17:    LD   B, A
 .sx17p:           EX   DE, HL                          ; DE = value low16
                   JP   Frog_StoreMatrixWord
 
-; Frog_StoreCF — In A=opcode, HL=(cos±sin) signed.
-; Stores C/F = 15616 - HL*123 as op<<24 | signed24.
+; Frog_StoreCF — Вход A=opcode, HL=(cos±sin) signed.
+; Сохраняет C/F = 15616 - HL*123 как op<<24 | signed24.
 Frog_StoreCF:     LD   (Frog_TmpOp), A
                   CALL Frog_Mul123                     ; HL = HL·123
                   LD   A, H : ADD A, A : SBC A, A      ; A = sign byte of HL (0x00/0xFF)
@@ -678,7 +678,7 @@ Frog_StoreCF:     LD   (Frog_TmpOp), A
                   LD   A, (Frog_TmpOp) : LD B, A
                   JP   Frog_StoreMatrixWord
 
-; Frog_StoreMatrixWord — In BCDE = command word, appends to Frog_MatrixCacheWPtr.
+; Frog_StoreMatrixWord — вход BCDE = command word, добавляет в Frog_MatrixCacheWPtr.
 Frog_StoreMatrixWord:
                   LD   HL, (Frog_MatrixCacheWPtr)
                   LD   (HL), E : INC HL
@@ -688,7 +688,7 @@ Frog_StoreMatrixWord:
                   LD   (Frog_MatrixCacheWPtr), HL
                   RET
 
-; Frog_Mul123 — In HL=signed, Out HL=HL·123 (= 128·HL - 5·HL).
+; Frog_Mul123 — Вход HL=signed, выход HL=HL·123 (= 128·HL - 5·HL).
 Frog_Mul123:      LD   D, H : LD E, L                  ; DE = x
                   ADD  HL, HL : ADD HL, HL             ; 4x
                   ADD  HL, DE                          ; 5x
@@ -801,7 +801,7 @@ Frog_DrawNextBall:
                   ADD  HL, DE
                   LD   (Frog_TmpY), HL
 
-                  ; 1024×768: normal atlas needs scale(1.6); L19 native 51px uses identity.
+                  ; 1024×768: обычному атласу нужен scale(1.6); L19 native 51px использует identity.
                   CALL ZL_EmitBallStaticMatrixCurrent
                   LD   A, (Frog_NextBallColor)
                   CALL ZL_BallHandleFromColor
@@ -817,7 +817,7 @@ Frog_DrawNextBall:
 
 ; ----------------------------------------------------------------------------
 ; Frog_EmitVertex2f_Tmp_BallCentred — Vertex2f((TmpX-16)*16, (TmpY-16)*16)
-; для ball screen rect; центр берётся из TmpX/TmpY.
+; для экранного rect шара; центр берётся из TmpX/TmpY.
 ; ----------------------------------------------------------------------------
 Frog_EmitVertex2f_Tmp_BallCentred:
                   LD   HL, (Frog_TmpX)
@@ -876,7 +876,7 @@ Frog_TmpOp:        DEFB 0                               ; opcode для Frog_Emi
 Frog_TmpAE:        DEFW 0                               ; matrix A=E, scaled cos
 Frog_TmpB:         DEFW 0                               ; matrix B, scaled sin
 Frog_MatrixCacheValid: DEFB 0
-Frog_MatrixCacheAngle: DEFB 0                           ; last rotate matrix angle; plate uses static block
+Frog_MatrixCacheAngle: DEFB 0                           ; последний угол rotate matrix; plate использует static block
 Frog_MatrixCacheWPtr:  DEFW 0
 Frog_MatrixCacheBuf:   DEFS 24                          ; six BITMAP_TRANSFORM command words
 ; Frog_BallColor и Frog_NextBallColor живут в loader_resident.asm (resident Core).

@@ -22,7 +22,7 @@ VDC_DivHLbyA:
                 RET
 
 ; ============================================================================
-; VDC_RandomColor — LFSR Galois 16-bit (poly 0xB400). Out: A = 0..NUM_COLORS-1.
+; VDC_RandomColor — LFSR Galois 16-bit (poly 0xB400). Выход: A = 0..NUM_COLORS-1.
 ; Распределение: используем (rand8 * NUM_COLORS) >> 8 вместо AND 7 + clamp,
 ; иначе в 6-цветовом случае colors 0/1 встречаются 2× чаще остальных
 ; (8 mod 6 = 2 → дубли 6→0 и 7→1). Mul/shift даёт ≤1.4% bias.
@@ -42,14 +42,7 @@ Frog_ComputeAngle:
                   LD   A, H : CPL : LD H, A
                   LD   A, L : CPL : LD L, A
                   INC  HL
-.dx_pos:          ; Clamp |dx| до 255 (если H≠0 значит |dx|>255 → насыщать).  Без clamp
-                  ; truncate (LD C, L) даёт 0x39=57 для dx=313=0x139, swap-логика
-                  ; сходит с ума → frog дёргается у краёв экрана.
-                  LD   A, H
-                  OR   A
-                  JR   Z, .dx_clamped
-                  LD   L, 255
-.dx_clamped:      LD   C, L                            ; C = |dx| (true 8-bit clamp)
+.dx_pos:          PUSH HL                              ; сохранить полный |dx| на время вычитания dy
                   ; dy = SmoothY - PosStartY
                   LD   HL, (ZL_SmoothY)
                   LD   DE, (Frog_PosStartY)
@@ -61,11 +54,23 @@ Frog_ComputeAngle:
                   LD   A, H : CPL : LD H, A
                   LD   A, L : CPL : LD L, A
                   INC  HL
-.dy_pos:          LD   A, H
-                  OR   A
-                  JR   Z, .dy_clamped
-                  LD   L, 255
-.dy_clamped:      LD   E, L                            ; E = |dy| (true 8-bit clamp)
+.dy_pos:          LD   A, H                            ; H:E = full |dy|
+                  LD   E, L
+                  POP  HL
+                  LD   C, L                            ; D:C = full |dx|
+                  LD   D, H
+                  LD   H, A
+                  ; Общий scale обеих величин до 8 bit. Независимое насыщение
+                  ; ломает ratios дальних targets (600:300 -> 255:255).
+.scale_loop:      LD   A, D
+                  OR   H
+                  JR   Z, .scaled_8
+                  SRL  D
+                  RR   C
+                  SRL  H
+                  RR   E
+                  JR   .scale_loop
+.scaled_8:        ; C = scaled |dx|, E = scaled |dy|
                   ; swap = (|dy| > |dx|)
                   LD   A, E
                   CP   C
@@ -131,10 +136,10 @@ Frog_ComputeAngle:
 
 
 ; ----------------------------------------------------------------------------
-; Frog_Div16by8 — floor(E*128 / C) → A, for Frog_ComputeAngle ratio.
-;   In:  E = min(|dx|,|dy|), C = max(|dx|,|dy|), C > 0, E <= C.
-;   Out: A = 0..128. Preserves B (quadrant flags) and C.
-;   Fixed 7-step fractional division; avoids old subtract-loop worst case.
+; Frog_Div16by8 — floor(E*128 / C) → A для ratio в Frog_ComputeAngle.
+;   Вход: E = min(|dx|,|dy|), C = max(|dx|,|dy|), C > 0, E <= C.
+;   Выход: A = 0..128. Сохраняет B (quadrant flags) и C.
+;   Fixed 7-step fractional division; избегает старого worst case subtract-loop.
 ; ----------------------------------------------------------------------------
 Frog_Div16by8:    LD   A, E
                   OR   A
@@ -189,7 +194,7 @@ Frog_EmitRotateRaw:
 
 
 ; ----------------------------------------------------------------------------
-; Frog_EmitVertex2f_PosCentered — Vertex2f((PosX-61)*16, (PosY-61)*16).
+; Frog_EmitVertex2f_PosCentered — вывод Vertex2f((PosX-61)*16, (PosY-61)*16).
 ; Общая часть DrawPlate / DrawBody (рисуем в текущем pos).
 ; ----------------------------------------------------------------------------
 Frog_AtanTable:
@@ -229,7 +234,7 @@ ZL_EmitLoadId:  LD   DE, FT_CMD_LOADIDENTITY & #FFFF
 
 ; ----------------------------------------------------------------------------
 ; ZL_EmitTranslate — append cmd_translate(tx, ty) в CMD буфер.
-;   In:  HL = tx_int_px (signed 16), DE = ty_int_px (signed 16)
+;   Вход:  HL = tx_int_px (signed 16), DE = ty_int_px (signed 16)
 ;   Параметры передаются в FT812 как fixed-point 1/65536 px:
 ;   tx_subpx = tx_px * 65536 → low_word = 0, high_word = tx_px.
 ; ----------------------------------------------------------------------------
@@ -248,7 +253,7 @@ ZL_EmitTranslate:
 
 ; ----------------------------------------------------------------------------
 ; ZL_EmitRotate — append cmd_rotate(angle) в CMD буфер.
-;   In:  A = tangent byte 0..255 (256 = full circle)
+;   Вход: A = tangent byte 0..255 (256 = full circle)
 ;   Native sprite face direction в spritesheet — DOWN (0° = низ экрана).
 ;   tangent байт = atan2(dy, dx): 0=right, 64=down, 128=left, 192=up.
 ;   Чтобы face шёл по track-направлению, поворачиваем на (tangent - 64),
@@ -306,8 +311,8 @@ DrawBlackTransitionFrame:
                 ; на перезаписываемые битмапы больше не активен. INT_FLAGS здесь
                 ; не читать: на реальном FT812 это clear-on-read, второй poll мог
                 ; бы съесть событие следующего MenuSwapFrame.
-                ; Wait bounded: if Unreal/FT misses the edge, do not hang forever
-                ; on a black transition frame.
+                ; Bounded wait: если Unreal/FT пропустит edge, не висеть вечно
+                ; на black transition frame.
                 LD   L, 64
 .wait_black:    FT_RD_REG8 FT_REG_DLSWAP
                 AND  3
@@ -403,10 +408,10 @@ ZL_CmdDmaWordsHi: DEFB 0
 ZL_CmdDmaWordsLo: DEFB 0
 
 ; ----------------------------------------------------------------------------
-; ZL_FT_CMD_Write_PIO — diagnostic non-DMA sender for the same host CMD buffer.
-; Same caller contract as ZL_FT_CMD_Write_DMA: previous chunk/frame is drained,
-; CMD_ADDRESS_PTR..BufferPtr fits in FT812 command FIFO. Difference: bytes go
-; through CPU OTIR/FT.WriteMem instead of TS-Config DMA_RAM_SPI.
+; ZL_FT_CMD_Write_PIO — diagnostic non-DMA sender для того же host CMD buffer.
+; Контракт caller тот же, что у ZL_FT_CMD_Write_DMA: previous chunk/frame drained,
+; CMD_ADDRESS_PTR..BufferPtr помещается в FT812 command FIFO. Отличие: bytes идут
+; через CPU OTIR/FT.WriteMem вместо TS-Config DMA_RAM_SPI.
 ; ----------------------------------------------------------------------------
 ZL_FT_CMD_Write_PIO:
                 FT_CMD_Count                            ; BC = byte count
@@ -435,6 +440,6 @@ ZL_FT_CMD_Write_PIO:
 ; ----------------------------------------------------------------------------
 ZL_SmoothX:     DEFW 512                              ; центр 1024×768
 ZL_SmoothY:     DEFW 384
-ZL_TmpTx:       DEFW 0                                ; ZL_EmitTranslate scratch X
-ZL_TmpTy:       DEFW 0                                ; ZL_EmitTranslate scratch Y
-ZL_TmpAngle:    DEFW 0                                ; ZL_EmitRotate scratch angle
+ZL_TmpTx:       DEFW 0                                ; scratch X для ZL_EmitTranslate
+ZL_TmpTy:       DEFW 0                                ; scratch Y для ZL_EmitTranslate
+ZL_TmpAngle:    DEFW 0                                ; scratch angle для ZL_EmitRotate

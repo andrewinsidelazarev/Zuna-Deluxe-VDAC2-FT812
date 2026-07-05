@@ -41,6 +41,8 @@ def code_blob_for_symbol(sym: dict[str, int], name: str, overlay: str = "gamepla
         return ROOT / "Build" / _OVERLAY_BIN[overlay], addr - 0xC000
     if 0x5C00 <= addr < 0x8000:
         return ROOT / "Build" / "Core.bin", addr - 0x5C00
+    if 0x0800 <= addr < 0x1000:
+        raise AssertionError(f"{name}: unexpected code/data in removed slot0 helper area #{addr:04X}")
     return ROOT / "Build" / "TSLib.bin", addr - 0x1000
 
 

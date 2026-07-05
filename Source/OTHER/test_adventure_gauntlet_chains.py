@@ -132,6 +132,10 @@ def main() -> int:
     assert "Block = #0000, #42, Build/level_chain_table.bin" in spg
     assert 'include "level_chain_table.inc"' not in main_asm
     assert "CALL OVL_ResolveCurrentModeSelection" in main_asm
+    assert "CALL LevelSelectClampCurrent             ; Space/22-4 re-enters Gauntlet as last selectable 21-4" in menu
+    assert "bonus 22-4 lose/retry -> 21-4" in main_asm
+    assert "FadeGameplayToCurrentLevel:" in main_asm
+    assert "JP   FadeGameplayToCurrentLevel" in main_asm
     assert "LEVEL_SELECT_COUNT     EQU LEVEL_RUNTIME_COUNT - 1" in main_asm
     assert "LevelSelectClampCurrent:" in level_select
     assert "LevelSelectIsLastSelectableLevel:" in level_select
@@ -187,10 +191,21 @@ def main() -> int:
     emu.call(sym["Core.OVL_ResolveCurrentModeSelection"])
     assert emu.get_byte(sym["Core.CurrentSettingIndex"]) == si["lvl66"]
 
+    for difficulty in (0, 1, 2, 3):
+        emu.set_byte(sym["Core.CurrentGameMode"], 1)
+        emu.set_byte(sym["Core.CurrentLevel"], 21)
+        emu.set_byte(sym["Core.CurrentDifficulty"], difficulty)
+        emu.call(sym["Core.OVL_ResolveCurrentModeSelection"])
+        assert emu.get_byte(sym["Core.CurrentLevel"]) == 21
+        assert emu.get_byte(sym["Core.CurrentDifficulty"]) == 3
+        assert emu.get_byte(sym["Core.CurrentSettingIndex"]) == 75
+
     emu.mem.pages[3] = 0x41
     emu.set_byte(sym["Core.CurrentLevel"], 21)
+    emu.set_byte(sym["Core.CurrentDifficulty"], 3)
     emu.call(sym["Core.LevelSelectClampCurrent"])
     assert emu.get_byte(sym["Core.CurrentLevel"]) == 20
+    assert emu.get_byte(sym["Core.CurrentDifficulty"]) == 3
     emu.set_byte(sym["Core.LevelSelectNextClick"], 1)
     emu.set_byte(sym["Core.LevelSelectBackClick"], 0)
     emu.call(sym["Core.LevelSelectApplyLevelClick"])
@@ -218,7 +233,7 @@ def main() -> int:
     for difficulty in (0, 1, 2):
         assert run_next(1, 20, difficulty)[:2] == (0, difficulty + 1)
     assert run_next(1, 20, 3)[:2] == (21, 3)
-    assert run_next(1, 21, 3)[:2] == (0, 0)
+    assert run_next(1, 21, 3)[:2] == (0, 0)  # win from bonus 22-4 wraps to 1-1
 
     for difficulty, expected_pos in ((0, 15), (1, 33), (2, 54)):
         assert run_next(0, 20, difficulty) == (0, difficulty + 1, expected_pos, expected_pos)

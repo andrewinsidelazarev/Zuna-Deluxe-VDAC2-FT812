@@ -1,5 +1,5 @@
-; ts-dos.asm — wrappers вокруг WC TS-DOS / WildDOS FAT32 file-I/O entry table
-; at #2002 (FENTRY/LOAD512/SEEK0/...). Это DOS file system, НЕ ZiFi radio feature
+; ts-dos.asm — обёртки вокруг WC TS-DOS / WildDOS FAT32 file-I/O entry table
+; по адресу #2002 (FENTRY/LOAD512/SEEK0/...). Это DOS file system, НЕ ZiFi radio feature
 ; (старый код называл его "ZiFi", потому что entry table впервые был описан
 ; по WC zifi.asm).
 ;
@@ -9,32 +9,32 @@
 ;
 ; NOTE: gameplay теперь стримит level assets из ZUMALVL.PAK через самодостаточный
 ; reader (RawPak_* ниже): прямые SD CMD17 single-sector reads (sd_zc.asm) плюс
-; наш BPB/FAT32 chain walk. Это намеренно BYPASSES bundled WC TS-DOS driver: его
+; наш BPB/FAT32 chain walk. Это намеренно обходит bundled WC TS-DOS driver: его
 ; stateful LOAD512 chain walk в нашем SPG context сдвигался на -128 sectors на
-; первой FAT-sector boundary. RawPak сам вычисляет каждый FAT sector LBA
+; первой границе FAT-sector. RawPak сам вычисляет каждый FAT sector LBA
 ; (cluster>>7 + FatStart), поэтому stale mount-state не может увести чтение.
-; CMD17 стабилен на Unreal host, в отличие от abandoned multi-block CMD18.
-; Bundled-driver entry points (FENTRY/SETDIR/SETROOT/DOS_SWP/HDD) больше не
+; CMD17 стабилен на Unreal host, в отличие от заброшенного multi-block CMD18.
+; Entry points bundled-driver (FENTRY/SETDIR/SETROOT/DOS_SWP/HDD) больше не
 ; вызываются.
 ;
 ; Entry table (из C:\Users\Администратор\Desktop\WC\ZiFi\zifi.asm:4403):
-;   FENTRY   = #2050    HL = ptr to {flag:1, name:1..255, 0}
-;                       Z = not found
-;                       NZ = found, [DE:HL] = file length; SEEK0 auto-called
+;   FENTRY   = #2050    HL = ptr на {flag:1, name:1..255, 0}
+;                       Z = не найдено
+;                       NZ = найдено, [DE:HL] = file length; SEEK0 вызывается автоматически
 ;   LOAD512  = #2017    CHL = dest (C = page, HL = #0000..#3FFF in slot-0 view)
 ;                       B = blocks (× 512 B)
 ;                       на выходе: CHL advanced, A = #0F if end-of-chain
-;   LOADNON  = #2056    B = sectors to skip forward (наш seek)
-;   SEEK0    = #2063    rewind file
+;   LOADNON  = #2056    B = sectors для пропуска вперёд (наш seek)
+;   SEEK0    = #2063    перемотать file
 ;   SETDIR   = #205D    chdir в directory, только что найденную FENTRY
-;   SETROOT  = #2060    chdir to /
+;   SETROOT  = #2060    chdir в /
 ;
 ; Формат filename для FENTRY:
 ;   DB <flag>, "name", 0
 ;   flag: #00 = file, #10 = directory
 ;
 ; Calling convention (наши wrappers):
-;   - DI on entry (без IRQ во время slot-0 swap и SD I/O)
+;   - DI на входе (без IRQ во время slot-0 swap и SD I/O)
 ;   - сохранить текущую slot-0 page (TSLibPage)
 ;   - map slot 0 = ZIFI_PAGE
 ;   - CALL real entry
@@ -73,10 +73,10 @@ RAWPAK_WC_PATH_ONLY EQU 0              ; основной путь WC #F7, пр�
                 include "sd_zc.asm"
 
 ; ---------------------------------------------------------------------
-; ZiFi_Init — поднять SD driver на session file I/O calls.
+; ZiFi_Init — поднять SD driver для session file I/O calls.
 ;   DI, slot 0 = #0F (driver page), DOS_SWP, DEV_INI, HDD, SETROOT.
 ; После Init entries ZiFi at #2002..#2070 можно вызывать напрямую.
-;   CF=1 on success, CF=0 on init error. После успешного init всё равно
+;   CF=1 при успехе, CF=0 при init error. После успешного init всё равно
 ;   нужно вызвать ZiFi_Done.
 ZiFi_Init:
                 DI
@@ -98,7 +98,7 @@ ZiFi_Init:
 .Err:           OR   A
                 RET
 
-; ZiFi_Done — restore TSLib в slot 0, EI.
+; ZiFi_Done — восстановить TSLib в slot 0, EI.
 ZiFi_Done:
                 LD   BC, #0077
                 LD   A, #03
@@ -120,7 +120,7 @@ ZiFi_Leave:     RET
 ; ---------------------------------------------------------------------
 ; ZiFi_FEntry — поиск filename в current dir.
 ;   Вход : HL → {flag, name, 0}
-;   Выход: Z=not found; NZ=found, [DE:HL]=size; SEEK0 auto-called
+;   Выход: Z=не найдено; NZ=найдено, [DE:HL]=size; SEEK0 вызывается автоматически
 ZiFi_FEntry:
                 CALL ZiFi_Enter
                 CALL ZIFI_FENTRY
@@ -136,16 +136,16 @@ ZiFi_FEntry:
 
 ; ZiFi_Load512 — прочитать B 512-byte blocks из current file в (C:HL).
 ;   Вход : C=dest page, HL=offset (#0000..#3FFF slot-0 view), B=blocks
-;   Выход: CHL advanced; A=#0F if end-of-chain
+;   Выход: CHL продвинут; A=#0F если end-of-chain
 ZiFi_Load512:
                 JP   RawPak_ReadSectors
 
-; ZiFi_LoadNon — skip B sectors (seek forward).
+; ZiFi_LoadNon — пропустить B sectors (seek forward).
 ;   Вход : B=sectors
 ZiFi_LoadNon:
                 JP   RawPak_SkipB
 
-; ZiFi_Seek0 — rewind current file to offset 0.
+; ZiFi_Seek0 — перемотать current file на offset 0.
 ZiFi_Seek0:
                 JP   RawPak_Seek0
 
@@ -156,7 +156,7 @@ ZiFi_SetDir:
                 CALL ZiFi_Leave
                 RET
 
-; ZiFi_SetRoot — chdir to /.
+; ZiFi_SetRoot — chdir в /.
 ZiFi_SetRoot:
                 CALL ZiFi_Enter
                 CALL ZIFI_SETROOT
@@ -186,14 +186,14 @@ ZiFi_FileLvlPak: DEFB #00
 ; ZUMALVL.PAK layout:
 ;   sec 0       header  (magic ZLVP, version, count, sector_size)
 ;   sec 1       TOC[22] × 20 B   (bg/pal/track/title/preview off+size)
-;   sec 2..N    data blob, per-level: bg → pal → track → title → preview
+;   sec 2..N    блок данных, на уровень: bg → pal → track → title → preview
 
-ZIFI_BUFFER_PAGE EQU #03               ; spgbld page reserved for ZiFi 512-B buffer
+ZIFI_BUFFER_PAGE EQU #03               ; spgbld page, зарезервированная для ZiFi 512-B buffer
 
 ; ---------------------------------------------------------------------
 ; RawPak_* — самодостаточный FAT32 reader поверх прямого SD CMD17.
 ;
-; Этот path намеренно bypasses bundled WC CORE32 LOAD512 state. Он поддерживает
+; Этот path намеренно обходит bundled WC CORE32 LOAD512 state. Он поддерживает
 ; и contiguous, и fragmented files, следуя FAT chain между clusters. Current host
 ; image — superfloppy FAT32 с 512-byte sectors и spc=1; RawPak_OpenRoot это
 ; валидирует.
@@ -219,8 +219,8 @@ RAWPAK_BOOT_SIZE EQU 31761
 ; берутся из актуального symbol-файла:
 ;   ZiFiTraceOpenStep = RawPak open granular step:
 ;       #20 entry, #21 sector0 read OK, #22 BPB valid, #26 search start, #25 PAK found;
-;       #A1 sector0 CMD err, #A2 BPB invalid (bps!=512 / no FAT32 partition),
-;       #A3 spc=0, #A6 PAK (name+size) not found anywhere, #A7 run-table overflow.
+;       #A1 ошибка sector0 CMD, #A2 неверный BPB (bps!=512 / нет FAT32 partition),
+;       #A3 spc=0, #A6 PAK (name+size) нигде не найден, #A7 переполнение run-table.
 ;   ZiFiTraceDirsVisited = сколько directories посещено при recursive search.
 RawPak_OpenRoot:
                 if RUNTIME_DIAGNOSTICS_ENABLED
@@ -356,7 +356,7 @@ RawPak_OpenRoot:
                 LD   DE, sd_lba_max
                 CALL RawPak_Add32                       ; sd_lba_max += TotSec32
 .noVolGuard:
-                ; --- locate ZUMALVL.PAK. Fast path: переиспользовать WC active-panel
+                ; --- найти ZUMALVL.PAK. Fast path: переиспользовать WC active-panel
                 ; path из page #F7, затем fallback на whole-card DFS.
                 if RUNTIME_DIAGNOSTICS_ENABLED
                 LD   A, #26
@@ -377,7 +377,7 @@ RawPak_OpenRoot:
                 LD   HL, RawPak_RootClus
                 LD   DE, RawPak_CurClus
                 CALL RawPak_Copy32
-                CALL RawPak_FindPakRecursive   ; DFS whole tree -> RawPak_FileStartClus
+                CALL RawPak_FindPakRecursive   ; DFS всего tree -> RawPak_FileStartClus
                 JP   NC, .ErrPak
 .cacheFound:
                 LD   HL, RawPak_FileStartClus  ; cache для следующих opens этой session
@@ -392,7 +392,7 @@ RawPak_OpenRoot:
                 endif
                 CALL RawPak_Seek0
                 CALL RawPak_BuildRunTable      ; собрать extent (run) table — поддерживает fragmentation
-                JP   NC, .ErrRuns              ; table overflow / chain error -> fallback
+                JP   NC, .ErrRuns              ; переполнение table / chain error -> fallback
                 SCF
                 RET
 .ErrRuns:      LD   A, #A7
@@ -413,13 +413,13 @@ RawPak_OpenRoot:
 
 ; RawPak_FindInCurrentDir и fixed path /Games/Zuma Deluxe VDAC2/ удалены:
 ; loader теперь ищет ZUMALVL.PAK только через RawPak_FindPakRecursive, по имени
-; + size в любой папке. Один code path.
+; + size в любой папке. Один путь code.
 
 ; ============================================================================
 ; RawPak_FindPakRecursive — depth-first search ВСЕГО FAT32 tree от root для файла
 ; "ZUMALVL.PAK" с size == EXPECTED_PAK_SIZE. Pack может лежать в любой папке:
 ; реальная карта не обязана использовать /Games/Zuma Deluxe VDAC2/.
-; Выход: CF=1 found (RawPak_FileStartClus set); CF=0 not found / SD error.
+; Выход: CF=1 найдено (RawPak_FileStartClus set); CF=0 не найдено / SD error.
 ; Читает КАЖДЫЙ sector каждого directory cluster (через AdvanceOne), поэтому
 ; корректен для spc>1 cards; старый scan только первого sector в cluster пропускал
 ; entries при spc=64. Result кэшируется caller, так что потенциально медленный walk
@@ -439,7 +439,7 @@ RawPak_FindPakRecursive:
                 LD   (RawPak_CheckSize), A      ; PAK: совпадение по имени И точному размеру
 ; RawPak_FindByName — DFS дерева FAT по RawPak_TargetName (+опц. размер). Вызывающий
 ; заранее ставит RawPak_TargetName (upcase, zero-term) и RawPak_CheckSize (0=только имя,
-; 1=имя+EXPECTED_PAK_SIZE). Out: CF=1 найдено (RawPak_FileStartClus + RawPak_FoundSize),
+; 1=имя+EXPECTED_PAK_SIZE). Выход: CF=1 найдено (RawPak_FileStartClus + RawPak_FoundSize),
 ; CF=0 нет/ошибка SD.
 RawPak_FindByName:
                 XOR  A
@@ -447,7 +447,7 @@ RawPak_FindByName:
                 if RUNTIME_DIAGNOSTICS_ENABLED
                 LD   (ZiFiTraceDirsVisited), A
                 endif
-                LD   HL, RawPak_RootClus        ; положить root dir в DFS stack
+                LD   HL, RawPak_RootClus        ; положить root dir в стек DFS
                 CALL RawPak_DirStackPush
 .popLoop:      CALL RawPak_DirStackPop         ; CurClus = next dir; CF=1 если stack empty
                 JP   C, .notFound
@@ -465,7 +465,7 @@ RawPak_FindByName:
                 LD   IX, #8000
 .entry:        LD   A, (IX + 0)
                 OR   A
-                JP   Z, .dirDone                ; 0x00 = end of this directory
+                JP   Z, .dirDone                ; 0x00 = конец этого directory
                 CP   #E5
                 JP   Z, .skip                   ; deleted entry (JP: цели сдвинулись > ±128)
                 LD   A, (IX + 11)
@@ -473,7 +473,7 @@ RawPak_FindByName:
                 JP   Z, .lfnFrag                ; LFN fragment -> накопить
                 LD   A, (IX + 11)
                 AND  #08
-                JR   NZ, .skip                  ; volume label -> skip
+                JR   NZ, .skip                  ; volume label -> пропуск
                 LD   A, (IX + 11)
                 AND  #10
                 JR   NZ, .isDir                 ; subdirectory
@@ -499,7 +499,7 @@ RawPak_FindByName:
                 LD   A, (IX + 31) : LD (RawPak_FoundSize + 3), A
                 SCF
                 RET
-.isDir:        LD   A, (IX + 0)                ; skip "." и ".." (и любые dot-leading)
+.isDir:        LD   A, (IX + 0)                ; пропустить "." и ".." (и любые dot-leading)
                 CP   '.'
                 JR   Z, .skip
                 LD   A, (IX + 26) : LD (RawPak_Tmp + 0), A
@@ -530,8 +530,8 @@ RawPak_FindByName:
 ;   #F7:#1000 left path, #F7:#2000 right path, #F7:#1FFC active marker.
 ; Path format — "N:\dir\subdir\#FF". N игнорируется для raw SD access, но
 ; сохраняется для diagnostics; prefix валидируется до walk по FAT tree.
-; Выход: CF=1 found ZUMALVL.PAK в этой directory (RawPak_FileStartClus set).
-;        CF=0, если WC path absent/stale или file там нет.
+; Выход: CF=1 найден ZUMALVL.PAK в этой directory (RawPak_FileStartClus set).
+;        CF=0, если WC path отсутствует/stale или file там нет.
 RawPak_TryWcPath:
                 XOR  A
                 LD   (RawPak_ZumaDirValid), A           ; пока папка не подтверждена
@@ -628,7 +628,7 @@ RawPak_CopyPakTarget:
 
 ; HL указывает на WC path component. Скопировать его в RawPak_TargetName,
 ; uppercase и zero-terminate. Возвращает HL на next component (или #FF),
-; CF=1 on success.
+; CF=1 при успехе.
 RawPak_CopyWcComponent:
                 LD   DE, RawPak_TargetName
                 LD   B, 63
@@ -748,8 +748,8 @@ RawPak_CheckPakSize:
                 CP   (EXPECTED_PAK_SIZE >> 24) & #FF
                 RET
 
-; DFS directory-cluster stack (LIFO). Entries — 4-byte start clusters.
-RawPak_DirStackPush:                            ; HL -> 4-byte cluster; игнорируется при full stack
+; Стек DFS directory-cluster (LIFO). Entries — 4-byte start clusters.
+RawPak_DirStackPush:                            ; HL -> 4-byte cluster; игнорируется при полном стеке
                 LD   A, (RawPak_DirStackCnt)
                 CP   RAWPAK_DIRSTACK_MAX
                 RET  NC
@@ -1051,7 +1051,7 @@ RawPak_CurrentLbaRegs:
                 LD   (RawPak_Tmp + 2), HL
 .noBorrow:     LD   HL, RawPak_DataStart
                 ; tmp = (cluster - 2) * sectors_per_cluster + CurSecInClus.
-                ; FAT32 SPC is power-of-two, so multiply by shifting.
+                ; FAT32 SPC — power-of-two, поэтому умножаем shift'ом.
                 LD   A, (RawPak_Spc)
 .spcShift:     CP   1
                 JR   Z, .spcDone
@@ -1181,7 +1181,7 @@ RawPak_ReadPartBpb:
 
 ; Прочитать FAT sector в RawPak_FatBuf (resident in Core / slot 1). Это не даёт
 ; FAT-chain walk затереть slot-2 data buffer (#8000), который callers заполняют
-; directory/file sectors. HL:DE = LBA on entry.
+; directory/file sectors. HL:DE = LBA на входе.
 RawPak_ReadFatSector:
                 LD   IX, RawPak_FatBuf
                 JP   sd_read_sector
@@ -1189,7 +1189,7 @@ RawPak_ReadFatSector:
 ; --- Sector-run table: поддерживает и contiguous, и fragmented PAK ------------
 ; Требование: читать PAK как при одном contiguous run, так и при fragmentation.
 ; Старый fast path предполагал contiguity (LBA = PakLba + N). На свежесобранном
-; image это верно, но fragmented file читал бы wrong sectors на верхних levels.
+; image это верно, но fragmented file читал бы неверные sectors на верхних levels.
 ; Вместо этого при open один раз проходим FAT chain и записываем file как список
 ; extents (runs) {LBA, len_sectors}: contiguous file схлопывается в один run,
 ; fragmented — в несколько. RawPak_ReadOneLogicalIX мапит logical sector в
@@ -1236,7 +1236,7 @@ RawPak_BuildRunTable:
                 LD   (IX + 4), A
                 JR   NC, .noLenCy
                 INC  (IX + 5)
-.noLenCy:      ; NextClus = masked FAT entry at FatPtr; advance FatPtr by 4
+.noLenCy:      ; NextClus = masked FAT entry at FatPtr; сдвинуть FatPtr на 4
                 LD   HL, (RawPak_FatPtr)
                 LD   A, (HL) : LD (RawPak_NextClus + 0), A : INC HL
                 LD   A, (HL) : LD (RawPak_NextClus + 1), A : INC HL
@@ -1481,7 +1481,7 @@ RawPak_FileStartClus:  DEFS 4
 RawPak_CurClus:        DEFS 4
 RawPak_Tmp:            DEFS 4
 RawPak_FatBuf:         DEFS 512       ; выделенный FAT-sector buffer (Core/slot1)
-RawPak_FatBufLba:      DEFS 4         ; LBA FAT sector, сейчас лежащего в FatBuf (cache key; #FFFFFFFF=invalid)
+RawPak_FatBufLba:      DEFS 4         ; LBA FAT sector, сейчас лежащего в FatBuf (cache key; #FFFFFFFF=невалидно)
 RawPak_NextClus:       DEFS 4         ; следующий cluster (masked FAT entry) при run-table build
 RawPak_FatPtr:         DEFW 0         ; pointer в FatBuf на FAT[CurClus] при run-table build
 RawPak_RunCount:       DEFB 0         ; число extents в RawPak_RunTable
@@ -1491,15 +1491,15 @@ RawPak_ReadRetryLeft:  DEFB 0
 RawPak_StgPage:        DEFB 0         ; staging page cursor для SD/FT phases
 RawPak_TrkPagesLeft:   DEFB 0         ; Track V2 sample pages left to load
 RawPak_TrkPagePtr:     DEFW 0         ; pointer into VDC_TrackLoadPages
-RawPak_ReadbackBuf:    DEFS 16        ; FT RAM_G readback probe for preview commit guard
+RawPak_ReadbackBuf:    DEFS 16        ; probe FT RAM_G readback для preview commit guard
 RawPak_VerifySrc:      DEFW 0
 RawPak_VerifyRamL:     DEFW 0
 RawPak_VerifyRamH:     DEFB 0
 
-; Recursive ZUMALVL.PAK search state. DirStack — DFS frontier ожидающих directory
+; State recursive search ZUMALVL.PAK. DirStack — DFS frontier ожидающих directory
 ; clusters. Cached* запоминает найденную location, чтобы только первый PakOpen
 ; за session платил за tree walk.
-RAWPAK_DIRSTACK_MAX    EQU 96          ; max pending dirs (96*4 = 384 B); overflow drop deeper dirs
+RAWPAK_DIRSTACK_MAX    EQU 96          ; max pending dirs (96*4 = 384 B); overflow отбрасывает deeper dirs
 RawPak_DirStackCnt:    DEFB 0
 RawPak_DirStack:       DEFS RAWPAK_DIRSTACK_MAX * 4
 RawPak_CachedValid:    DEFB 0         ; 1, когда ZUMALVL.PAK найден в этой session
@@ -1516,7 +1516,7 @@ RawPak_WcPathBuf:      DEFS WC_PATH_MAX
 
 ; ZiFi_LevelTOC — 20-byte buffer с TOC entry активного level.
 ; Layout (little-endian words):
-;   +0  bg_off       (sectors; 0xFFFF = absent)
+;   +0  bg_off       (sectors; 0xFFFF = отсутствует)
 ;   +2  bg_size
 ;   +4  pal_off
 ;   +6  pal_size
@@ -1529,8 +1529,8 @@ RawPak_WcPathBuf:      DEFS WC_PATH_MAX
 ZiFi_LevelTOC:    DEFS 20
 
 ; ZiFi_PakOpen — открыть ZUMALVL.PAK через RawPak_OpenRoot.
-; На выходе file открыт, SEEK0 auto-called, готов для LoadNon/Load512.
-; CF=1 on success, CF=0 на любом not-found step.
+; На выходе file открыт, SEEK0 вызывается автоматически, готов для LoadNon/Load512.
+; CF=1 при успехе, CF=0 на любом not-found step.
 ZiFi_PakOpen:
                 JP   RawPak_OpenRoot
 
@@ -1562,7 +1562,7 @@ ZiFi_AudioPakOpen:
                 OR   A
                 JR   NZ, .cpyt
                 XOR  A
-                LD   (RawPak_CheckSize), A       ; audio pack: match name only; stream size is compile-time checked
+                LD   (RawPak_CheckSize), A       ; audio pack: match только name; stream size checked at compile-time
                 CALL RawPak_FindInZumaDir        ; сперва в папке уровня (надёжно на железе)
                 JR   C, .opened
                 CALL RawPak_FindByName           ; запас: DFS по всему диску
@@ -1591,7 +1591,7 @@ ZiFi_SoundPakOpen:
                 OR   A
                 JR   NZ, .cpyt
                 XOR  A
-                LD   (RawPak_CheckSize), A       ; sound pack: match name only; size is compile-time checked
+                LD   (RawPak_CheckSize), A       ; sound pack: match только name; size checked at compile-time
                 CALL RawPak_FindInZumaDir        ; сперва в папке уровня (надёжно на железе)
                 JR   C, .sfound
                 CALL RawPak_FindByName           ; запас: DFS по всему диску
@@ -1691,7 +1691,7 @@ MainPakPagesLeft:  DEFB 0
 ; ZiFi_PakReadToc — прочитать TOC sector (sec 1), скопировать entry [A] в
 ; ZiFi_LevelTOC.
 ; Вход : A = level index (0..21)
-; Выход: ZiFi_LevelTOC filled with 20 bytes; CF=1 ok, CF=0 absent slot.
+; Выход: ZiFi_LevelTOC заполнен 20 bytes; CF=1 ok, CF=0 отсутствующий slot.
 ;        Pak уже должен быть открыт (сначала вызвать ZiFi_PakOpen).
 ; Клобает: AF, BC, DE, HL
 ZiFi_PakReadToc:
@@ -1723,7 +1723,7 @@ ZiFi_PakReadToc:
                 LD   DE, ZiFi_LevelTOC
                 LD   BC, 20
                 LDIR
-                ; проверить bg_off (first word): 0xFFFF значит slot absent
+                ; проверить bg_off (первое word): 0xFFFF значит slot отсутствует
                 LD   HL, (ZiFi_LevelTOC)
                 LD   A, H
                 CP   #FF
@@ -1737,13 +1737,13 @@ ZiFi_PakReadToc:
 .Absent:        OR   A
                 RET
 
-; ZiFi_SkipSectors16 — skip HL (16-bit) sectors forward.
+; ZiFi_SkipSectors16 — пропустить HL (16-bit) sectors вперёд.
 ; Не использовать LOADNON для больших seeks: свежий host dump 111 показал, что
 ; loader застревает сразу после TOC при seek L02 bg_off=#01F0 через LOADNON.
-; Чтение и discard через LOAD512 медленнее, но использует тот же proven data path,
+; Чтение и discard через LOAD512 медленнее, но использует тот же проверенный data path,
 ; что TOC/background reads.
 ;   Вход : HL = count
-;   Выход: position advanced
+;   Выход: position продвинута
 ZiFi_SkipSectors16:
 .Loop:          LD   A, H
                 OR   L
@@ -1774,7 +1774,7 @@ ZiFi_SkipSectors16:
 ; 16384-byte chunks (по 32 sectors).
 ;   Вход : DE = total sectors to read (для наших sections обычно multiple of 32;
 ;              max one chunk = 32, если non-multiple)
-;          BgRamH / BgRamL = destination RAM_G address (будет advanced)
+;          BgRamH / BgRamL = destination RAM_G address (будет продвинут)
 ;   Клобает: AF, BC, DE, HL, BgRamH, BgRamL
 ZiFi_StreamSection:
 .Loop:          LD   A, D
@@ -1882,7 +1882,7 @@ OVL_GS_InitAndStartMenuMusic:
 .sdDoneFail:    CALL ZiFi_Done
 .sdFail:        RET
 
-GS_Detect:
+GS_ClearState:
                 XOR  A
                 LD   (GS_Present), A
                 LD   (GS_MenuMusicLoaded), A
@@ -1890,9 +1890,12 @@ GS_Detect:
                 LD   (GS_MenuMusicPlaying), A
                 LD   (GS_SfxLoaded), A
                 LD   (GS_RamPages), A
-                LD   A, #F3                         ; reset GS/flags; absent bus usually never clears bit0
-                JP   GS_SendCommandOverlay
+                RET
 
+GS_Detect:
+                CALL GS_ClearState
+                LD   A, #F3                         ; reset GS/flags; отсутствующая bus обычно не очищает bit0
+                JP   GS_SendCommandOverlay
 GS_QueryRamPages:
                 LD   A, #23
                 CALL GS_SendCommandOverlay
@@ -2213,7 +2216,7 @@ OVL_GS_LoadGameplaySoundsMaybe:
                 ; во время LoadMainPack, только на реальных тиках чтения.
                 LD   A, (GS_Present)
                 OR   A
-                RET  Z
+                RET  Z                                  ; No-GS AY SFX is SPG-resident
                 LD   A, (GS_SfxProgressDraw)
                 OR   A
                 CALL NZ, OVL_BootTsFadeOutWait
@@ -2744,7 +2747,15 @@ OVL_ResolveCurrentModeSelection:
                 JR   C, .level_ok
                 XOR  A
                 LD   (CurrentLevel), A
-.level_ok:      LD   L, A
+.level_ok:      CP   SPACE_LEVEL_INDEX
+                JR   NZ, .regular_gauntlet
+                LD   A, 3
+                LD   (CurrentDifficulty), A
+                LD   A, ADVENTURE_SPACE_POS
+                LD   (CurrentSettingIndex), A
+                RET
+.regular_gauntlet:
+                LD   L, A
                 LD   H, 0
                 ADD  HL, HL
                 ADD  HL, HL                            ; 4 ранга на карту
@@ -2887,8 +2898,8 @@ OVL_LoadGameplayLevelSpecificFromPack:
                 AND  A
                 SBC  HL, DE
                 JP   NZ, .Err
-                ; Appended bullet trajectory table marker: "ZBT1", exactly one
-                ; 16K page after Track V2 pages. Runtime maps it to #13.
+                ; Marker добавленной bullet trajectory table: "ZBT1", ровно одна
+                ; 16K page после Track V2 pages. Runtime мапит её в #13.
                 LD   A, (IX+13) : CP #5A : JP NZ, .Err  ; 'Z'
                 LD   A, (IX+14) : CP #42 : JP NZ, .Err  ; 'B'
                 LD   A, (IX+15) : CP #54 : JP NZ, .Err  ; 'T'
@@ -2936,7 +2947,7 @@ OVL_LoadGameplayLevelSpecificFromPack:
                 CP   B
                 JP   NZ, .Err
 
-                ; Fill active page tables from the fixed physical page list.
+                ; Заполнить active page tables из fixed physical page list.
                 LD   HL, VDC_TrackPages1
                 LD   B, TRACK_MAX_PAGES * 2
                 XOR  A
@@ -3190,8 +3201,8 @@ OVL_LoadLevelSelectPreviewAssets:
                 CALL LevelSelectPreviewValidateStaged
                 JP   NC, .err
                 ; FT phase: pages #07..#0E -> selected preview RAM_G buffer.
-                ; BgRamL/H prepared by resident trampoline before ZiFi maps
-                ; slot0 to the driver page.
+                ; BgRamL/H подготовлены resident trampoline до того, как ZiFi мапит
+                ; slot0 на driver page.
                 LD   A, #07
                 LD   (RawPak_StgPage), A
                 LD   B, 8

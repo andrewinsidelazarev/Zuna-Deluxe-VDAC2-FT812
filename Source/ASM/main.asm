@@ -3,8 +3,8 @@
 ; ----------------------------------------------------------------------------
 ; Точка сборки. Использует TSLib из Docs/TSLib/.
 ; Layout:
-;   Page 0 (#0000..#3FFF mapped at slot 0): TSLib code, ORG #1000
-;   Page 5 (#4000..#7FFF mapped at slot 1): Core code, ORG #6000
+;   Page 0 (#0000..#3FFF mapped at slot 0): код TSLib, ORG #1000
+;   Page 5 (#4000..#7FFF mapped at slot 1): код Core, ORG #6000
 ; После Init_Core slot/page mapping: page1=5, page2=2, page3=8.
 ; Стек в slot 1 (#40F2) — между Resolution* указателями и началом кода.
 ; ============================================================================
@@ -34,25 +34,25 @@ EntryPoint           EQU #5C00                        ; slot 1 (page 5), дер�
 StackTop             EQU #40F2
 ResolutionWidthPtr   EQU #40F3                        ; куда FT_RESOLUTION пишет ширину (W word)
 ResolutionHeightPtr  EQU #40F5                        ; высоту (H word)
-MemoryPages          EQU #40F7                        ; page-numbers cache (для не-MAPPING_REGISTERS)
-InterruptVA          EQU #4000                        ; IM2 vector area (page-aligned)
+MemoryPages          EQU #40F7                        ; cache номеров pages (для не-MAPPING_REGISTERS)
+InterruptVA          EQU #4000                        ; область IM2 vectors в resident page
 
 TSLib                EQU #1000                        ; адрес где живёт TSLib
 TSLibPage            EQU #00                          ; страница TSLib
 
-; Runtime diagnostics addresses/hooks live in DiagnosticsRuntime.asm and are not
-; part of the normal build.
+; Адреса/hooks runtime-диагностики живут в DiagnosticsRuntime.asm и не входят
+; в обычную сборку.
 
-; --- Text atlases (nativealien48 ARGB4, red-yellow gradient). Объявлены здесь
+; --- Текстовые atlases (nativealien48 ARGB4, red-yellow gradient). Объявлены здесь
 ; (ДО TSLib block) чтобы EQU были доступны во всех slot 0/1/3 функциях через
-; sjasmplus forward-resolve. FT_RAM_G #0000..#10000 = 64K free area (раньше
+; sjasmplus forward-resolve. FT_RAM_G #0000..#10000 = 64K свободной зоны (раньше
 ; не использовалась, bg начинается с #010000). Размеры см. text_*.info.
 FROG_ARGB4_ENABLED    EQU 1
 BALLS_ARGB4_ENABLED   EQU 0                         ; global balls atlas: PALETTED4444 50px-in-51px guarded cells
 ; Slot-3 overlay pages (logical #C000, разные physical pages, never co-resident).
 ; Определено здесь (global, before module Core), чтобы resident Fade* transitions
 ; и Init_Core видели UI_OVL_PAGE без forward ref. LOADER_OVL_PAGE живёт в
-; loader_resident.asm (используется только inside module Core). #04 = gameplay overlay.
+; loader_resident.asm (используется только внутри module Core). #04 = gameplay overlay.
 UI_OVL_PAGE           EQU #41                       ; Init_Video + MenuMain + LevelSelect
 TEXT_GAMEOVER_PAGE     EQU #20
 TEXT_GAMEOVER_RAMG     EQU #000000
@@ -77,9 +77,10 @@ TEXT_SPIRALDOOM_H      EQU 36                            ; опорная выс
 ; в профиле level-select (#082658..#098000), поэтому баннер ПЕРЕЖИВАЕТ медленный
 ; поиск PAK (грузится в неё ассетами меню перед показом — меню уже погашено).
                 include "loading_text_meta.inc"            ; LOADING_TEXT_W / _H / _NUM_PAGES (только EQU)
-                include "boot_loading_assets.inc"          ; boot-only ARGB4 loading screen assets
+                include "boot_loading_assets.inc"          ; boot-only ARGB4 assets loading screen
 LOADING_TEXT_PAGE_BASE EQU #25                             ; SPG pages #25,#26 (свободны)
-LOADING_TEXT_RAMG      EQU #084000
+LOADING_TEXT_RAMG      EQU #084000                         ; загрузка level-select: затем FRAME_TOP
+LOADING_TEXT_GAME_RAMG EQU #0AC000                         ; временная загрузка gameplay: swap-zone до top-mask/dialog
 LOADING_TEXT_HANDLE    EQU 12
 
 BOOT_LOADING_BG_RAMG     EQU #000000
@@ -98,7 +99,7 @@ BOOT_LOADING_BG_X        EQU 0
 BOOT_LOADING_BG_Y        EQU 0
 BOOT_LOADING_BAR_X       EQU 122
 BOOT_LOADING_BAR_Y       EQU 356
-BOOT_POPCAP_X            EQU 890                       ; native 1024×768 pixels, no FT812 upscale
+BOOT_POPCAP_X            EQU 890                       ; native 1024×768 pixels, без FT812 upscale
 BOOT_POPCAP_Y            EQU 644
 BOOT_TS_ANIM_X           EQU 226
 BOOT_TS_ANIM_Y           EQU 272
@@ -154,11 +155,11 @@ FRAME_RIGHT_DRAW_W   EQU 38
 FRAME_RIGHT_DRAW_H   EQU 659
 LIFE_FROG_HANDLE     EQU 18
 
-; --- Tunnel top-cover: 400x300 ARGB4 tiles generated from HD image-top PNGs.
+; --- Tunnel top-cover: 400x300 ARGB4 tiles, сгенерированные из HD image-top PNGs.
 
 ; --- HUD top bar lives counter ---
 ;   life_frog 20×20 PALETTED4444 (raw upload, 400 bytes).
-;   Shared HUD palette 512 bytes ARGB4 LE (room for future menu/progress sprites).
+;   Shared HUD palette 512 bytes ARGB4 LE (место для будущих menu/progress sprites).
 ;   Размещение в RAM_G: после dialog frame (#0AC000..#0CC000), до cursor (#0D0000).
 LIFE_FROG_PAGE       EQU #5B
 LIFE_FROG_RAMG       EQU #0CC000                         ; 4-byte aligned, free slot
@@ -185,7 +186,7 @@ DIALOG_PALETTE_PAGE     EQU #5D
 DIALOG_PALETTE_RAMG     EQU #0CC400                       ; 4-byte aligned, 512 байт
 DIALOG_FRAME_PAGE_BASE  EQU #60
 DIALOG_FRAME_NUM_PAGES  EQU 8
-DIALOG_FRAME_RAMG       EQU #0AC000                        ; after Cancun8 font, before HUD area
+DIALOG_FRAME_RAMG       EQU #0AC000                        ; после Cancun8 font, перед HUD area
 DIALOG_FRAME_W          EQU 400
 DIALOG_FRAME_H          EQU 327
 DIALOG_FRAME_HANDLE     EQU 21
@@ -233,7 +234,7 @@ LIFE_SOCK_X          EQU 56                            ; 35×1.6
 LIFE_SOCK_Y          EQU 6                             ; 4×1.6
 LIFE_STEP            EQU 32                            ; 20×1.6 (= draw width жабы)
 LIFE_FROG_DRAW       EQU 32                            ; 20×1.6 экранный размер иконки
-LIFE_MAX_DRAW        EQU 3                             ; clamp displayed count (sock 125px fits 3×32)
+LIFE_MAX_DRAW        EQU 3                             ; ограничить displayed count (sock 125px вмещает 3×32)
 ; Позиция hover/pressed — ТОЧНО на запечённой в frame_top idle-кнопке: рамка
 ; рисуется матрицей 1.6 от (0,0), кнопка в strip-координатах (539,3) → экран
 ; (862.4, 4.8). Вершина в 1/16 px (VERTEX2F) — дробная позиция, сетки NEAREST
@@ -267,7 +268,7 @@ HUD_GAUGE_TARGET     EQU 1000
 ; короткие повторяющиеся петли.
 FROG_RTC_MIX_CNT_ADDR  EQU #4C89                       ; 1 byte, 0..127 cyclic (сдвиг −#380 с GAMELOG)
 FROG_RTC_MIX_FLAG_ADDR EQU #4C8A                       ; 1 byte, 0/1 pending mix
-FROG_EXCLUDE_COLOR_ADDR EQU #4C8B                      ; 1 byte; 0xFF=no excl, else=color → drop bit from mask при popcount>=3 (consume-and-reset)
+FROG_EXCLUDE_COLOR_ADDR EQU #4C8B                      ; 1 byte; 0xFF=no excl, иначе color → убрать bit из mask при popcount>=3 (consume-and-reset)
 
 ; --- TSLib block (page 0) ------------------------------------------------
                 ORG TSLib
@@ -289,6 +290,8 @@ TSLIB_Start:
 TSLIB_End:
 TSLIB_Size       EQU TSLIB_End - TSLIB_Start
                 display "TSLib:    \t", /A, TSLIB_Start, " size=", /D, TSLIB_Size, " bytes"
+
+                ORG TSLIB_End
 
                 if RUNTIME_DIAGNOSTICS_ENABLED
                 define DIAG_SECTION_SLOT0
@@ -379,6 +382,17 @@ UploadLoadingText:
                 LD   (Core.BgRamL), HL
                 LD   A, (LOADING_TEXT_RAMG >> 16) & 0xFF
                 LD   (Core.BgRamH), A
+                JR   UploadLoadingTextAtBgRam
+
+; UploadGameplayLoadingText — тот же atlas, но во временный gameplay-буфер.
+; #0AC000 не трогаем до конца загрузки уровня; поэтому «LOADING LEVEL X-X»
+; остаётся видимым, пока #084000 уже можно перезаписывать frame strips.
+UploadGameplayLoadingText:
+                LD   HL, LOADING_TEXT_GAME_RAMG & 0xFFFF
+                LD   (Core.BgRamL), HL
+                LD   A, (LOADING_TEXT_GAME_RAMG >> 16) & 0xFF
+                LD   (Core.BgRamH), A
+UploadLoadingTextAtBgRam:
                 LD   A, LOADING_TEXT_PAGE_BASE
                 LD   B, LOADING_TEXT_NUM_PAGES
 .ult_loop:      PUSH BC
@@ -416,6 +430,13 @@ FadeGameplayToMenu:
                 LD   A, UI_OVL_PAGE : LD (CurrentCodePage), A   ; отследить scene page
                 CALL Core.DrawBlackTransitionFrame
                 JP   Core.MenuMain
+
+FadeGameplayToCurrentLevel:
+                CALL Cache_C000_Off
+                SetPage3 UI_OVL_PAGE                     ; DrawBlackTransitionFrame needs UI MenuSwapFrame mapped
+                LD   A, UI_OVL_PAGE : LD (CurrentCodePage), A
+                CALL Core.DrawBlackTransitionFrame
+                JP   Core.EnterGameplayForCurrentLevel
 
 FadeInMenu:
                 LD   HL, Core.MenuBuildFrame
@@ -523,9 +544,9 @@ ADVENTURE_RANK2_POS    EQU 15
 ADVENTURE_RANK3_POS    EQU 33
 ADVENTURE_RANK4_POS    EQU 54
 
-; Level-select thumbnails — raw ARGB4 streams from ZUMALVL.PAK.
-; Two RAM_G buffers let Back/Next load the new thumbnail without touching the
-; RAM_G region still referenced by the current display list.
+; Level-select thumbnails — raw ARGB4 streams из ZUMALVL.PAK.
+; Два RAM_G buffers позволяют Back/Next грузить новый thumbnail, не трогая
+; RAM_G region, на которую ещё ссылается текущий display list.
 LS_PREVIEW_BG_RAMG_B     EQU #0B3000
 LS_PREVIEW_BG_RAMG_A     EQU #0D4000
 LS_PREVIEW_BG_RAMG       EQU LS_PREVIEW_BG_RAMG_A
@@ -696,7 +717,7 @@ UpdateDialog:
                 OR   A
                 RET  Z                                  ; диалог не показан
                 LD   A, 1
-                LD   (Core.VDC_HudPointerBlock), A      ; dialog consumes LMB for this frame
+                LD   (Core.VDC_HudPointerBlock), A      ; dialog забирает LMB на этот кадр
                 LD   A, (Core.VDC_DialogState)
                 CP   3
                 JP   Z, Core.UpdatePauseDialog
@@ -760,7 +781,16 @@ UpdateDialog:
                 SBC  HL, DE
                 RET  NC
 
-.udlg_action:   ; Mouse click in OK bounds OR Fire key pressed
+.udlg_action:   ; mouse click в bounds OK или нажата Fire key
+                LD   A, (Core.VDC_DialogState)
+                CP   3
+                JR   NC, .udlg_no_lose_sfx             ; только retry/game-over OK, не win/pause
+                LD   A, (Core.GS_Present)
+                OR   A
+                JR   Z, .udlg_no_lose_sfx              ; не добавлять здесь No-GS/AY click
+                LD   A, Core.SND_BUTTON1
+                CALL Core.GS_PlaySfx
+.udlg_no_lose_sfx:
                 LD   A, (Core.VDC_DialogState)
                 CP   Core.DLG_WIN_DONE
                 JR   Z, .udlg_winnext                   ; LEVEL DONE → OK → начать fade
@@ -775,12 +805,28 @@ UpdateDialog:
 .udlg_restart:
                 LD   A, (Core.VDC_DialogState)
                 CP   2                                  ; GAME_OVER_FINAL (lives=0) -> main menu
+                JR   Z, .udlg_final_game_over
+                LD   A, (CurrentGameMode)
+                OR   A
+                JR   Z, RestartLevel
+                LD   A, (CurrentLevel)
+                CP   SPACE_LEVEL_INDEX
                 JR   NZ, RestartLevel
+                LD   A, LAST_NORMAL_LEVEL_INDEX         ; bonus 22-4 lose/retry -> 21-4
+                LD   (CurrentLevel), A
+                LD   A, 3
+                LD   (CurrentDifficulty), A
+                XOR  A
+                LD   (Core.VDC_DialogState), A
+                LD   (DialogFirePrev), A
+                POP  HL                                 ; бросить MainLoop CALL UpdateDialog
+                JP   FadeGameplayToCurrentLevel
+.udlg_final_game_over:
                 ASSERT Core.VDC_DialogState == Core.VDC_Lives + 1
                 LD   HL, 3
                 LD   (Core.VDC_Lives), HL               ; lives=3, dialog=0 (bytes are adjacent)
-                CALL Score_Reset                        ; next run from menu starts from score 0
-                POP  HL                                 ; abandon MainLoop CALL UpdateDialog
+                CALL Score_Reset                        ; следующий run из меню стартует со score 0
+                POP  HL                                 ; бросить MainLoop CALL UpdateDialog
                 JP   FadeGameplayToMenu
 
 ; --- LEVEL DONE fade-out: рампим FadeAlpha до чёрного, потом грузим след. уровень.
@@ -790,12 +836,12 @@ UpdateDialog:
                 JR   Z, .uwf_done                       ; полностью чёрный → advance
                 ADD  A, Core.VDC_WIN_FADE_STEP
                 JR   NC, .uwf_store
-                LD   A, 255                             ; clamp до full black
+                LD   A, 255                             ; ограничить до полного black
 .uwf_store:     LD   (FadeAlpha), A
                 RET
 .uwf_done:      XOR  A
                 LD   (Core.VDC_DialogState), A
-                JP   Core.LoadNextLevelWithLoading      ; black screen → LOADING LEVEL N-M... → load assets
+                JP   Core.LoadNextLevelWithLoading      ; чёрный экран → LOADING LEVEL N-M... → загрузить assets
 
 DialogFirePrev: DEFB 0                                  ; SPACE/Fire debounce для dialog OK
 DialogFrameLoaded: DEFB 0                               ; 1 если DIALOG_FRAME_RAMG сейчас содержит окно диалога
@@ -844,20 +890,20 @@ DrawRetryDialog:
 ; DrawIntroText — нижний правый угол: LEVEL 1-1 (большой, 64 px via cmd_scale)
 ; + SPIRAL OF DOOM (36 px native). Используется когда VDC_GameState == INTRO.
 ; Layout (640×480 screen, 30 px margin от правой/нижней рамки):
-;   LEVEL 1-1: X=452, Y=320 (158×64 displayed, BILINEAR scale ×16/9 from 89×36)
+;   LEVEL 1-1: X=452, Y=320 (158×64 displayed, BILINEAR scale ×16/9 из 89×36)
 ;   SPIRAL OF DOOM: X=418, Y=414 (192×36 native)
 ; ----------------------------------------------------------------------------
 ; ----------------------------------------------------------------------------
 ; DrawPreviewSparkles — sparkle wave анимация по track (state=PREVIEW).
 ; Параметры:
 ;   N=20 sparkles, head_sample = elapsed * SPEED, trail spacing 60 samples
-;   SPEED = 24, PREVIEW_TICKS = 120 → head_sample reaches NumSamples (~2774)
-; Sparkle skipped если sample < 0 или sample >= NumSamples (head ещё не дошёл / уже прошёл).
-; Tint: warm gold. Caller восстановит белый ColorRGB.
-; Active Track V2 pages are selected by SetCurrentTrackPage.
+;   SPEED = 24, PREVIEW_TICKS = 120 → head_sample доходит до NumSamples (~2774)
+; Sparkle пропускается, если sample < 0 или sample >= NumSamples (head ещё не дошёл / уже прошёл).
+; Tint: warm gold. Caller восстанавливает белый ColorRGB.
+; Активные Track V2 pages выбирает SetCurrentTrackPage.
 ; ----------------------------------------------------------------------------
-; Comet: 8 sparkles spaced 16 samples = ~128 samples trail (короткая «очередь»),
-; head advances 30 samples/tick → ~92 ticks для прохода 2774 samples (вместо 120).
+; Comet: 8 sparkles с шагом 16 samples = ~128 samples trail (короткая «очередь»),
+; head проходит 30 samples/tick → ~92 ticks для прохода 2774 samples (вместо 120).
 PREVIEW_SPARKLE_COUNT   EQU 8
 PREVIEW_SPARKLE_SPEED   EQU 15
 PREVIEW_SPARKLE_SPACING EQU 16
@@ -873,7 +919,7 @@ DrawPreviewSparkles:
                 XOR  A : CALL FT.Coprocessor.Cell
 
                 ; head_sample = elapsed * PREVIEW_SPARKLE_SPEED
-                ; where elapsed = PREVIEW_TICKS - VDC_PreviewTick
+                ; где elapsed = PREVIEW_TICKS - VDC_PreviewTick
                 LD   A, Core.VDC_PREVIEW_TICKS
                 LD   HL, Core.VDC_PreviewTick
                 SUB  (HL)                              ; A = elapsed
@@ -892,12 +938,12 @@ DrawPreviewSparkles:
                 BIT  7, H
                 JR   NZ, .dps_advance
                 ; sample < NumSamples?
-                LD   DE, (Core.VDC_ActiveTrackSamples) ; NumSamples from Track V2 metadata
+                LD   DE, (Core.VDC_ActiveTrackSamples) ; NumSamples из Track V2 metadata
                 AND  A
                 SBC  HL, DE
                 JR   NC, .dps_advance                  ; sample >= NumSamples
                 ADD  HL, DE                            ; restore sample
-                CALL Core.VDC_ReadSampleAtHL           ; BC=X, DE=Y from Track V2
+                CALL Core.VDC_ReadSampleAtHL           ; BC=X, DE=Y из Track V2
                 LD   (.dps_xword), BC
                 LD   (.dps_yword), DE
                 ; BC = (X-12) * 16
@@ -938,7 +984,7 @@ DrawPreviewSparklesAll:
                 JP   Core.SetCurrentTrackPage
 
 ; ----------------------------------------------------------------------------
-; DrawFrameStrips — 4 PALETTED4444 strip'а вокруг прозрачного centra.
+; DrawFrameStrips — 4 PALETTED4444 strip'а вокруг прозрачного центра.
 ; 1024×768: frame strips пока рисуются native 640×480. Блокер — page 0 заполнена
 ; LOG block'ом; +3 байта под scale CALL не помещаются. Для scale ×1.6 нужно вынести
 ; load-time metadata из page 0 в оверлей и освободить место под рамки/HUD.
@@ -988,7 +1034,7 @@ DrawFrameStrips:
 
 ; ----------------------------------------------------------------------------
 ; DrawLivesCounter — рендерит N жаб-иконок (20×20 PALETTED4444) в life sock
-; верхней рамки.  N = min(VDC_Lives, LIFE_MAX_DRAW).  Per-frame call после
+; верхней рамки.  N = min(VDC_Lives, LIFE_MAX_DRAW).  Вызов каждый frame после
 ; DrawFrameStrips (поверх sock'а), но под cursor'ом.
 ; ----------------------------------------------------------------------------
 DrawLivesCounter:
@@ -997,7 +1043,7 @@ DrawLivesCounter:
                 RET  Z                                  ; 0 жизней → ничего не рисуем
                 CP   LIFE_MAX_DRAW + 1
                 JR   C, .lc_count_ok
-                LD   A, LIFE_MAX_DRAW                   ; clamp displayed count
+                LD   A, LIFE_MAX_DRAW                   ; ограничить displayed count
 .lc_count_ok:   LD   (LifeDrawCnt), A
 
                 LD   C, 255 : LD D, 255 : LD E, 255
@@ -1023,11 +1069,11 @@ DrawLivesCounter:
                 POP  BC
                 POP  HL
                 LD   DE, LIFE_STEP * 16
-                ADD  HL, DE                             ; advance x на 20*16
+                ADD  HL, DE                             ; продвинуть x на 20*16
                 DJNZ .lc_loop
                 RET
 
-LifeDrawCnt:    DEFB 0                                  ; temp clamped lives count
+LifeDrawCnt:    DEFB 0                                  ; временный ограниченный lives count
 
 ; ----------------------------------------------------------------------------
 ; UpdateHudMenu — hover/press state для верхней правой MENU button.
@@ -1038,8 +1084,8 @@ UpdateHudMenu:
                 JP   Core.UpdateHudMenuCore
 
 ; ----------------------------------------------------------------------------
-; DrawHudProgress — original Zuma bar sprites in top HUD.
-; Baked red socket is empty. Yellow fills by score; green means gauge full.
+; DrawHudProgress — original Zuma bar sprites в top HUD.
+; Запечённый red socket пустой. Yellow заполняется по score; green означает gauge full.
 ; ----------------------------------------------------------------------------
 DrawHudProgress:
                 LD   C, 255 : LD D, 255 : LD E, 255
@@ -1082,7 +1128,7 @@ DrawHudProgress:
                 CALL Core.VDC_DivHLbyA                  ; HL = GaugeShown / d = fill_px
                 LD   A, H
                 OR   A
-                JR   NZ, .dhp_clampmax                  ; quotient > 255 → clamp
+                JR   NZ, .dhp_clampmax                  ; quotient > 255 → ограничить
                 LD   A, L
                 OR   A
                 JR   NZ, .dhp_clamp_check
@@ -1130,7 +1176,7 @@ EmitScissorSizeAProgress:
                 JP   FT.Coprocessor.Command_BCDE
 
 ; ----------------------------------------------------------------------------
-; DrawHudMenu — top-right MENU button, cells: 0=idle/1=hover/2=pressed.
+; DrawHudMenu — правая верхняя кнопка MENU, cells: 0=idle/1=hover/2=pressed.
 ; Рисуем ВСЕГДА (и idle): запечённая в frame_top кнопка прокрашена ПАЛИТРОЙ
 ; РАМКИ (жёлтый текст сквантован в зелёный — «зелень» по краям ховера).
 ; Атлас с hud-палитрой кладётся точно поверх неё (та же позиция 539,3 ×1.6).
@@ -1159,7 +1205,7 @@ DrawHudMenu:
                 JP   FT.Coprocessor.Vertex2f
 
 DrawIntroText:
-                ; --- Fade-out alpha: VDC_IntroTick 240→0; last 60 ticks fade ---
+                ; --- Fade-out alpha: VDC_IntroTick 240→0; последние 60 ticks fade ---
                 ; alpha = (tick<60) ? tick*4 : 255
                 LD   A, (Core.VDC_IntroTick)
                 CP   60
@@ -1240,7 +1286,7 @@ DrawIntroText:
 .dit_level_prefix: DB "LEVEL "
 
 ; ============================================================================
-; DrawDialogContent — title + 5 stat lines, glyph blit using nativealien font.
+; DrawDialogContent — title + 5 stat lines, glyph blit через nativealien font.
 ; ============================================================================
 ; 1024×768: все позиции ×1.6 (экранные координаты; глифы/спрайты масштабирует
 ; активная scale(1.6)-матрица диалога).
@@ -1558,10 +1604,10 @@ FontAtlasHi:    DEFB 0
 FontHeight:     DEFB 0
 
 ; ============================================================================
-; DrawString — glyph-blit zero-terminated string в TEKUЩЕМ шрифте.
-;   In:  HL = string ptr, BC = start x*16, DE = y*16. Font state из FontPtr*.
-;   Out: (DrawStr_CurX) = end x*16
-;   Clobbers all.
+; DrawString — glyph-blit zero-terminated string в текущем шрифте.
+;   Вход:  HL = string ptr, BC = start x*16, DE = y*16. Font state из FontPtr*.
+;   Выход: (DrawStr_CurX) = end x*16
+;   Клобает всё.
 ; ============================================================================
 DrawString:
                 LD   (DrawStr_Ptr), HL
@@ -1574,9 +1620,9 @@ DrawString:
                 OR   A
                 RET  Z                                  ; конец строки
                 CP   128
-                JR   NC, .ds_loop                       ; non-ASCII skip
+                JR   NC, .ds_loop                       ; пропустить non-ASCII
 
-                ; --- Lookup glyph metadata: BC = char index (0..127) ---
+                ; --- Найти glyph metadata: BC = char index (0..127) ---
                 LD   C, A
                 LD   B, 0
 
@@ -1585,7 +1631,7 @@ DrawString:
                 ADD  HL, BC
                 LD   A, (HL)
                 OR   A
-                JR   Z, .ds_loop                        ; advance=0 → неизвестный char, skip
+                JR   Z, .ds_loop                        ; advance=0 → неизвестный char, пропуск
                 LD   (DrawStr_Adv), A
 
                 ; glyph_w := (FontPtrGlyphW)[A]
@@ -1595,7 +1641,7 @@ DrawString:
                 OR   A
                 JR   Z, .ds_advance_only                ; w=0 (space) → только advance
 
-                ; Emit BITMAP_SIZE. DrawStr_Scale=1 — true native-size path для
+                ; Emit BITMAP_SIZE. DrawStr_Scale=1 — настоящий native-size path для
                 ; pre-rendered 1024 HUD/stats glyphs. Scale=3 оставлен для 1.6
                 ; runtime-transform path у nativealien assets.
                 LD   H, 0
@@ -1627,9 +1673,9 @@ DrawString:
                 LD   D, H : LD E, L
                 CALL FT.Coprocessor.Command_BCDE
 
-                ; --- Emit BITMAP_SOURCE = atlas_base + glyph_x * 2 ---
+                ; --- Эмит BITMAP_SOURCE = atlas_base + glyph_x * 2 ---
                 LD   HL, (DrawStr_Ptr)
-                DEC  HL                                  ; back to current char
+                DEC  HL                                  ; назад к текущему char
                 LD   A, (HL)
                 LD   C, A : LD B, 0
                 LD   HL, (FontPtrGlyphX)
@@ -1696,12 +1742,12 @@ DrawHudTopText:
                 CALL FT.Coprocessor.ColorA
                 FT_Begin FT_BITMAPS
 
-                ; Left red socket: centered game clock HH:MM:SS.
-                ;   Native 1024 font: StrWidth is already in screen pixels.
+                ; Левый red socket: центрированные игровые часы HH:MM:SS.
+                ;   Native 1024 font: StrWidth уже в экранных pixels.
                 CALL FormatHudClock
                 LD   HL, DrawNumBuf
                 CALL StrWidth
-                LD   HL, 310                            ; 194×1.6, center of left red socket
+                LD   HL, 310                            ; 194×1.6, центр left red socket
                 LD   A, E
                 SRL  A                                  ; half width (screen px)
                 LD   E, A : LD D, 0
@@ -1713,10 +1759,10 @@ DrawHudTopText:
                 LD   HL, DrawNumBuf
                 CALL DrawString
 
-                ; Black score socket: label pinned left, number pinned right.
-                ;   Sock interior x=273..367 (w=95). Padding 2px each side.
+                ; Black score socket: label закреплён слева, number закреплён справа.
+                ;   Внутренность sock x=273..367 (w=95). Padding 2px с каждой стороны.
                 LD   HL, str_hud_score
-                LD   BC, 434 * 16                       ; SCORE label pinned left (271×1.6)
+                LD   BC, 434 * 16                       ; SCORE label закреплён слева (271×1.6)
                 LD   DE, 2 * 16                         ; Y=2 (1×1.6)
                 CALL DrawString
 
@@ -1738,7 +1784,7 @@ DrawHudTopText:
                 LD   C, 255 : LD D, 255 : LD E, 255
                 JP   FT.Coprocessor.ColorRGB
 
-; HudScaleXTo16 — HL(640-space px) → HL = (HL×8/5)×16 (screen 1024, subpx 1/16).
+; HudScaleXTo16 — перевод HL(640-space px) → HL = (HL×8/5)×16 (screen 1024, subpx 1/16).
 HudScaleXTo16:  ADD  HL, HL : ADD HL, HL : ADD HL, HL  ; ×8
                 LD   A, 5
                 CALL Core.VDC_DivHLbyA
@@ -1749,7 +1795,7 @@ HudScaleXTo16:  ADD  HL, HL : ADD HL, HL : ADD HL, HL  ; ×8
 ; StrWidth — посчитать ширину строки в пикселях (sum of advances).
 ;   In:  HL = string ptr (zero-terminated)
 ;   Out: DE = width (pixels)
-;   Clobbers AF, BC, HL.
+;   Клобает AF, BC, HL.
 ; ============================================================================
 StrWidth:
                 LD   DE, 0
@@ -1773,7 +1819,7 @@ StrWidth:
 ; ============================================================================
 ; DrawByteValue — нарисовать байт (0..255) как до-3-х цифр после строки.
 ;   In: A = byte value. Cursor берётся из DrawStr_CurX.
-;   Clobbers all.
+;   Клобает всё.
 ; ============================================================================
 DrawByteValue:
                 LD   (DrawNumBuf+3), A                  ; временно сохраним A
@@ -1864,7 +1910,8 @@ DrawWordDiv:    DEFW 0
 DrawWordOut:    DEFW DrawNumBuf
 
 ; ============================================================================
-; 24-bit cumulative score (Core.VDC_PlayerScore, 3-byte LE) + 50000 extra-life.
+; 24-bit cumulative score (Core.VDC_PlayerScore, 3-byte LE) + extra-life
+; каждые 50000 очков, но только пока жизней меньше 3.
 ; Resident (slot 0), поэтому вызывается из gameplay (#04) и resident win/HUD code.
 ; ----------------------------------------------------------------------------
 ; Score_Add24 — VDC_PlayerScore += HL (16-bit delta), затем выдача extra lives.
@@ -1872,14 +1919,15 @@ DrawWordOut:    DEFW DrawNumBuf
 ; ----------------------------------------------------------------------------
 Score_Add24:
                 LD   DE, (Core.VDC_PlayerScore)        ; DE = low 16 bits
-                ADD  HL, DE                            ; CF = carry out of low 16
+                ADD  HL, DE                            ; CF = carry из low 16
                 LD   (Core.VDC_PlayerScore), HL        ; store low 16 (LD keeps CF)
                 LD   A, (Core.VDC_PlayerScore + 2)
                 ADC  A, 0                              ; += carry into byte 2
                 LD   (Core.VDC_PlayerScore + 2), A
-                ; дальше сразу extra-life check
+                ; дальше сразу проверка extra-life
 ; ----------------------------------------------------------------------------
-; Score_CheckExtraLife — пока score >= NextLifeScore: VDC_Lives++, threshold += 50000.
+; Score_CheckExtraLife — пока score >= NextLifeScore: если VDC_Lives < 3, добавить
+; жизнь и звук; threshold += 50000 всегда, чтобы cap не давал отложенных жизней.
 ; ----------------------------------------------------------------------------
 Score_CheckExtraLife:
 .cel_loop:      LD   HL, (Core.VDC_PlayerScore)        ; low 16 of score
@@ -1891,10 +1939,13 @@ Score_CheckExtraLife:
                 SBC  A, (HL)                           ; full 24-bit borrow in CF
                 RET  C                                 ; score < threshold → готово
                 LD   A, (Core.VDC_Lives)
+                CP   3
+                JR   NC, .cel_advance_threshold
                 INC  A
                 LD   (Core.VDC_Lives), A
                 LD   A, Core.SND_EXTRALIFE
                 CALL Core.GS_PlaySfx
+.cel_advance_threshold:
                 LD   HL, (Core.NextLifeScore)
                 LD   DE, 50000
                 ADD  HL, DE
@@ -1904,7 +1955,7 @@ Score_CheckExtraLife:
                 LD   (Core.NextLifeScore + 2), A
                 JR   .cel_loop
 ; ----------------------------------------------------------------------------
-; Score_Reset — lives=3, score=0, NextLifeScore=50000 (new run / final Game Over exit).
+; Score_Reset — lives=3, score=0, NextLifeScore=50000 (new run / выход final Game Over).
 ; ----------------------------------------------------------------------------
 Score_Reset:
                 LD   A, 3
@@ -1919,8 +1970,8 @@ Score_Reset:
                 LD   (Core.NextLifeScore + 2), A
                 RET
 ; ----------------------------------------------------------------------------
-; FormatScore24ToBuf — DrawNumBuf = decimal of VDC_PlayerScore (up to 8 digits,
-; leading zeros blanked to spaces, which render at zero width). Clobbers all.
+; FormatScore24ToBuf — DrawNumBuf = decimal от VDC_PlayerScore (до 8 digits,
+; leading zeros заменяются пробелами, которые render at zero width). Портит всё.
 ; ----------------------------------------------------------------------------
 FormatScore24ToBuf:
                 LD   HL, (Core.VDC_PlayerScore)
@@ -1961,7 +2012,7 @@ FormatScore24ToBuf:
                 DJNZ .fs24_strip
                 RET
 ; ----------------------------------------------------------------------------
-; DrawScore24 — format + draw VDC_PlayerScore at DrawStr_CurX / DrawStr_Y.
+; DrawScore24 — format + draw VDC_PlayerScore в DrawStr_CurX / DrawStr_Y.
 ; ----------------------------------------------------------------------------
 DrawScore24:
                 CALL FormatScore24ToBuf
@@ -2058,7 +2109,7 @@ DrawTimeValue:
                 JR   .dt_div2
 .dt_minutes_done:
                 ADD  HL, DE                             ; восстановить HL = remainder = seconds (0..59)
-                ; BC = minutes, HL_low = seconds. Format "M:SS"
+                ; BC = minutes, HL_low = seconds. Формат "M:SS"
                 LD   A, C
                 ADD  A, '0'                             ; minute digit (0..9)
                 LD   (DrawNumBuf), A
@@ -2105,7 +2156,7 @@ VDC_UpdateAbsorb:
 .ua_frame_done:
                 ; Plitnaya advance цепи в kill-zone: HSub++ × VDC_ABSORB_ADVANCE
                 ; per tick.  На wrap (HSub == CS) → array shift (remove slot 0),
-                ; HSA capped, HSub=0.  Визуально: tail-балы плавно скользят
+                ; HSA ограничен, HSub=0.  Визуально: tail-балы плавно скользят
                 ; вперёд (sub-pixel HSub), head clamped на последнем сэмпле трека,
                 ; alpha fade пропорционально HSub.
                 LD   B, Core.VDC_ABSORB_ADVANCE
@@ -2129,7 +2180,7 @@ VDC_UpdateAbsorb:
                 INC  A
                 CP   Core.VDC_CELL_SIZE
                 JR   C, .ua_save_hsub
-                ; Wrap: HSub=0, remove slot 0.  HSA остаётся capped — head
+                ; Wrap: HSub=0, удалить slot 0.  HSA остаётся ограниченным — head
                 ; ball «застрял» на последнем сэмпле трека (clamped), новый
                 ; head после shift попадает туда же → 1px continuity jump.
                 XOR  A
@@ -2194,10 +2245,10 @@ VDC_UpdateAbsorb:
                 RET
 
 ; ============================================================================
-; VDC_CheckKillzone — proximity-based skull animation.
+; VDC_CheckKillzone — анимация черепа по близости.
 ; Каждый кадр вычисляет remaining_samples = (TrackNumSlots-HSA)*CS + KzEndSub-HSub.
 ;   rem > 2*CS (=64)  → KzFrame=1 (closed skull, idle)
-;   rem in [1..64]    → KzFrame = 2 + ((64-rem) >> 3) ∈ [2..9] (opening)
+;   rem в [1..64]     → KzFrame = 2 + ((64-rem) >> 3) ∈ [2..9] (opening)
 ;   rem <= 0          → trigger absorb (state=1, KzFrame=11)
 ; Rollback (match-3 cascade двигает HSA назад) → rem растёт → frame уменьшается
 ; обратно к 1 автоматически. Никаких отдельных rollback hook'ов.
@@ -2231,7 +2282,7 @@ VDC_CheckKillzone:
                 DEC  D                                 ; sign-extend negative
 .ck_add_delta:  ADD  HL, DE                            ; HL = remaining samples
                 JR   .ck_set_frame
-.ck_eqcell:     ; HSA == TNS: rem = KzEndSub - HSub ∈ [1..CS-1] always opening range
+.ck_eqcell:     ; HSA == TNS: rem = KzEndSub - HSub ∈ [1..CS-1], всегда opening range
                 LD   A, (Core.VDC_KzEndSub)
                 LD   D, A
                 LD   A, (Core.VDC_HSub)
@@ -2301,15 +2352,15 @@ VDC_CheckKillzone:
 
 ; ============================================================================
 ; Frog_FilteredRandomColor — RandomColor с фильтром цветов цепи.
-; Out: A = color (0..3), guaranteed to be present in VDC_Slots if chain non-empty.
-; Fallback: unfiltered random AND 3 если chain пуст или все retry'ы промахнулись.
-; Preserves: BC, DE, HL (стандартные slot-0 caller-saves).
+; Выход: A = color (0..3), гарантированно есть в VDC_Slots, если chain не пустая.
+; Fallback: unfiltered random AND 3 если chain пуста или все retry'ы промахнулись.
+; Сохраняет: BC, DE, HL (стандартные slot-0 caller-saves).
 ; ============================================================================
-Frog_FilteredRandomColor:                              ; in A: 0xFF=force fresh; иначе check & keep if in mask
+Frog_FilteredRandomColor:                              ; вход A: 0xFF=force fresh; иначе проверить и оставить, если в mask
                 PUSH BC
                 PUSH DE
                 PUSH HL
-                LD   B, A                              ; B = input color (0xFF=force fresh)
+                LD   B, A                              ; B = входной color (0xFF=force fresh)
                 ; --- Собрать mask в D из VDC_Slots[0..SlotsLen-1] ---
                 LD   D, 0                              ; D = mask (bits 0..VDC_NUM_COLORS-1 = colors present)
                 LD   A, (Core.VDC_SlotsLen)
@@ -2320,7 +2371,7 @@ Frog_FilteredRandomColor:                              ; in A: 0xFF=force fresh;
 .frc_ml:        LD   A, (HL)
                 INC  HL
                 CP   Core.VDC_NUM_COLORS
-                JR   NC, .frc_msk_skip                 ; GAP marker (>=NUM_COLORS) → skip
+                JR   NC, .frc_msk_skip                 ; маркер GAP (>=NUM_COLORS) → пропуск
                 LD   E, A                              ; E = bit index
                 LD   A, 1
                 INC  E
@@ -2332,11 +2383,11 @@ Frog_FilteredRandomColor:                              ; in A: 0xFF=force fresh;
                 LD   D, A
 .frc_msk_skip:  DEC  C
                 JR   NZ, .frc_ml
-                ; --- Check input color B against mask D (skip if 0xFF) ---
+                ; --- Проверить входной color B по mask D (пропуск при 0xFF) ---
                 LD   A, B
                 CP   Core.VDC_NUM_COLORS
-                JR   NC, .frc_pick_new                 ; B >= NUM_COLORS (including 0xFF) → force fresh
-                LD   E, A                              ; check bit B in mask
+                JR   NC, .frc_pick_new                 ; B >= NUM_COLORS (включая 0xFF) → force fresh
+                LD   E, A                              ; проверить bit B в mask
                 LD   A, 1
                 INC  E
 .frc_chsh:      DEC  E
@@ -2344,13 +2395,13 @@ Frog_FilteredRandomColor:                              ; in A: 0xFF=force fresh;
                 ADD  A, A
                 JR   .frc_chsh
 .frc_chsh_done: AND  D
-                JR   Z, .frc_pick_new                  ; B not in mask → fresh
-                LD   A, B                              ; keep input color
+                JR   Z, .frc_pick_new                  ; B не в mask → fresh
+                LD   A, B                              ; сохранить входной color
                 JR   .frc_exit
 .frc_pick_new:
                 LD   A, D
                 OR   A
-                JP   Z, .frc_fb_in                     ; no live colors, only markers → keep current valid color
+                JP   Z, .frc_fb_in                     ; нет live colors, только markers → сохранить current valid color
                 ; --- Popcount mask D → B (число цветов в цепи) ---
                 LD   B, 0
                 LD   E, Core.VDC_NUM_COLORS            ; параметрический лимит цветов
@@ -2376,7 +2427,7 @@ Frog_FilteredRandomColor:                              ; in A: 0xFF=force fresh;
                 JR   .frc_xsh
 .frc_xsh_done:  LD   E, A                              ; E = bit mask
                 AND  D
-                JR   Z, .frc_excl_reset                ; bit not в mask → skip
+                JR   Z, .frc_excl_reset                ; bit не в mask → пропуск
                 LD   A, E
                 CPL
                 AND  D
@@ -2384,18 +2435,18 @@ Frog_FilteredRandomColor:                              ; in A: 0xFF=force fresh;
                 DEC  B                                  ; popcount--
 .frc_excl_reset:
                 LD   A, #FF
-                LD   (FROG_EXCLUDE_COLOR_ADDR), A      ; consume: следующие RefilterCurrent calls не должны влиять
+                LD   (FROG_EXCLUDE_COLOR_ADDR), A      ; consume: следующие вызовы RefilterCurrent не должны влиять
 .frc_no_excl:
                 LD   A, B
                 OR   A
-                JR   Z, .frc_fb                        ; mask empty → fallback
+                JR   Z, .frc_fb                        ; mask пустая → fallback
                 ; --- выбрать index 0..B-1 через mul-then-shift: (rand8 * B) >> 8.
                 ; Bias ≤ 1/(256/B) ≤ 1.6%. Старый `AND 3 + mod B` на 4-value
                 ; источнике давал при popcount=3 LSB-цвету маски 50% vs 25% —
                 ; визуально «слишком много <цвет-0-маски>» (purple bias).
                 PUSH DE                                ; сохранить D = mask (E irrelevant)
                 PUSH BC                                ; сохранить B = popcount
-                CALL VDC_Random8                       ; A = 0..255 uniform LFSR
+                CALL VDC_Random8                       ; A = 0..255 равномерный LFSR
                 LD   D, A                              ; D = rand (preserve)
                 ; --- Optional RTC mix в RAND BYTE (не seed!) каждый 128-й NewNextColor ---
                 LD   HL, FROG_RTC_MIX_FLAG_ADDR
@@ -2429,10 +2480,10 @@ Frog_FilteredRandomColor:                              ; in A: 0xFF=force fresh;
 .frc_walk_found:
                 LD   A, E
                 JR   .frc_exit
-.frc_fb_in:     ; empty chain: сохранить B, если валиден; иначе random unfiltered
+.frc_fb_in:     ; пустая chain: сохранить B, если валиден; иначе random unfiltered
                 LD   A, B
                 CP   Core.VDC_NUM_COLORS
-                JR   C, .frc_exit                      ; B < NUM_COLORS → keep
+                JR   C, .frc_exit                      ; B < NUM_COLORS → оставить
 .frc_fb:        CALL Core.VDC_RandomColor              ; уже выдаёт 0..NUM_COLORS-1
                 ; VDC_RandomColor сам маскирует под Core.VDC_NUM_COLORS.
 .frc_exit:      POP  HL
@@ -2472,9 +2523,9 @@ Frog_NewNextColor:
                 AND  #7F                              ; counter mod 128
                 LD   (HL), A
                 OR   A
-                JR   NZ, .nnc_no_flag                 ; cnt != 0 → no boundary
+                JR   NZ, .nnc_no_flag                 ; cnt != 0 → не boundary
                 LD   A, 1
-                LD   (FROG_RTC_MIX_FLAG_ADDR), A      ; mark for picker to consume
+                LD   (FROG_RTC_MIX_FLAG_ADDR), A      ; отметить для picker
 .nnc_no_flag:
                 ; Exclude BallColor from mask если popcount активных цветов >= 3.
                 ; Юзер: «следующий шар лягушки» не должен совпадать с предыдущим
@@ -2487,8 +2538,8 @@ Frog_NewNextColor:
                 RET
 
 ; ============================================================================
-; VDC_Random8 — LFSR Galois 16-bit (poly 0xB400), 8-bit uniform 0..255.
-; Тот же LFSR step что Core.VDC_RandomColor, но без AND-mask. Используется
+; VDC_Random8 — LFSR Galois 16-bit (poly 0xB400), 8-bit равномерно 0..255.
+; Тот же шаг LFSR, что Core.VDC_RandomColor, но без AND-mask. Используется
 ; Frog_FilteredRandomColor для unbiased mod-B через (rand * B) >> 8 — это
 ; нужно когда popcount(mask) не степень двойки (B=3 в основном). Старый AND 3
 ; + mod B давал bias 50%/25%/25% для popcount=3 → видимый перекос колора.
@@ -2507,7 +2558,7 @@ VDC_Random8:
 .r8_no_xor:
                 LD   (Core.VDC_LfsrSeed), HL
                 LD   A, L
-                XOR  H                                 ; 8-bit uniform
+                XOR  H                                 ; 8-bit равномерно
                 RET
 
 ; ----------------------------------------------------------------------------
@@ -2773,9 +2824,9 @@ SafeInflatePage2:
 .sip2_src_page:    DB 0
 
                 module Core
-; Slot0 implementation of Track V2 readers. Slot0 is always mapped during
-; gameplay, so Core keeps only tiny trampolines while the heavy reader body
-; lives in the page-0 headroom.
+; Slot0-реализация Track V2 readers. Slot0 всегда замаплен во время gameplay,
+; поэтому Core держит только tiny trampolines, а тяжёлое тело reader живёт
+; в page-0 headroom.
 VDC_ReadSampleAtHL_Slot0:
                 CALL VDC_ReadRenderSampleAtHL_Slot0    ; BC=Vx, DE=Vy
                 PUSH DE                                ; raw Vy
@@ -2946,8 +2997,9 @@ Initialize:     CALL Init_Core
                 CALL Init_Video                       ; FT_BOOT_UP + 640×480 + FT_INT_SWAP enable
                 CALL Input.Mouse.Initialize           ; курсор в центр (W/2, H/2)
                 CALL Input_Init                       ; взвести расширенную PC-клавиатуру (Mr.Gluk PS/2)
-                ; Init завершён — отключаем TS-Conf frame INT 50 Hz, чтобы он не бился
-                ; с FT812 vsync 57.25 Hz. Синхронизация в MainLoop через FT_INT_SWAP.
+                CALL AY_Game.AY_Init                  ; No-GS AY fallback starts silent
+                ; Init завершён — выключаем TS-Conf INT: FT812 pacing не должен
+                ; получать лишние frame/line прерывания.
                 DI
                 INT_Setting 0
                 RET
@@ -3167,11 +3219,9 @@ LoadGameplayAssets:
                 CALL UnpackAndUploadPage
 
                 ; --- Frame strips: palette raw + 5 strip pages ZX7 (16K-aligned blocks) ---
-                ; LOADING_TEXT_RAMG == FRAME_TOP_RAMG. Перед перезаписью #084000
-                ; убрать с экрана DL, который читает loading bitmap, иначе буквы
-                ; в конце загрузки затираются frame/level данными прямо на экране.
-                CALL DrawBlackLoadingFrame
-
+                ; Gameplay loading-DL читает баннер из LOADING_TEXT_GAME_RAMG
+                ; (#0AC000), поэтому frame strips можно грузить в #084000 без
+                ; раннего гашения надписи.
                 ; Palette 512 байт raw → FRAME_PAL_RAMG.
                 LD   A, FRAME_PAL_PAGE
                 SetPage2_A
@@ -3301,6 +3351,10 @@ LoadGameplayAssets:
                 CALL GS_LoadGameplaySoundsMaybeQuiet
                 CALL SetCurrentTrackPage
                 SetPage3 #04
+                ; Дальше top-mask может занять #0AC000..#0CC000 — тот же
+                ; временный буфер, откуда loading-DL читает буквы. Перед этим
+                ; свопаем чистый чёрный кадр; следующий видимый кадр уже gameplay.
+                CALL DrawBlackLoadingFrame
                 CALL ZL_UploadTopMasksMaybe
                 CALL SetCurrentTrackPage
 
@@ -3459,25 +3513,25 @@ GetCurrentTargetScore:
                 LD   E, (HL)
                 INC  HL
                 LD   D, (HL)
-                ; Target score is a per-level Zuma bar value from level settings.
-                ; Dual-chain progression is separate data; do not scale the bar.
+                ; Target score — per-level значение Zuma bar из level settings.
+                ; Dual-chain progression — отдельные данные; bar не масштабировать.
                 RET
 
-; GetCurrentColors — ball-color count для current level/difficulty (settings field
-; colors, offset +4). Clamp к 1..VDC_NUM_COLORS; 0/absent → VDC_NUM_COLORS.
+; GetCurrentColors — ball-color count для текущего level/difficulty (settings field
+; colors, offset +4). Ограничить к 1..VDC_NUM_COLORS; 0/absent → VDC_NUM_COLORS.
 GetCurrentColors:
                 CALL GetCurrentLevelSettingRecord
                 LD   DE, 4
                 ADD  HL, DE
                 LD   A, (HL)
                 OR   A
-                JR   Z, .gcc_def                        ; 0 / absent → default
+                JR   Z, .gcc_def                        ; 0 / absent → по умолчанию
                 CP   Core.VDC_NUM_COLORS + 1
                 RET  C                                  ; 1..NUM_COLORS → ok
 .gcc_def:       LD   A, Core.VDC_NUM_COLORS
                 RET
 
-; GetCurrentSpeed — chain speed_x100 (settings +0). 0/absent → 50. Out: A.
+; GetCurrentSpeed — chain speed_x100 (settings +0). 0/absent → 50. Выход: A.
 GetCurrentSpeed:
                 CALL GetCurrentLevelSettingRecord
                 LD   A, (HL)
@@ -3486,7 +3540,7 @@ GetCurrentSpeed:
                 LD   A, 50
                 RET
 
-; GetCurrentStart — lead-in ball count (settings +1). 0/absent → 35. Out: A.
+; GetCurrentStart — lead-in ball count (settings +1). 0/absent → 35. Выход: A.
 GetCurrentStart:
                 CALL GetCurrentLevelSettingRecord
                 INC  HL
@@ -3498,7 +3552,7 @@ GetCurrentStart:
 
 ; VDC_LoadLevelSettings — заполнить per-level runtime-параметры из таблицы
 ; (colors/speed/start) + сброс speed-аккумулятора. Core-resident (зовётся из
-; VDC_Init в Main1, который почти полон). Clobbers AF, HL, DE.
+; VDC_Init в Main1, который почти полон). Клобает AF, HL, DE.
 VDC_LoadLevelSettings:
                 CALL GetCurrentColors
                 LD   (Core.VDC_LevelColors), A
@@ -3510,9 +3564,9 @@ VDC_LoadLevelSettings:
                 LD   (Core.VDC_SpeedAccum), A
                 RET
 
-; VDC_SpeedAdvance — normal-phase chain advance at per-level speed. accum +=
+; VDC_SpeedAdvance — advance цепи в normal-phase с per-level speed. accum +=
 ; speed_x100; когда ≥100 → один VDC_MoveChain.
-; Core-resident (Main1 почти полон). Clobbers AF, HL.
+; Core-resident (Main1 почти полон). Портит AF, HL.
 VDC_SpeedAdvance:
                 LD   A, (Core.VDC_SpeedAccum)
                 LD   HL, Core.VDC_LevelSpeed
@@ -3532,7 +3586,7 @@ GetCurrentPartime:
                 LD   A, (HL)
                 RET
 
-; Out: CF=1 если в цепи есть хотя бы один живой цвет (< VDC_NUM_COLORS),
+; Выход: CF=1 если в цепи есть хотя бы один живой цвет (< VDC_NUM_COLORS),
 ;      CF=0 если цепь пуста или состоит только из gap/explode markers.
 VDC_ChainHasLiveBall:
                 OR   A
@@ -3557,9 +3611,9 @@ VDC_CheckWinMaybe:
                 LD   HL, VDC_Slots
                 CALL VDC_ChainHasLiveBall
                 RET  C
-                ; Dual-level gate: runtime flag OR level identity. If
-                ; VDC_HasSecondChain is transiently wrong, L05/L12/L19 still
-                ; cannot enter WIN while VDC2 has balls.
+                ; Dual-level gate: runtime flag ИЛИ identity уровня. Если
+                ; VDC_HasSecondChain временно неверен, L05/L12/L19 всё равно
+                ; не войдут в WIN, пока у VDC2 есть шары.
                 LD   A, (VDC_HasSecondChain)
                 OR   A
                 JR   NZ, .win_check_second
@@ -3931,15 +3985,14 @@ EnterGameplayForCurrentLevel:
                 ; (краш «Illegal port, PC=41:EB4E», репорт юзера 2026-06-11).
                 LD   A, LOADER_OVL_PAGE
                 LD   (CurrentCodePage), A
-                CALL UploadLoadingText
+                CALL UploadGameplayLoadingText
                 CALL OVL_DrawNextLevelLoadingScreen
                 SetPage3 #04                            ; slot 3 → gameplay overlay ДО загрузки ассетов
                 LD   A, #04
                 LD   (CurrentCodePage), A               ; track scene page (shared-декомпрессоры восстанавливают сюда)
                 CALL LoadGameplayAssets
-                ; Гасим «LOADING LEVEL X-X» чёрным кадром СРАЗУ после полной
-                ; загрузки (включая SFX) — перед свопом в геймплейный кадр.
-                CALL DrawBlackLoadingFrame
+                ; LoadGameplayAssets уже погасил loading-DL перед повторным
+                ; использованием #0AC000 под top-mask/dialog swap-zone.
                 JP   Cache_C000_OnMainLoop
 
 DrawBlackLoadingFrame:
@@ -4024,8 +4077,8 @@ VDC_AwardGapBonusSlot0:
                 JR   NC, .no_gap                         ; > THR -> matched, but not through a gap
                 LD   HL, VDC_BulletGapCount
                 INC  (HL)
-                ; Ported HD-ref shape:
-                ; points = 500 * (GAP_MAX - distance) / GAP_MAX, clamp >= 10.
+                ; Форма перенесена из HD-ref:
+                ; points = 500 * (GAP_MAX - distance) / GAP_MAX, ограничить >= 10.
                 ; В этом port distance — Manhattan distance до nearest GAP slot.
                 LD   B, A                                ; B = distance
                 LD   A, VDC_GAP_MAX
@@ -4058,7 +4111,7 @@ VDC_AwardGapBonusSlot0:
                 LD   DE, (VDC_GaugeScore)
                 ADD  HL, DE
                 LD   (VDC_GaugeScore), HL
-                CALL GetCurrentTargetScore             ; DE = per-level target (clobbers HL)
+                CALL GetCurrentTargetScore             ; DE = per-level target (клобает HL)
                 LD   HL, (VDC_GaugeScore)               ; reload score before compare
                 AND  A
                 SBC  HL, DE
@@ -4113,7 +4166,7 @@ BG_FIRST_PAGE      EQU 7
 BG_PAGE_COUNT      EQU 8                               ; 400×300 PALETTED4444 = 120000 bytes, 8 × 16K pages
 BG_RAMG_ADDR       EQU #010000                         ; bg в RAM_G FT812
 BG_PALETTE_PAGE    EQU #11      ; #0F занят ZiFi SD driver (WDFCVBI2.COD)
-BG_PALETTE_RAMG    EQU #02D500                         ; 4-byte aligned, after useful 400×300 bitmap
+BG_PALETTE_RAMG    EQU #02D500                         ; 4-byte aligned, после полезного 400×300 bitmap
 BALLS_FIRST_PAGE   EQU #43                             ; global PALETTED4444 balls pages
 BALLS_PAGE_COUNT   EQU 12                              ; 6×12×51×51 = 187272 bytes, padded to 192 KB
 BALLS_PALETTE_PAGE EQU #4F                             ; 512-byte ARGB4 palette
@@ -4143,10 +4196,10 @@ OVERLAY_PALETTE_PAGE EQU #59
 OVERLAY_PALETTE_RAMG EQU #0C0600
 KZ_PAGE            EQU #16
 KZ_PAGE_COUNT      EQU 10                              ; killzone 6 pages + destroy 4 pages
-KZ_RAMG_ADDR       EQU #0D4000                         ; after cursor page, below RAM_G 1 MB limit
-KZ_PALETTE_RAMG    EQU #0EAB00                         ; after 88×88×12 PALETTED4444 pixels, inside page #1B padding
+KZ_RAMG_ADDR       EQU #0D4000                         ; после cursor page, ниже RAM_G 1 MB limit
+KZ_PALETTE_RAMG    EQU #0EAB00                         ; после 88×88×12 PALETTED4444 pixels, внутри page #1B padding
 DESTROY_PAGE       EQU #1C                              ; match-3 серый animBallDestroy, 13 кадров, 4 стр.
-DESTROY_RAMG_ADDR  EQU #0EC000                         ; after killzone atlas
+DESTROY_RAMG_ADDR  EQU #0EC000                         ; после killzone atlas
 
 ; --- WIN explosion (оранжевый animExplosion, 17 кадров, 5 страниц) ---
 ; ВНИМАНИЕ: RAM_G у FT812 = ровно 1 МБ (FT_RAM_G_SIZE = 0x100000). Прошлая
@@ -4179,9 +4232,9 @@ Init_Core:      CALL SpiBusIdle                       ; warm reset does not clea
                 FMapAddrInit                          ; FT_EN, MEM_WO, page0=TSLibPage
                 System_Setting SYS_ZCLK14 | SYS_CACHEEN
                 Cache_Setting  EN_0000 | EN_4000
-                SetPage1 5                            ; #4000 → Core code page (main0 resident)
-                SetPage2 6                            ; #8000 → first Track V2 page after level load
-                SetPage3 UI_OVL_PAGE                  ; #C000 → UI overlay (boot scene = menu); gameplay maps #04 in FadeLevelSelectToGameplay
+                SetPage1 5                            ; #4000 → страница кода Core (main0 resident)
+                SetPage2 6                            ; #8000 → first Track V2 page после level load
+                SetPage3 UI_OVL_PAGE                  ; #C000 → UI overlay (boot scene = menu); gameplay мапит #04 в FadeLevelSelectToGameplay
                 if RUNTIME_DIAGNOSTICS_ENABLED
                 LD   HL, BuildCanaryBytes
                 LD   DE, BUILD_CANARY_ADDR
@@ -4190,8 +4243,8 @@ Init_Core:      CALL SpiBusIdle                       ; warm reset does not clea
                 endif
                 RET
 
-; Put the shared FT812/SD SPI bus into a known idle state as early as possible.
-; Z80 warm reset may leave Z-Controller port #77 latched with FT or SD selected.
+; Как можно раньше привести общую FT812/SD SPI-шину в известный idle state.
+; Z80 warm reset может оставить Z-Controller port #77 с выбранным FT или SD.
 SpiBusIdle:     PUSH AF
                 PUSH BC
                 PUSH DE
@@ -4630,7 +4683,10 @@ Main0_End:                                            ; MUST быть после
                 ; Mapped в slot 3 только во время gameplay (ставится в FadeLevelSelectToGameplay).
                 SLOT 3 : PAGE #04 : ORG #C000
 Main1_Start:
-                include "top_mask_overlay_meta.inc"      ; runtime table, must live in mapped gameplay overlay
+                module AY_Game
+                include "AYSfx.asm"
+                endmodule
+                include "top_mask_overlay_meta.inc"      ; runtime table, должна жить в mapped gameplay overlay
                 include "VDC.asm"
                 include "Frog.asm"
                 include "Bullet.asm"
@@ -4649,6 +4705,9 @@ Main1_End:
                 ; в slot 3 перед JP в scene.
                 SLOT 3 : PAGE UI_OVL_PAGE : ORG #C000
 UiOvl_Start:
+                module AY_UI
+                include "AYSfx.asm"
+                endmodule
                 include "Init_Video.asm"
                 include "MenuMain.asm"
                 include "MoreGamesSlot0.asm"

@@ -1,7 +1,7 @@
 ; loader_resident.asm — части PAK-loader, которые обязаны оставаться resident
 ; в Core (slot 1), потому что вызываются, когда loader overlay page НЕ mapped:
 ;   * VDC_ReadSampleAtHL — вызывается каждый frame из VDC_SlotPos (Main1) в PLAY;
-;   * adventure cross-load vars (FadeAlpha / CurrentDifficulty / CurrentLevel),
+;   * cross-load vars adventure (FadeAlpha / CurrentDifficulty / CurrentLevel),
 ;     читаются gameplay/menu/level-select кодом в любой момент;
 ;   * overlay trampolines — именованные entry points для callers; каждый мапит
 ;     loader page в slot 3, вызывает реальный OVL_* routine и восстанавливает #04.
@@ -11,21 +11,21 @@
 ; SLOT 3 / PAGE #40 overlay region (см. main.asm). Вне загрузок он спит по схеме
 ; «загрузить уровень и уснуть», поэтому не расходует resident Core space.
 
-LOADER_OVL_PAGE    EQU #40            ; SPG page с loader overlay; mapped в slot 3 во время загрузок
+LOADER_OVL_PAGE    EQU #40            ; SPG page с loader overlay; мапится в slot 3 во время загрузок
 GS_PORT_DATA       EQU #00B3
 GS_PORT_CMD        EQU #00BB
 GS_CMD_PLAY_MODULE EQU #31
 GS_CMD_STOP_MODULE EQU #32
 GS_CMD_PLAY_FX     EQU #98
-GS_SFX_NOTE        EQU 53            ; 11025 Hz payload на GS C-2-ish base (#30) требует примерно +5 semitones.
+GS_SFX_NOTE        EQU 53            ; 11025 Hz payload на GS C-2-ish base (#30) требует примерно +5 полутонов.
 GS_WAIT_TIMEOUT    EQU #FFFF
                                       ; UI_OVL_PAGE (#41) глобально определён в main.asm (нужен Fade*
-                                      ; transition до module Core); здесь используется trampoline.
+; transition до module Core); здесь используется trampoline.
 
-; Track V2 runtime pages. Each page is a pure 16K array of 8-byte samples:
-; Vx,Vy already baked for FT812 VERTEX2F, tangent, flags, 2 bytes padding.
-; One page holds 2048 samples. Loader fills VDC_TrackPages1/2 from the V2
-; metadata sector; render code selects the active table via VDC_pTrackPages.
+; Runtime pages Track V2. Каждая page — чистый 16K массив 8-byte samples:
+; Vx,Vy уже запечены для FT812 VERTEX2F, tangent, flags, 2 bytes padding.
+; Одна page держит 2048 samples. Loader заполняет VDC_TrackPages1/2 из V2
+; metadata sector; render code выбирает активную table через VDC_pTrackPages.
 TRACK_PAGE2        EQU #0F
 TRACK_PAGE3        EQU #10
 TRACK_PAGE4        EQU #12
@@ -33,7 +33,7 @@ TRACK_MAX_PAGES    EQU 4
 TRACK_V2_REC       EQU 8
 TRACK_V2_PAGE_SAMPLES EQU 2048
 TRACK_V2_BALL_HALF EQU 26
-BULLET_TRAJ_PAGE   EQU #13            ; one 16K ZBT1 page appended to current track section
+BULLET_TRAJ_PAGE   EQU #13            ; одна 16K ZBT1 page добавлена к текущей track section
 BULLET_TRAJ_PAGES  EQU 1
 TRACK_SECTION_MAX_SECTORS EQU 1 + ((TRACK_MAX_PAGES + BULLET_TRAJ_PAGES) * 32)
 
@@ -48,14 +48,14 @@ VDC_ReadSampleAtHL:
                 JP   VDC_ReadSampleAtHL_Slot0
 
 ; ----------------------------------------------------------------------------
-; VDC_ReadRenderSampleAtHL — hot render helper. In: HL=t. Out: BC=Vx, DE=Vy,
-; sets VDC_LastT/Tangent/Flags, CF=0. Keeps a tiny page-index cache so sequential
-; balls only switch 16K page at 2048-sample boundaries.
+; VDC_ReadRenderSampleAtHL — горячий render helper. Вход: HL=t. Выход: BC=Vx, DE=Vy,
+; выставляет VDC_LastT/Tangent/Flags, CF=0. Держит tiny page-index cache, чтобы
+; последовательные balls меняли 16K page только на границах 2048-sample.
 ; ----------------------------------------------------------------------------
 VDC_ReadRenderSampleAtHL:
                 JP   VDC_ReadRenderSampleAtHL_Slot0
 
-; Adventure state vars (CurrentLevel etc) раньше лежали в TSLib region #1937,
+; State vars Adventure (CurrentLevel etc) раньше лежали в TSLib region #1937,
 ; где их портил activity TSLib. Теперь resident в Core, чтобы gameplay/menu/
 ; level-select код видел их даже при unmapped loader overlay.
 FadeAlpha:         DEFB 0
@@ -88,19 +88,19 @@ VDC_GameState:       DEFB 0   ; 0=play,1=absorb,2=gameover,3=intro,4=preview,5=c
 VDC_HSub:            DEFB 0   ; head sub-position (absorb physics, resident UpdateAbsorbState)
 VDC_SlotsLen:        DEFB 0   ; chain length (win/absorb logic in resident)
 VDC_KzFrame:         DEFB 0   ; skull-mouth frame (DrawKillzone resident)
-VDC_HeadAbsorbAlpha: DEFB 255 ; head-ball fade alpha during state=1 absorb
-VDC_Lives:           DEFB 3   ; lives (start 3, +1/50k, carried across levels)
+VDC_HeadAbsorbAlpha: DEFB 255 ; alpha fade head-ball во время state=1 absorb
+VDC_Lives:           DEFB 3   ; lives: старт 3, +1/50k только если меньше 3
 VDC_DialogState:     DEFB 0   ; 0=NONE,1=RETRY,2=GAMEOVER,3=pause,4=pause-fade,5=WIN_DONE,6=WIN_FADE
-VDC_PrevMouseL:      DEFB 0   ; previous LMB state for dialog edge detection
+VDC_PrevMouseL:      DEFB 0   ; предыдущее состояние LMB для dialog edge detection
 VDC_HudMenuState:    DEFB 0   ; 0=inactive,1=hover,2=pressed (HUD MENU button)
 VDC_HudPointerBlock: DEFB 0   ; pointer over HUD button: suppress frog fire edge
-VDC_GaugeScore:      DEFW 0   ; Zuma bar score this level (win condition in resident)
+VDC_GaugeScore:      DEFW 0   ; score Zuma bar текущего уровня (win condition в resident)
 VDC_GaugeFull:       DEFB 0   ; 0=yellow filling, 1=green full
 ; 24-bit cumulative adventure score (3-byte little-endian, max 16,777,215). DEFW
 ; переполнялся после 65535, а adventure total уходит в сотни тысяч и механика
 ; +1-life-per-50000 требует накопительный счёт шире 16 bit. NextLifeScore —
-; следующий threshold 50000; Score_Add24 выдаёт жизнь и двигает его на 50000
-; при каждом пересечении. Оба сбрасываются Score_Reset.
+; следующий threshold 50000; Score_Add24 выдаёт жизнь только при VDC_Lives<3,
+; но двигает threshold на 50000 при каждом пересечении. Оба сбрасываются Score_Reset.
 VDC_PlayerScore:     DB 0,0,0 ; накопительный adventure score (HUD draw + bonus в resident)
 NextLifeScore:       DB #50,#C3,#00 ; следующий extra-life threshold = 50000 (0x00C350 LE)
 VDC_GameSeconds:     DEFW 0   ; прошедшие gameplay seconds (HUD clock в resident)
@@ -281,7 +281,10 @@ GS_PlaySfxCommon:
                 LD   (GS_SfxSilenceTimer), A
                 LD   A, (GS_Present)
                 OR   A
-                JR   Z, .done
+                JR   NZ, .gs_present
+                CALL AY_Game.AY_PlaySfxFromRequest
+                JR   .done
+.gs_present:
                 LD   A, (GS_SfxLoaded)
                 OR   A
                 JR   Z, .done
@@ -349,7 +352,7 @@ GS_PlaySfxHandleOnChannel:
                 RET
 
 GS_UpdateSfxMuteMaybe:
-                RET
+                JP   AY_Game.AY_Update
 
 GS_SendCommandResident:
                 LD   BC, GS_PORT_CMD
@@ -457,8 +460,8 @@ BOOT_TS_FADE_OUT_DELAY EQU 15                 ; hardware fade-out ticks пере
 BOOT_SFX_AUTHORS_FRAME_DELAY EQU 90           ; extra ticks DrawLoadingScreen для удержания SFX authors reveal frame
 BOOT_NOGS_MAIN_START EQU 95                   ; без GS анимации живут только на реальных тиках LoadMainPack
 BOOT_NOGS_AUTHORS_AT EQU 192                  ; грубо 55:35 от GS music/SFX фаз, переложено на 95..255
-BOOT_NOGS_ZX_FRAME_STEP EQU 9                 ; (192-95)/10 ~= 9.7 progress units per ZX frame
-BOOT_NOGS_AUTHORS_FRAME_STEP EQU 16           ; (255-192)/4 ~= 15.8 progress units per authors reveal
+BOOT_NOGS_ZX_FRAME_STEP EQU 9                 ; (192-95)/10 ~= 9.7 progress units на ZX frame
+BOOT_NOGS_AUTHORS_FRAME_STEP EQU 16           ; (255-192)/4 ~= 15.8 progress units на authors reveal
 BOOT_SFX_AUTHORS_LAST_FRAME EQU 4
 BOOT_GS_LABEL_X EQU 624 * 8 / 5               ; 1024×768: (640−16)×1.6=998, right-aligned
 BOOT_GS_LABEL_Y EQU 12 * 8 / 5                ; 19

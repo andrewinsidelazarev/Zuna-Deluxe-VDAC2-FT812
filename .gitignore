@@ -54,6 +54,7 @@ zuma.sym
 /Без*
 /Текстовый*
 *.cmd
+!/regress.cmd
 zuma_vdac2_without_rotation.spg
 /zuma.spg
 /vdc_emulator_log.txt

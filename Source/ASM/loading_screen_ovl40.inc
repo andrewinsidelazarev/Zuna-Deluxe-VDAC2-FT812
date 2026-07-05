@@ -6,6 +6,8 @@
 ; (Main0-резидент), FT.Coprocessor.* (page 0) — все доступны при slot3=#40.
 ; Core.ZL_EmitScale16Matrix (#04) НЕдоступен → локальный эмит матрицы
 ; готовым CMD-блоком (OVL_Scale16Cmds → LDIR в BufferPtr).
+; Bitmap лежит во временном LOADING_TEXT_GAME_RAMG (#0AC000), чтобы надпись
+; переживала загрузку gameplay-полос рамки в #084000.
 ; ============================================================================
 OVL_DrawNextLevelLoadingScreen:
                 CALL OVL_BuildLoadingLevelBuf
@@ -37,7 +39,7 @@ OVL_DrawNextLevelLoadingScreen:
 
                 ; Префикс: "LOADING LEVEL "
                 FT_BitmapHandle LOADING_TEXT_HANDLE
-                FT_BitmapSource LOADING_TEXT_RAMG
+                FT_BitmapSource LOADING_TEXT_GAME_RAMG
                 FT_BitmapLayout FT_ARGB4, LOADING_TEXT_W * 2, LOADING_TEXT_H
                 FT_BitmapSize   FT_NEAREST, FT_BORDER, FT_BORDER, LOADING_TEXT_PREFIX_W * 8 / 5, LOADING_TEXT_H * 8 / 5
                 LD   HL, (OVL_LoadingLevelX)
@@ -136,9 +138,9 @@ OVL_DrawLoadingSliceAtCurX:
                 LD   (OVL_LoadingSliceW), A
                 EX   DE, HL                             ; HL = slice x in pixels
                 ADD  HL, HL                             ; bytes for ARGB4
-                LD   DE, LOADING_TEXT_RAMG & #FFFF
+                LD   DE, LOADING_TEXT_GAME_RAMG & #FFFF
                 ADD  HL, DE
-                LD   A, (LOADING_TEXT_RAMG >> 16) & #FF
+                LD   A, (LOADING_TEXT_GAME_RAMG >> 16) & #FF
                 JR   NC, .dls_src_ok
                 INC  A
 .dls_src_ok:    LD   B, #01                              ; BITMAP_SOURCE

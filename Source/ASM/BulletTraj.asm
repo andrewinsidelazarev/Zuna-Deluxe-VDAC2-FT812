@@ -1,9 +1,9 @@
 ; ============================================================================
-; BulletTraj.asm -- resident bullet collision event reader.
+; BulletTraj.asm -- resident-чтение событий столкновения пули.
 ;
-; ZBT1 lives in physical page #13, appended to the current level Track V2 blob.
-; Runtime still validates every candidate with the old bbox/manhattan test; the
-; table only replaces the full Slots[] scan with a small per-frame event stream.
+; ZBT1 живёт в physical page #13, добавленной к Track V2 blob текущего уровня.
+; Runtime всё ещё валидирует каждый candidate старым bbox/manhattan-тестом;
+; таблица только заменяет полный scan Slots[] компактным покадровым потоком событий.
 ; ============================================================================
 
 BULLET_TRAJ_DIR_OFF       EQU 16
@@ -23,8 +23,8 @@ BULLET_TRAJ_TRACKF_DRAW_ABOVE EQU #02
 BULLET_TRAJ_NUM_COLORS    EQU 6
 
 ; ----------------------------------------------------------------------------
-; Bullet_TrajInitForAngle -- initialise the ZBT1 stream for Frog_Angle.
-; Called from Bullet_Spawn after velocity is computed.
+; Bullet_TrajInitForAngle -- инициализировать поток ZBT1 для Frog_Angle.
+; Вызывается из Bullet_Spawn после расчёта velocity.
 ; ----------------------------------------------------------------------------
 Bullet_TrajInitForAngle:
                 XOR  A
@@ -70,8 +70,8 @@ Bullet_TrajInitForAngle:
                 JP   SetCurrentTrackPage
 
 ; ----------------------------------------------------------------------------
-; Bullet_CheckCollisionEvents -- event stream collision path.
-; Replaces Bullet_CheckCollisionAllChains full scan.
+; Bullet_CheckCollisionEvents -- путь collision по stream событий.
+; Заменяет полный scan Bullet_CheckCollisionAllChains.
 ; ----------------------------------------------------------------------------
 Bullet_CheckCollisionEvents:
                 LD   A, (Bullet_Active)
@@ -102,7 +102,7 @@ Bullet_CheckCollisionEvents:
                 LD   B, A
                 LD   A, (Bullet_Frame)
                 CP   B
-                JR   C, .done_from_table              ; next event belongs to a future frame
+                JR   C, .done_from_table              ; следующее событие относится к будущему кадру
 
                 INC  HL
                 LD   A, (HL)
@@ -161,7 +161,7 @@ Bullet_CheckCollisionEvents:
                 RET
 
 ; ----------------------------------------------------------------------------
-; Event handling.
+; Обработка событий.
 ; ----------------------------------------------------------------------------
 BulletTraj_ProcessEvent:
                 LD   A, (Bullet_TmpEventFlags)
@@ -212,8 +212,8 @@ BulletTraj_EventMaskToB:
                 RET
 
 ; ----------------------------------------------------------------------------
-; Select active chain/track. In: A=0 for chain1, A=1 for chain2.
-; Out: CF=1 if chain2 requested but absent. Slot2 restored to selected track.
+; Выбрать активную chain/track. Вход: A=0 для chain1, A=1 для chain2.
+; Выход: CF=1, если запрошена отсутствующая chain2. Slot2 восстановлен на выбранный track.
 ; ----------------------------------------------------------------------------
 BulletTraj_SelectTrack:
                 LD   B, A
@@ -260,7 +260,7 @@ BulletTraj_RestoreChain1:
 .page:          JP   SetCurrentTrackPage
 
 ; ----------------------------------------------------------------------------
-; Hit event -> check base slot +/-2 around event cell.
+; Событие hit -> проверить base slot +/-2 вокруг event cell.
 ; ----------------------------------------------------------------------------
 BulletTraj_ProcessHitEvent:
                 LD   A, (VDC_HSA)
@@ -300,8 +300,8 @@ BulletTraj_ProcessHitEvent:
                 JP   BulletTraj_CheckCandidateA
 
 ; ----------------------------------------------------------------------------
-; In: A=candidate slot. Updates Bullet_TmpHit/Bullet_TmpDistP on better hit.
-; Also updates gap min-distance for gap candidates, replacing the old full gap scan.
+; Вход: A=candidate slot. Обновляет Bullet_TmpHit/Bullet_TmpDistP при лучшем hit.
+; Также обновляет min-distance до gap для gap-candidate, заменяя старый полный scan gap.
 ; ----------------------------------------------------------------------------
 BulletTraj_CheckCandidateA:
                 LD   (Bullet_TmpScan), A
@@ -338,8 +338,8 @@ BulletTraj_CheckCandidateA:
                 RET
 
 .not_tunnel_ball:
-                ; A lower tunnel/no-hit interval must not block balls explicitly
-                ; flagged to draw above the top layer (bridge-over-tunnel case).
+                ; Нижний tunnel/no-hit интервал не должен блокировать шары, явно
+                ; помеченные как draw-above-top-layer (случай bridge-over-tunnel).
                 LD   A, (VDC_LastTrackFlags)
                 AND  BULLET_TRAJ_TRACKF_DRAW_ABOVE
                 JR   NZ, .visible_ball

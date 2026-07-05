@@ -8859,3 +8859,125 @@ SHA-256 текущего `ZUMA_VD2.SPG`:
 **Технические требования:** держать ISR и управляющие переменные в resident/Core области; включать line IRQ только пока sample реально играет; по окончании sample возвращать Covox в #80 и отключать line IRQ; не конфликтовать с текущим IM2 frame handler/`Init_Int`; аккуратно учесть `VID_NOGFX`, FT812 SPI/DMA и MainLoop timing.
 
 **Обязательная проверка перед включением:** сделать экспериментальный build с 3-5 sample, снять L19 zprof/кадровый budget до/после, отдельно проверить прямой ярлык `Zuma Deluxe VDAC2 (SPG direct).lnk` на машине без GS/с `GS_Present=0`. Если line IRQ overhead окажется слишком большим, оставить fallback только для menu/button/fire/pop или перейти на более низкую частоту/ручной audio tick.
+
+## [2026-07-03 15:26] Codex / VDAC2: No_GS Covox SFX fallback включен
+
+**Контекст:** пользователь попросил для машин без General Sound сделать SFX на строчных прерываниях TS-Config под Covox по принципу `graphics/ts_anim`, с отдельным `ZUMA_CVX.PAC`.
+
+**Реализация:** добавлен `Source/ASM/Covox.asm`: resident slot0 player в page #00 по ORG `#0800`, Covox port `#FB`, line IRQ через `INT_VEC_LINE`, частота 15625/2 = ~7813 Hz, unsigned 8-bit PCM, silence `#80`. `Init_Int` вызывает `Covox_Init`; `GS_PlaySfxCommon` при `GS_Present=0` теперь запускает `Covox_PlaySfxFromRequest`, а GS-ветка не изменена.
+
+**PAK:** добавлен `Source/OTHER/make_covox_pack.py`, генерируется `Build/ZUMA_CVX.PAC` и `Source/ASM/covox_pak_size.inc`. Пак содержит resampled mono u8 SFX на 7813 Hz, runtime pages `#A8..#B7`, размер 259346 bytes / 507 sectors. Включены SFX из preload-набора с приоритетами; одноканальный fallback перебивает текущий звук только если новый priority не ниже.
+
+**Загрузка:** No-GS путь `OVL_GS_LoadGameplaySoundsMaybe` открывает `ZUMA_CVX.PAC` через новый `ZiFi_CovoxPakOpen` и загружает весь pack в RAM pages `#A8..#B7`. Добавлены cache vars для Covox PAK. `spgbld_boot.ini` и `spgbld_vdac2.ini` получили отдельный block `#0800,#00 Build/covox_slot0.bin`; `TSLib.bin` остается с `#1000`.
+
+**Инструменты/доставка:** `build.cmd` и `build_wc_img.cmd` запускают `make_covox_pack.py`; `inject_zuma_to_wc_img.py` и `check_host_wc_img.py` включают `ZUMA_CVX.PAC`; `zuma_z80_simulator.py` догружает `covox_slot0.bin`; `check_memory_map.py` теперь проверяет физические byte ranges, чтобы легальные несколько blocks в одной page не считались конфликтом.
+
+**Тест:** добавлен `Source/OTHER/test_covox_fallback_z80.py`, проверяет Covox table, line IRQ divider, PAGE2 restore и stop path. `build_wc_img.cmd` PASS: sjasmplus 0 errors, memory-map PASS, page3 guards PASS, covox fallback PASS, level-select/menu/more-games/zifi/gameplay L01-L02/score harness PASS. Host `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` обновлен in-place; `check_host_wc_img.py` показал `ZUMA_CVX.PAC` и все runtime-файлы `size_match=True` / `hash_match=True`.
+
+**Размеры:** `covox_slot0.bin` = 505 bytes, `Main0_Size=9205`, `Main1_Size=15810`, `UiOvl_Size=14139`, `LoaderOvl_Size=12568`, `ZUMA_VD2.SPG` = 365568 bytes, `ZUMA_CVX.PAC` = 259346 bytes.
+
+**SHA256:** `ZUMA_VD2.SPG` = `DABDCFC93D78DBEFC28209F45E9A5A41C7583C23BA297737E4B7784013825643`; `ZUMA_CVX.PAC` = `9AE7903082B254115FDB5E54054EBAAE672ADFA24D8828E162C611B73F3AABD7`; `covox_slot0.bin` = `70D11F3CBFB13D94C159FF06E579A001C7A34246D77D0AAB239F86ED45A1E848`.
+
+## [2026-07-03 15:52] Codex / VDAC2: Covox No-GS hang fix
+
+**Контекст:** пользователь проверил host с `GSType=NONE`: звуков нет, игровой процесс висит. Host-настройка должна оставаться No-GS для проверки Covox, не откатывать на GS.
+
+**Причина:** gameplay после `Initialize` живёт в режиме `DI + INTMASK=0` и синхронизируется через FT812, а не TS frame IRQ. Первая версия Covox-start включала `INT_MSK_FRAME|INT_MSK_LINE`, но не управляла общим interrupt state как отдельным временным аудио-режимом. Это могло оставить лишний frame IRQ активным и/или не запустить line IRQ в ожидаемый момент.
+
+**Фикс:** `Covox_PlaySfxFromRequest.accept` теперь атомарно делает `DI`, выставляет поля sample, включает только `INT_MSK_LINE`, затем `EI`. `Covox_Stop` и ISR stop path обнуляют `INTMASK` и возвращают silence `#80`; stop path из ISR больше не делает `EI`, так что после конца sample игра возвращается в штатный `DI + INTMASK=0`.
+
+**Проверка:** `build.cmd` PASS; `test_covox_fallback_z80.py` PASS (line-only mask, divider, PAGE2 restore, stop to `INTMASK=0`); `check_memory_map.py` PASS; `test_page3_inflate_guards.py` PASS; `test_gameplay_level_load_ramg.py --level-index 0/1` PASS; `test_score24_z80.py` PASS; `test_zifi_pipeline_python.py` PASS; полный `build_wc_img.cmd` PASS и обновил host `wc.img`.
+
+**Host:** `\\tsclient\D\Работа.Андрей\unreal_x64\Unreal.ini` оставлен в No-GS режиме: `GSType=NONE`, `CovoxFB=1`, `CovoxFBVol=8192`. `check_host_wc_img.py` подтвердил `ZUMA_CVX.PAC` и все runtime-файлы в host `wc.img`: `size_match=True` / `hash_match=True`.
+
+**SHA256:** `ZUMA_VD2.SPG` = `0D7438ED83CE0DC4CF718631505053A93AD490073741F7DCF4B42015D8A43BA8`; `covox_slot0.bin` = `734AE1C80ECEF910CD2422864B1825C7DAFCB197B5EB2E65E401A9CFEB2872D7`; `ZUMA_CVX.PAC` = `9AE7903082B254115FDB5E54054EBAAE672ADFA24D8828E162C611B73F3AABD7`.
+
+2026-07-03 16:17 No-GS Covox fix: ZUMA_CVX.PAC moved from overwritten #A8..#B7 to free runtime pages #F4..#FF (188690 bytes / 369 sectors). Menu SFX kept via SND_BUTTON1/SND_BUTTON2 plus core gameplay SFX; longest chants trimmed from Covox-only pack to fit 12 pages. Covox start now programs HSINT=0 before enabling LINE IRQ, matching ts_anim setup. test_covox_fallback_z80 now simulates Covox load followed by ZUMAMAIN.PAK load and fails on page overlap. build_wc_img.cmd PASS; host wc.img updated; check_host_wc_img hash_match=True for ZUMA_CVX.PAC and all shipped files. Host Unreal.ini left No-GS: GSType=NONE, CovoxFB=1, CovoxFBVol=8192.
+
+2026-07-03 16:36 No-GS Covox no-sound follow-up: fixed false GS detection on GSType=NONE/zero GS status ports. OVL_GS_InitAndStartMenuMusic now requires GS_QueryRamPages CF=1 and GS_RamPages!=0 before setting GS_Present=1; otherwise Covox fallback remains reachable. Covox start also clears VID_NOGFX while keeping VID_FT812 before enabling LINE IRQ, because TS line IRQ may not fire with TS graphics disabled. Added test_no_gs_false_detect_z80.py and wired it into build_wc_img.cmd. build_wc_img.cmd PASS; host wc.img updated; check_host_wc_img hash_match=True. Host Unreal.ini left No-GS: GSType=NONE, CovoxFB=1, CovoxFBVol=8192. SHA256 ZUMA_VD2.SPG=411C417E49910AEF8C36E4960F4652197598B1918F279B4537E675C3E683D8DD; ZUMA_CVX.PAC=41895C0302E4D80C9C44C1B17976FE28CB72E20551F6D24A80E84A900701293F; covox_slot0.bin=1A9DFFF460F222BA8227AD8BDBC04321CFD051B7C16DA9F39DD805EEA45C8972.
+
+────────────────────────────────────────────────────────────────────────────
+[2026-07-03 22:47] VDAC2 / Zuma (Claude): Covox no-GS — тишина; аудит цепочки, дефект Init_Int, probe-план
+────────────────────────────────────────────────────────────────────────────
+**Симптом:** no-GS fallback через Covox (#FB) молчит на реальном железе (хост).
+Текущая схема в дереве: LINE IM2 IRQ 15625 Гц / COVOX_IRQ_DIV=2 → 7812.5 Гц PCM.
+
+**Аудит цепочки по коду — СОБРАНА ПОЛНОСТЬЮ И КОРРЕКТНО:**
+1. GS_PlaySfxCommon при GS_Present=0 → Covox_PlaySfxFromRequest (loader_resident.asm:285).
+2. Загрузка ZUMA_CVX.PAK на буте при no-GS: ts-dos.asm:2269 → OVL_Covox_LoadFallbackMaybe
+   (:2373) → Covox_LoadPakToRam → страницы #F4..#FF → Covox_Loaded=1.
+3. CVX_SfxTable → Page/Ptr/Rem → Covox_Active=1 (Covox.asm .accept).
+4. IM2: I=#40, InterruptVA=#4000; вектор LINE #FD → #40FD/FE → Covox_LineISR;
+   маска INT_Setting INT_MSK_LINE + EI в Initialize (main.asm:2964-65).
+5. Все DI/EI-пары по пути закрыты (ZiFi: DI на подмену slot0, EI в ZiFi_Done;
+   вечный DI только в MenuQuitToWC — легитимен). MainLoop IFF не трогает.
+6. Чтение/восстановление PAGE2 в ISR через FMADDR_REGS — штатный TSLib-путь
+   (GetPage2/SetPage2_A, MAPPING_REGISTERS), валиден.
+⇒ Тишина НЕ в логике вызовов — в доставке самого LINE INT.
+
+**Найден реальный дефект патча (Init_Int, main.asm:4236-4249):**
+INT_Setting (FRAME|LINE) стоит ДО HALT. LINE приходит каждые 64мкс → HALT
+выходит по первому LINE, а не по FRAME (20мс) → стабилизационная пауза перед
+FT_BOOT_UP уничтожена (контракт «ждём первый FRAME» сломан). Фикс: до HALT
+маскировать ТОЛЬКО FRAME, LINE добавлять ПОСЛЕ HALT:
+    INT_Setting INT_MSK_FRAME / EI / HALT / INT_Setting (INT_MSK_FRAME|INT_MSK_LINE) / RET
+
+**Оставшиеся равноправные гипотезы тишины (кодом не различимы):**
+(А) LINE INT не генерится в режиме VID_FT812|VID_NOGFX — ЭТО УЖЕ НАБЛЮДАЛОСЬ:
+    прежняя шапка Covox.asm прямо писала «first hardware attempt used TS LINE
+    IRQ, but under the VDAC2/FT812 mode it did not fire reliably» (тогда ушли
+    на pump из wait-циклов; сейчас в дереве IRQ-вариант вернулся, Covox_Pump=RET).
+    Важно: Init_Int с EI/HALT проверяет INT ДО Init_Video — «INT работает»
+    доказано только в обычном видеорежиме, после FT812 — никогда.
+(Б) LINE генерится, но прошивка выдаёт вектор #FF (не #FD) — тогда всё тихо
+    уходит в INT_Handler (EI:RET) в меню; в gameplay hi-байт FRAME-вектора
+    (#4100!) затирается ball-cache (ZL_BALL_CACHE_ADDR=#4100 = второй байт
+    записи InterruptVA+INT_VEC_FRAME) → прыжок по tangent<<8 — может тихо
+    выживать. МИНА независимо от Covox: #4100 конфликт вектор/кэш.
+
+**Probe-план (один прогон на хосте, COVOX_IRQ_PROBE=1):**
+- Covox_LineISR первым делом безусловный меандр в #FB (тогл фазы → тон 7.8кГц).
+- INT_Handler в probe: щелчок в #FB на каждый заход (штатный FRAME = треск ~49Гц;
+  LINE-с-вектором-#FF = высокий тон ~15.6кГц).
+Чтение результата ухом:
+  тон 7.8кГц           → LINE жив, вектор #FD — копать выход сэмплов;
+  высокий тон без 7.8к → гипотеза (Б): вектор #FF — фикс: универсальный
+                          обработчик/трамплин вместо веры в #FD;
+  только треск ~49Гц   → гипотеза (А): LINE мёртв в FT812-режиме —
+                          возвращать pump-схему (качать из FT-wait-циклов);
+  полная тишина        → INT в FT812-режиме нет вообще ИЛИ #FB не микшируется;
+                          порт проверяется пищалкой Covox_DebugMissingPakOnce
+                          (прямые OUT без INT — слышна на буте без CVX-пака).
+Оговорка: после Initialize маска LINE-only → probe INT_Handler слышен только
+до Initialize/на буте; в игре различаем по наличию/отсутствию 7.8кГц.
+
+**Справка (закреплено):** периодические INT на TS-Conf: FRAME ~48.83Гц,
+LINE 15625Гц (64мкс/строка, НЕ зависит от turbo CPU), DMA — событийное.
+Диапазон 5-20кГц закрывается только LINE (готовые деления: 7812.5, 5208.3).
+Программируемого таймера нет. Бюджет ISR ~100 тактов: 15625Гц ≈ 11-12% CPU
+@14МГц, 7812Гц ≈ 5-6%. Covox = один канал: моно + приоритеты (перебивание).
+
+**Применимо в VDC:** прямо — если планируется PCM-fallback без GS: LINE IRQ
+делителем; но СНАЧАЛА проверить генерацию LINE в ВАШЕМ видеорежиме probe-тоном
+(наш опыт: «в обычном режиме работает» ничего не говорит про FT812-режим).
+
+## [2026-07-05] Codex / VDAC2: сохранена опорная v099
+
+**Контекст:** пользователь попросил сохранить и запушить текущую версию в формате
+репозитория. В `REFERENCE.txt` фиксируются реальные изменения с предыдущего
+запушенного reference v094, без лишних интерпретаций.
+
+**Что вошло после предыдущего пуша:**
+1. Бонус жизней: 24-битный счёт, выдача extra life на порогах счёта и ограничение
+   общего числа жизней максимумом 3, чтобы HUD не уходил в неотрисовываемые 4+.
+2. `LOADING LEVEL X-X`: надпись загрузки уровня держится до свопа перед стартом
+   gameplay и не стирается ранней загрузкой frame strips.
+
+**Проверки и доставка:** `build.cmd` PASS, `check_memory_map.py` PASS, host
+`\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` обновлён in-place,
+`check_host_wc_img.py` PASS.
+
+**Опора:** локальная project-copy сохранена как
+`releases/v099-2026-07-05-current-reference/`; в GitHub-формате добавляются
+`REFERENCE.txt` и runtime-артефакты v099. Основной SPG SHA256:
+`AB701ABB57E651961006F383EE971C928BCC120CF62350FD44717DD9F09EB026`.

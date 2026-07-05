@@ -1,0 +1,55 @@
+v099-2026-07-05-current-reference
+
+Опорная версия проекта от 2026-07-05 в формате репозитория.
+
+База: последний запушенный GitHub reference v094
+`v094-2026-07-02-frog-colors-stable-reference`.
+
+Что реально добавлено/зафиксировано после предыдущего пуша:
+
+1. Бонус жизней
+   - Счёт переведён на корректную 24-битную логику начисления.
+   - Дополнительная жизнь выдаётся на порогах счёта, но количество жизней
+     ограничено максимумом 3, чтобы HUD не уходил в неотрисовываемые 4+ жизни.
+   - Покрыто тестом `Source/OTHER/test_score24_z80.py`.
+
+2. Удержание `LOADING LEVEL X-X`
+   - Надпись загрузки уровня держится дольше и исчезает только перед свопом
+     экрана к старту gameplay.
+   - Для gameplay loading используется отдельная RAM_G-зона, чтобы ранняя
+     загрузка frame strips не стирала баннер в середине `LoadGameplayAssets`.
+   - Чёрный кадр ставится перед повторным использованием временной RAM_G-зоны.
+
+3. Текущие runtime-артефакты
+   - Сохранены SPG, symbol и PAK-файлы текущей сборки.
+   - Сохранены AY SFX артефакты, которые нужны текущей No-GS версии.
+
+Проверки текущей сборки:
+- `build.cmd` PASS;
+- sjasmplus: 0 errors, 11 прежних fwdref warnings;
+- `check_memory_map.py` PASS;
+- host `\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` обновлён in-place;
+- `check_host_wc_img.py` PASS, все runtime-файлы внутри host `wc.img` имеют
+  `size_match=True` и `hash_match=True`.
+
+Артефакты сборки:
+- `v099-2026-07-05-current-reference.spg`
+  SHA256 AB701ABB57E651961006F383EE971C928BCC120CF62350FD44717DD9F09EB026
+- `v099-2026-07-05-current-reference.zuma.sym`
+  SHA256 2316D16E6C64F86713784C87B4313AC0B82AAE013362A68452928FABC9EC12D8
+- `v099-2026-07-05-current-reference.zumamain.pak`
+  SHA256 463F4E12F3F3D28095FC810027CB1BC604FE63A2ED94090B46FD5C9DAD1D794C
+- `v099-2026-07-05-current-reference.zumalvl.pak`
+  SHA256 938E0C57D0CBC6351279E3234858ACDAD03F02FE90BE336CAC525E944F95E122
+- `v099-2026-07-05-current-reference.zumaaud.pak`
+  SHA256 72EF97514A816962D725193DC27C3232373505C859362784C469A8CF057FB017
+- `v099-2026-07-05-current-reference.zumasnd.pak`
+  SHA256 8393DB5BB8EC2FDA98C970A3303C43BDEF86A5CA5B4CF09FF09F8FC0C53409DA
+- `v099-2026-07-05-current-reference.ay_sfx_data.bin`
+  SHA256 C19D09EFEED8F0FCCB4BC8DE0F4A123C28F97152E3F18127573C409C4188BB33
+- `v099-2026-07-05-current-reference.ay_sfx_report.txt`
+  SHA256 6676FD5B579069B11929FE6C9C4007BEB34B8BC862178B209AEE577E0613815B
+
+В GitHub-формате release-папка содержит только этот `REFERENCE.txt` и runtime
+артефакты. Исходники текущей версии находятся в обычных путях репозитория
+`Source/`, `Docs/`, `Graphics/`, `Sounds/AY/` и корневых конфигурациях.

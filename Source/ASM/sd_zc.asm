@@ -5,8 +5,8 @@
 ;//  Карта уже initialized Wild Commander до запуска SPG (hardware state живёт),
 ;//  поэтому здесь отправляются только CMD17 reads.
 ;//
-;//  Этот путь BYPASSES bundled TS-DOS driver: его FAT chain walk в нашем SPG
-;//  context сдвигался на -128 sectors на первой FAT-sector boundary. Поэтому
+;//  Этот путь обходит bundled TS-DOS driver: его FAT chain walk в нашем SPG
+;//  context сдвигался на -128 sectors на первой границе FAT-sector. Поэтому
 ;//  BPB/FAT walk выполняется нашим кодом поверх sd_read_sector.
 ;//
 ;//  Unreal/этот host использует BYTE addressing (sd_blkt = 0): CMD17 argument
@@ -36,9 +36,9 @@ sd_init:
 SD_CRC_CHECK    EQU 0
 
 ;--- sd_read_sector: прочитать один 512-byte sector
-;    Вход: HL = LBA (low 16), DE = LBA (high 16) [LBA is 32-bit]
+;    Вход: HL = LBA (low 16), DE = LBA (high 16) [LBA 32-bit]
 ;          IX = destination buffer (512 bytes)
-;    Выход: CF = 1 on error, CF = 0 on success
+;    Выход: CF = 1 при error, CF = 0 при success
 sd_read_sector:
                 ld      (sd_lba+0),hl
                 ld      (sd_lba+2),de
@@ -109,7 +109,7 @@ sd_cmd17:
                 pop     hl                      ; восстановить buffer pointer
                 jp      sd_resp
 
-;--- прочитать 512 bytes из data port в (HL); HL advances by 512
+;--- прочитать 512 bytes из data port в (HL); HL продвигается на 512
 sd_reads:
                 push    bc
                 ld      bc,SD_DATA              ; B=0 -> 256 per INIR
@@ -147,7 +147,7 @@ sd_wait:
                 ret
 
 ;--- ждать data token #FE с bounded timeout.
-;    Выход: CF=0 token received, CF=1 timeout/error token.
+;    Выход: CF=0 token получен, CF=1 timeout/error token.
 sd_wait_token:
                 push    bc
                 ld      bc,SD_DATA
@@ -188,7 +188,7 @@ sd_resp:
                 ret
 
 ;--- sd_lba_in_range: проверка sd_lba против верхней границы тома sd_lba_max.
-;    out: CF=1 — отвергнуть (sd_lba >= sd_lba_max); CF=0 — ок ИЛИ защита выключена.
+;    Выход: CF=1 — отвергнуть (sd_lba >= sd_lba_max); CF=0 — ок ИЛИ защита выключена.
 ;    sd_lba_max==0 => защита выключена (до парса BPB, для bootstrap-чтений).
 ;    Сохраняет HL/DE/BC; клобает A/флаги (результат — в CF).
 sd_lba_in_range:
@@ -223,7 +223,7 @@ sd_blkt         db      0
 sd_lba_max      ds      4               ; верхняя граница LBA тома (PartLba+TotSec32); 0=выключено
 
                 if SD_CRC_CHECK
-;--- CRC16-CCITT (poly #1021, init #0000) над 512 байтами [DE]. Out: HL=CRC.
+;--- CRC16-CCITT (poly #1021, init #0000) над 512 байтами [DE]. Выход: HL=CRC.
 ;    Битовый вариант; выполняется на ЗАГРУЗКЕ уровня (не покадрово) → цена приемлема.
 ;    Клобает AF,BC,DE,HL. (При нужде ускорить — заменить на табличный.)
 sd_crc16_512:

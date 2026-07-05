@@ -82,13 +82,15 @@ SOUNDS = [
 
 # Keep the table in reference IDs. Preload only effects currently wired in the
 # game layer, plus a short silence sample used to stop long one-shot FX.
-# Win/Lose озвучка (2026-06-13): + earthquake(23) warning1(37) pop(32, всасывание),
+# Win/Lose озвучка (2026-06-13): + earthquake(23), pop(32, всасывание),
 # chant2(14, win-конец), chant8(19, game over), chant14(13, потеря жизни).
-# Сумма 25 звуков = 353 КБ при GS 1 МБ (запас 687 КБ) — partial-fail исключён.
+# Lose SFX держим в начале: на GS с занятой MOD-памятью partial load не должен
+# оставлять absorb/game-over handles пустыми.
 PRELOAD_IDS = [
-    9, 10, 26, 20, 12, 2, 1, 34, 38,
+    9, 10, 23, 32, 19, 13, 34, 38,
+    26, 20, 12, 2, 1,
     3, 4, 5, 6, 7, 24, 25, 28, 11, 21,
-    23, 37, 32, 14, 19, 13,
+    37, 14,
 ]
 
 def align_up(value: int, alignment: int) -> int:

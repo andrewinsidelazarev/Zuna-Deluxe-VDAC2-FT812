@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """zuma_z80_simulator.py — Z80 sandbox для отладки VDC chain logic.
 
-Загружает TSLib.bin (#1000) + Core.bin/main0 (#5C00) + main1_play.bin (#C000) в flat 64KB,
+Загружает TSLib.bin (#1000) + Core.bin/main0 (#5C00), main1_play.bin (#C000)
+и AY fallback data page (#8000 для flat-вызовов) в flat 64KB,
 парсит zuma.sym для адресов VDC_*, даёт API:
 
   sim = ZumaZ80Sim(project_root)
@@ -73,6 +74,7 @@ class ZumaZ80Sim:
         # сегмента одновременно видны. Real Z80 видит main1 через slot 3 mapping
         # после Init_Core (SetPage3 #04).
         self._load_bin(os.path.join(project_root, 'Build', 'main1_play.bin'), 0xC000)
+        self._load_bin_optional(os.path.join(project_root, 'Sounds', 'AY', 'ay_sfx_data.bin'), 0x8000)
 
         # Stack как в spgbld_vdac2.ini: Stack=0x40F2
         self.cpu.sp = 0x40F2
@@ -84,6 +86,10 @@ class ZumaZ80Sim:
         for i, b in enumerate(data):
             self.set_byte(addr + i, b)
         print(f'loaded {os.path.basename(path)}: {len(data)} bytes @ #{addr:04X}')
+
+    def _load_bin_optional(self, path, addr):
+        if os.path.exists(path):
+            self._load_bin(path, addr)
 
     def set_byte(self, addr, value):
         self.cpu.memory[addr & 0xFFFF] = value & 0xFF

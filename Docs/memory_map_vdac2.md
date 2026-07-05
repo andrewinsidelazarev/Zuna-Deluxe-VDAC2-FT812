@@ -1,264 +1,325 @@
-# Zuma Deluxe VDAC2: карта памяти
+# Zuma Deluxe VDAC2: актуальная карта памяти
 
-Дата среза: 2026-06-14 (откат к опорной **v071**).
+Дата среза: 2026-07-05, build после `v098-2026-07-05-loading-level-hold-reference`.
 
-Документ фиксирует текущий runtime layout проекта после перехода к `ZUMALVL.PAK`.
-Главная цель: больше не добавлять превью, загрузчики и временные буферы "на глаз" в уже занятые области.
+Документ описывает текущую рабочую раскладку проекта. Источники истины для
+проверки:
 
-> Ревизия 2026-06-14: эксперимент с 256-entry ball matrix LUT отменён.
-> Page `#10` снова свободна; chain draw использует опорную grouped-LUT модель
-> из `chain_matrix_lut.bin`. `main1_play` = 14822 bytes / 1562 bytes free.
-> Page `#0F` остаётся runtime chunkB трека (`TRACK_PAGE2`).
+- `Source/ASM/main.asm`
+- `Source/ASM/top_mask_overlay_meta.inc`
+- `spgbld_boot.ini`
+- `spgbld_vdac2.ini`
+- `Source/OTHER/check_memory_map.py`
+- `Source/OTHER/audit_ramg_full.py`
+- свежий `Build/zuma.sym`
 
-## 1. Правила владения
+Перед правками памяти запускать:
 
-- `spgbld_vdac2.ini` описывает только SPG-страницы. Это не доказывает, что runtime RAM_G не конфликтует.
-- FT812 `RAM_G` должен рассматриваться как набор профилей:
-  - `gameplay` - фон, шары, frog, cursor, killzone, explosion, HUD, fonts, dialogs.
-  - `main menu` - полноэкранное меню и его кнопки.
-  - `level select` - фон выбора уровня, кнопки, badges, preview.
-  - `more games` - отдельный полноэкранный экран.
-- Профили могут переиспользовать один и тот же RAM_G диапазон только если при входе в комнату весь нужный профиль заново загружается, а код не ожидает сохранности данных из другого профиля.
-- Общие assets, которые должны жить между комнатами, нельзя размещать в диапазонах, которые комнаты перезаливают.
-- Любой код, который временно мапит `PAGE3` не на `#04`, обязан делать это под `DI`, восстанавливать `PAGE3=#04`, затем `EI`.
-- `main1_play` ограничен 16 КБ; крупные таблицы/данные выносить в отдельные SPG pages/overlay, а не держать в page `#04`.
+```powershell
+python Source\OTHER\check_memory_map.py
+python Source\OTHER\audit_ramg_full.py
+```
 
-## 2. Z80 адресное пространство
+Текущий результат: обе проверки проходят. `Main1` почти полон: free 248 bytes.
 
-Текущий стартовый layout:
+## Правила
 
-| Slot | CPU range | Normal page | Владелец | Примечание |
-|---|---:|---:|---|---|
-| 0 | `#0000..#3FFF` | `#00` | TSLib + slot0 helpers | `TSLib.bin`, ORG `#1000`; +circular log/slot0 helpers (end `#3E71`). `FT.WriteMem` тут. |
-| 1 | `#4000..#7FFF` | `#05` | Core | `Core.bin`, ORG `#5C00`; stack `#40F2`; resident vars; `VDC_ReadSampleAtHL`; loader-трамплины. FAT-загрузчик ВЫНЕСЕН в overlay (см. §3a). |
-| 2 | `#8000..#BFFF` | `#06` | TrackData (chunkA) | Fallback L1 track / chunkA трека из PAK; загрузчик временно мапит сюда staging-страницы (`#03` буфер, `#07..#0E` bg) при чтении SD. |
-| 3 | `#C000..#FFFF` | `#04` / `#40` | `main1_play` / loader overlay | Gameplay/menu/level-select (page #04, сейчас 1562 bytes free). Во время загрузки трамплин мапит сюда page **#40** = FAT-загрузчик RawPak (§3a). |
+- FT812 `RAM_G` ровно 1 MiB: `#000000..#100000`.
+- Адреса `>= #100000` нельзя использовать: на железе это выход за пределы
+  графической RAM_G.
+- `RAM_G` разделён на профили сцен. Перекрытия между профилями допустимы только
+  если сцена полностью перезагружает свои assets.
+- Перекрытия внутри одного активного профиля запрещены, кроме явно описанных
+  swap/overlay зон.
+- `#0AC000..#0CC000` не свободная память. Это swap-zone: tunnel top-mask в
+  активном gameplay или dialog frame в pause/dialog.
+- `LOADING LEVEL X-X` при входе в gameplay временно использует `#0AC000`.
+  Перед загрузкой tunnel top-mask эта область гасится чёрным DL.
+- `Build/` содержит итоговые артефакты сборки. AY SFX data живёт в
+  `Sounds/AY/ay_sfx_data.bin`, не в `Build/`.
 
-Фактические размеры (`Build/*.bin`, срез 2026-06-13):
+## Z80 Layout
 
-| Блок | Адрес | Размер | Диапазон |
-|---|---:|---:|---:|
-| `TSLib.bin` | `#1000` | 12246 (`#2FD6`) | `#1000..#3FD5` |
-| `Core.bin` | `#5C00` | 8845 (`#228D`) | `#5C00..#7E8C` |
-| `main1_play.bin` | `#C000` page #04 | 14822 (`#39E6`) | `#C000..#F9E5` — 1562 bytes free |
-| `ui_ovl.bin` | `#C000` page #41 | 13086 (`#331E`) | `#C000..#F31D` |
-| `loader_ovl.bin` | `#C000` page #40 | 11890 (`#2E72`) | `#C000..#EE71` — RawPak loader, dormant вне загрузок |
+Текущие размеры из `Build/*.bin`:
 
-> ⚠️ ЛОВУШКА SAVEBIN (DEVICE ZXSPECTRUM4096): main1_play (#04) и loader overlay (#40)
-> ассемблируются на одном логическом `#C000`, но РАЗНЫХ физических страницах. Перед каждым
-> `SAVEBIN` обязательно `SLOT n : PAGE m` (замапить нужную страницу), иначе SAVEBIN сдампит
-> последнюю замапленную (overlay) в main1_play.bin → порча Main1 (поймано харнессом
-> test_page3_inflate_guards). Код в хвосте main.asm.
+| Блок | CPU/slot | Файл | Размер | Свободно |
+|---|---:|---|---:|---:|
+| TSLib/slot0 | `#1000`, page `#00` | `Build/TSLib.bin` | 12244 | n/a |
+| Core/Main0 | `#5C00`, page `#05` | `Build/Core.bin` | 9211 | n/a |
+| Gameplay overlay | `#C000`, page `#04` | `Build/main1_play.bin` | 16136 | 248 |
+| UI overlay | `#C000`, page `#41` | `Build/ui_ovl.bin` | 14510 | 1874 |
+| Loader overlay | `#C000`, page `#40` | `Build/loader_ovl.bin` | 12351 | 4033 |
 
-Boot SPG в поставке: **347136 байт** (`ZUMA_VD2.SPG` / `Build/zuma_vdac2.spg`). `ZUMAMAIN.PAK` = 3391488 байт, `ZUMALVL.PAK` = 6425600 байт. Старый миф «размер SPG ломает загрузку» опровергнут — реальная причина прежних фейлов была в SD/битом блоке; см. память `reference_zuma_vdac2_spg_size_breaks_wc_loader`.
+Стартовая схема:
 
-Важные resident адреса (Core, slot 1, v041 по `Build/zuma.sym`; адреса ПЛАВАЮТ при росте Core — всегда сверять по свежему sym):
+| Slot | CPU range | Обычная page | Назначение |
+|---|---:|---:|---|
+| 0 | `#0000..#3FFF` | `#00` | TSLib + slot0 helpers |
+| 1 | `#4000..#7FFF` | `#05` | Core/Main0, resident state |
+| 2 | `#8000..#BFFF` | `#06` | Track V2 page после загрузки уровня |
+| 3 | `#C000..#FFFF` | `#04/#40/#41` | gameplay / loader / UI overlay |
 
-| Адрес | Владелец | Назначение |
-|---:|---|---|
-| `#4100..#463F` | render prepass cache 1 | `VDC_MAX_SLOTS * 7`, сейчас 192 слота. |
-| `#4640..#4B7F` | render prepass cache 2 | второй cache для top-mask under/over без повторного prepass. |
-| `#4B80..#4C87` | log | circular F12/debug log: 32 записи по 8 байт + служебные байты. |
-| `#4C88` | VDC entropy diag | raw RTC second snapshot. |
-| `#4C89..#4C8B` | frog randomizer | RTC mix/exclude flags. |
-| `#4C8C..#4CAC` | build canary | `ZVDAC2 ...`, пишется в `Init_Core`. |
-| `#4CAD..#4CAF` | VDC entropy diag | final seed word + raw R register, до CMD-буфера. |
-| `#4CB0` | FT command buffer pointer | `CMD_ADDRESS_PTR`; нельзя возвращать на `#6000`. |
-| `#5044..#5047` | boot canary | `"BOOT"`, пишется ПЕРВОЙ инструкцией `Start` (#5C00). НЕНАДЁЖНА: затирается в геймплее; «нет канарейки» ≠ boot hang. |
-| `#612E..#6130` | Core | `BgRamL/BgRamH`. |
-| `#6481..#6482` | Core | `PauseFadeTimer`, `VDC_PauseAlpha` (пауза fade-out, state 4). |
-| `#65FB` | Core | `ZiFi_GpDbgStep`; рядом `ZiFi_DbgGamesA` (`#6600`) + `Found` (диаг загрузчика PAK). |
-| `#6A38` | Core | `VDC_ReadSampleAtHL` — page-aware чтение сэмпла трека (#06 если t<3276, иначе #0F). Вызывается per-frame из `VDC_SlotPos` (Main1) как tail-jump. |
-| `#6AB1` | Core | `RawPak_TargetName`/`EntName` (LFN-буферы по 64 B), далее `RawPak_FatBuf` 512B (`#6B4F`). |
-| `#6D4F..#6D53` | Core | `RawPak_PakLba` (LBA лог. сектора 0 PAK), `RawPak_LogCur`. |
-| `#6D56` | Core | `ZiFi_LevelTOC` 20 bytes. |
-| `#6E40..#6E42` | Core | `FadeAlpha`, `CurrentDifficulty`, `CurrentLevel`. |
+Временные Z80 pages:
 
-Core (v041) = 5095 B (+214 B к v039): подключены параметры уровней из таблицы (`GetCurrentLevelSettingRecord` и геттеры скорости/цвета/lead-in), перенос счёта между уровнями, page-aware `VDC_ReadSampleAtHL` (вынесен из Main1, который полон). Свой FAT32-драйвер RawPak (CMD17 + LFN + двухфазный загрузчик) + `RawPak_FatBuf` 512B. `Source/ASM/sd_zc.asm` ВКЛЮЧЁН (CMD17-чтение SD). См. память `reference_zuma_vdac2_fat32_driver_rawpak`.
-
-> ✅ СДЕЛАНО (2026-05-27): FAT-загрузчик RawPak — «резидентная задача» (отработал на
-> загрузке → спит) — **вынесен из Core** в overlay-страницу #40 (slot 3), мапимую только на
-> время загрузки. Резидентным в Core остались `VDC_ReadSampleAtHL` (per-frame) + cross-load
-> vars + 2 трамплина (`loader_resident.asm`). Core 5095→2127. Локально проверено (gate). См. §3a.
-
-Уже найденная ошибка: раньше `CurrentLevel/CurrentDifficulty/FadeAlpha` были объявлены вне Core и попали в TSLib/code область около `#1937..#1938`; это приводило к мусорному номеру уровня и зависанию ZiFi seek. Сейчас они в Core.
-
-## 3. Временные Z80 pages
-
-| Page | Использование | Статус |
-|---:|---|---|
-| `#01` | `SCRATCH_PAGE` для ZX7 unpack в `UnpackAndUploadPage` | Временно мапится в slot 3; после вызова restore `PAGE3=#04`. |
-| `#03` | `ZIFI_BUFFER_PAGE` — 512-byte буфер RawPak (TOC, FAT-сектор каталога, палитра, SD-stream) | Временно мапится в slot 2. Не должен содержать постоянный SPG block. |
-| `#04` | `main1_play` | Должен быть нормальным `PAGE3` вне критических loader sections. |
-| `#06` | fallback track + chunkA трека из PAK (`TRACK_L01_PAGE`) | Нормальный `PAGE2` после `SetCurrentTrackPage`. Сэмплы `t<3276`. |
-| `#07..#0E` | компилированный fallback L1 bg + staging для bg из PAK (SD-фаза пишет сюда L2+ bg, потом FT.WriteMem) | |
-| `#0F` | **chunkB трека** (`TRACK_PAGE2`) — сэмплы `t>=3276` для длинных треков (>1 страницы 16K) | Рантайм-скретч (НЕ SPG block). Пишется SD-фазой загрузчика, читается `VDC_ReadSampleAtHL`. |
-
-(Бандл TS-DOS драйвер на page `#0F` УБРАН в v039 — мы перешли на свой CMD17/RawPak. С v041 page `#0F` ПЕРЕИСПОЛЬЗОВАН как runtime-страница chunkB трека: в SPG её как block нет, но в рантайме она мапится в слот 2 при чтении/проигрывании длинного трека. См. `reference_zuma_vdac2_upper_levels_track_too_big`.)
-
-## 3a. Свой FAT32-драйвер RawPak (актуально для v041)
-
-Бандл-WC-драйвер (page #0F, CORE32 LOAD512) дрейфил ровно −128 секторов из SPG-контекста (stateful CORE32, stale high-word позиции при ремонте mount). Вместо его починки в v039 написан **свой self-contained FAT32-драйвер RawPak** (`Source/ASM/ts-dos.asm` RawPak_* + `sd_zc.asm` CMD17). Бандл-драйвер полностью убран (page #0F как block не в SPG; в v041 переиспользован под chunkB трека в рантайме — см. §3).
-
-RawPak: CMD17 (одиночный сектор, #57/#77), BPB superfloppy (bps=512 spc=1 reserved=32 fats=2 fatsz=1601 root=2 datastart=3234), свой FAT-walk (`FatNext`: cluster>>7+FatStart, отдельный `FatBuf`), LFN-сопоставление имён, двухфазная загрузка SD→FT (FT812+SD на одной SPI-шине). Полный разбор внутренностей и граблей — память `reference_zuma_vdac2_fat32_driver_rawpak`.
-
-Два пути чтения:
-- **Общий (FAT-walk):** `RawPak_AdvanceOne`/`RawPak_FatNext` (+ `RawPak_ReadSectors`/`SkipB`, ныне legacy) — идёт по FAT-цепочке, поддерживает фрагментацию. Используется для обхода каталога (`FindInCurrentDir`). TOC читается уже быстрым путём.
-- **Быстрый (таблица секторов):** `RawPak_ReadOneLogicalIX` через кэш `RawPak_PakLba`, `LBA = PakLba + N`. **Допущение непрерывности** файла. Это путь геймплейного загрузчика (`LoadGameplayLevelSpecificFromPack`) — даёт чтение секции одним SD-burst без пер-секторного FAT-walk.
-
-✅ ВЕРХНИЕ УРОВНИ ПОЧИНЕНЫ (v041). Корень был **НЕ фрагментация** (PAK физически непрерывен, проверено `check_pak_chain.py`), а лимит «трек ≤ 1 страница 16K»: загрузчик отвергал трек ≥33 секторов (`CP 33`). Падали L04/07/16/17/18/20-22. Фикс — трек на 2 страницы (chunkA #06 + chunkB #0F, см. §3/§8). Память `reference_zuma_vdac2_upper_levels_track_too_big`.
-
-✅ СДЕЛАНО (2026-05-31): RawPak читает **и непрерывный, и сегментированный (фрагментированный)** PAK. При открытии PAK строится мультиран-таблица секторов `RawPak_RunTable`: FAT-цепочка сжимается в extents `{LBA, len}` (непрерывный файл = 1 run, фрагментированный = несколько). `RawPak_ReadOneLogicalIX` транслирует логический сектор через эту таблицу, поэтому геймплейный загрузчик больше не полагается на `LBA=PakLba+N`. Для скорости FAT-sector cache (`RawPak_FatBufLba`) не перечитывает один и тот же FAT-сектор при построении таблицы.
-
-## 4. FT812 RAM_G: gameplay profile
-
-| Диапазон | Владелец | Источник |
-|---:|---|---|
-| `#000000..#003FFF` | `TEXT_GAMEOVER` | page `#20`, ZX7, ARGB4. |
-| `#004000..#007FFF` | `TEXT_LEVEL11` | page `#21`, ZX7, ARGB4. |
-| `#008000..#00BFFF` | `TEXT_SPIRALDOOM/OSPREY` | page `#22/#23`, ZX7, ARGB4. |
-| `#00C000..#00FFFF` | `SPARKLE` | page `#24`, ZX7, ARGB4. |
-| `#010000..#02D4FF` | gameplay background | 400x300 PALETTED4444 indices, 120000 bytes. |
-| `#02D500..#02D6FF` | gameplay bg palette | 512 bytes ARGB4. |
-| `#02D800..#02FFFF` | dialog OK button | raw PALETTED4444. |
-| `#030000..#04FFFF` | frog ARGB4 layers | body/plate/tongue/overlay, 4 x 32K upload blocks. |
-| `#050000..#07FFFF` | balls ARGB4 atlas | 192K, pages `#2D..#38`. |
-| `#080000..#0801FF` | balls palette legacy slot | Сейчас ARGB4 balls не используют palette, но адрес занят концептуально. |
-| `#080200..#0803FF` | frame palette | 512 bytes. |
-| `#084000..#097FFF` | frame strips | top/bottom/left/right, 5 x 16K upload blocks. |
-| `#098000..#09FFFF` | native font | pages `#68..#69`. |
-| `#0A0000..#0A3FFF` | Cancun10 stats font | page `#6A`. |
-| `#0A4000..#0ABFFF` | Cancun8 font | pages `#6B..#6C`. |
-| `#0AC000..#0CBFFF` | dialog frame | 8 x 16K upload blocks. |
-| `#0CC000..#0CC1FF` | HUD life frog | 400 bytes, raw. |
-| `#0CC200..#0CC3FF` | HUD palette | 512 bytes. |
-| `#0CC400..#0CC5FF` | dialog palette | 512 bytes. |
-| `#0CC800..#0CE3FF` | HUD menu atlas | raw PALETTED4444. |
-| `#0CE400..#0CFFFF` | HUD progress atlas | raw PALETTED4444. |
-| `#0D0000..#0D3FFF` | gameplay cursor upload block | cursor itself small, rest padded zeros. |
-| `#0D4000..#0EBFFF` | killzone atlas | `KZ_PAGE_COUNT=10` includes killzone + destroy upload sequence. |
-| `#0EC000..#0F9FFF` | destroy atlas handle source | Overlaps tail of previous 10-page upload by design because destroy starts at page `#1C`. |
-
-Текущая неоднозначность: `KZ_PAGE_COUNT=10` starts at `#0D4000`, so upload covers `#0D4000..#0FBFFF`; `DESTROY_RAMG_ADDR=#0EC000` lies inside that same contiguous upload. This is intentional only if code treats killzone+destroy as one contiguous combined upload.
-
-## 5. FT812 RAM_G: menu/room profiles
-
-Main menu:
-
-| Диапазон | Владелец |
+| Page | Назначение |
 |---:|---|
-| `#000000..#04AFFF` | main menu foreground/canvas chunks. |
-| `#04B000..#06517F` | sky strip. |
-| `#065180..#0ABA5F` | sun/glow/buttons. |
-| `#0ABA60..#0ABBFF` | sky palette. |
-| `#0ABC60..#0ABE5F` | UI palette. |
-| `#0AC000..#0ADFFF` | cursor. |
+| `#01` | `SCRATCH_PAGE` для ZX7 unpack |
+| `#03` | RawPak sector/staging buffer |
+| `#04` | gameplay overlay |
+| `#06` | Track V2 page A |
+| `#07..#0E` | fallback/staging bg pages |
+| `#0F/#10/#12` | дополнительные Track V2 pages |
+| `#40` | loader overlay |
+| `#41` | UI overlay |
+| `#F4` | AY SFX page, source `Sounds/AY/ay_sfx_data.bin` |
 
-Level select:
+## Runtime Artifacts
 
-| Диапазон | Владелец |
+| Файл | Размер |
+|---|---:|
+| `Build/ZUMA_VD2.SPG` | 377344 |
+| `Build/ZUMAMAIN.PAK` | 3670016 |
+| `Build/ZUMALVL.PAK` | 7139840 |
+| `Build/ZUMAAUD.PAK` | 802136 |
+| `Build/ZUMASND.PAK` | 1215488 |
+| `Sounds/AY/ay_sfx_data.bin` | 11714 |
+
+`spgbld` пишет секунду времени сборки в заголовок SPG по offset `0x3C`, поэтому
+SHA всего `.spg` не является стабильным payload-хешем.
+
+## SPG Pages
+
+Boot SPG (`spgbld_boot.ini`) содержит минимальный boot/runtime набор:
+
+| Page | Источник |
 |---:|---|
-| `#000000..#04AFFF` | level-select background. |
-| `#04B000..#06517F` | level-select sky strip. |
-| `#065180..#082657` | buttons and difficulty badges. |
-| `#0ABA60..#0ABBFF` | sky palette. |
-| `#0ABC60..#0ABE5F` | UI palette. |
-| `#0AC000..#0ADFFF` | cursor reused from menu. |
-| `#0B0000..#0B20B1` | preview frog + killzone markers. |
-| `#0D4000..#0EA57F` | selected preview bitmap, 280x170 ARGB4. |
+| `#00` | `Build/TSLib.bin` |
+| `#05` | `Build/Core.bin` |
+| `#F4` | `Sounds/AY/ay_sfx_data.bin` |
+| `#40` | `Build/loader_ovl.bin` |
+| `#41` | `Build/ui_ovl.bin` |
+| `#25..#27` | loading text pages |
+| `#A8..#C4` | boot loading artwork/logo/authors |
 
-More Games:
+Full profile (`spgbld_vdac2.ini`) дополнительно описывает gameplay/menu/level
+assets. `ZUMAMAIN.PAK` генерируется из `spgbld_vdac2.ini`; страницы boot-набора
+исключаются как уже resident, остальные попадают в pack table.
 
-| Диапазон | Владелец |
-|---:|---|
-| `#000000..#04AFFF` | full-screen promo canvas chunks. |
-| `#0ABC60..#0ABE5F` | palette. |
-
-## 6. Текущие конфликты и красные зоны
-
-1. `LS_PREVIEW_BG_RAMG=#0D4000` совпадает с gameplay `KZ_RAMG_ADDR=#0D4000`.
-   Это допустимо только как room-profile reuse. Нельзя считать preview постоянным asset и нельзя стартовать gameplay без полной перезагрузки killzone/destroy.
-
-2. `LS_PREVIEW_FROG_RAMG=#0B0000` в level-select profile находится внутри gameplay dialog/font/frog-paletted legacy зоны. Сейчас gameplay ARGB4 frog живет в `#030000..#04FFFF`, но область `#0B0000` все равно не должна считаться общей.
-
-3. `MENU_CURSOR_RAMG`, `LS_CURSOR_RAMG` и gameplay `DIALOG_FRAME_RAMG` используют `#0AC000` в разных профилях. Это нормальный reuse, но только при полной перезаливке профиля.
-
-4. `main1_play` в опорной v071 имеет **1562 байта свободно** (2026-06-14 после отката). Большие данные — в отдельные SPG pages/overlay; hot code — в page `#04` только если он нужен каждый кадр.
-
-5. [OBSOLETE для v039] Старый `ZiFi_StreamSection` (стрим в RAM_G с чередованием SD/FT) заменён **двухфазным загрузчиком** (`LoadGameplayLevelSpecificFromPack`): сначала ВСЯ SD-фаза в RAM, потом FT-фаза. FT812+SD на одной SPI-шине #57/#77 — чередование крашит, отсюда разделение. Подробно: память `reference_zuma_vdac2_fat32_driver_rawpak`.
-
-6. [OBSOLETE для v039] Превью L01-L22 ВЫНЕСЕНЫ в PAK (v038); страницы `#CC..#FA` закомментированы в `spgbld_vdac2.ini`. (Исторически: были SPG-resident zlib на `#CC..#FA` с page-local offset `#0200`, чтобы первые 512 байт держались подальше от raw zlib-опкодов при загрузке SPG.)
-
-## 7. SPG pages: основные владельцы
+Важные page owners:
 
 | Pages | Владелец |
 |---:|---|
-| `#00` | `TSLib.bin`. |
-| `#04` | `main1_play.bin`. |
-| `#05` | `Core.bin`. |
-| `#06` | fallback level 1 track (chunkA трека из PAK в рантайме). |
-| `#07..#0E` | fallback level 1 background pages. |
-| `#0F` | НЕ SPG block. Рантайм-страница chunkB длинного трека (`TRACK_PAGE2`). Бандл-драйвер `WDFCVBI2.COD` убран в v039. |
-| `#11` | fallback level 1 background palette. |
-| `#16..#1F` | killzone + destroy atlases. |
-| `#20..#24` | gameplay text/sparkle atlases. |
-| `#2D..#39` | balls atlas + legacy palette page. |
-| `#3A..#3F` | frame strips + frame palette. |
-| `#52..#5A` | frog layers + cursor. |
-| `#5B..#6D` | HUD/dialog/fonts. |
-| `#70..#93` | main menu assets. |
-| `#94..#BB` | level-select screen/buttons/badges/markers. |
-| `#BC/#BF/#C2/#C5/#C8/#CB` | More Games. |
-| `#CC..#FA` | — (ВЫНЕСЕНЫ в PAK в v038: превью L01-L22 закомментированы в `spgbld_vdac2.ini`, грузятся из `ZUMALVL.PAK`). |
+| `#04` | gameplay overlay |
+| `#06` | fallback/track page |
+| `#07..#0E` | fallback bg pages |
+| `#11` | fallback bg palette |
+| `#16..#1F` | killzone + destroy |
+| `#20..#27` | text/loading/sparkle |
+| `#28..#2C` | WIN explosion |
+| `#3A..#3F` | frame strips + palette |
+| `#40` | loader overlay |
+| `#41` | UI overlay |
+| `#42` | level chain table |
+| `#43..#4F` | L19 balls atlas + palette |
+| `#52..#5F` | frog/cursor/HUD |
+| `#60..#6D` | dialog/fonts |
+| `#70..#93` | main menu |
+| `#94..#BB` | level-select |
+| `#BC..#CB` | More Games |
+| `#CC..#F3` | tunnel top-mask data |
+| `#F4` | AY SFX data |
 
-Проверка на 2026-06-14: экспериментальный page `#10` под raw ball matrix LUT удалён; прямых дублей `Block` pages в `spgbld_vdac2.ini` не добавлялось.
+Level-select previews не живут в SPG. Они грузятся из `ZUMALVL.PAK`.
 
-**Свободные SPG-страницы** (для overlay-загрузчика и будущих assets), срез 2026-05-27 по `spgbld_vdac2.ini`:
+## FT812 RAM_G: Boot Loading
 
-`#02, #10, #12-#15, #25-#2C, #41-#51, #6E-#6F, #71, #73, #75-#76, #78-#79, #7B-#7C, #7E-#7F, #96, #98, #9A, #9C, #9E-#9F, #BD-#BE, #C0-#C1, #C3-#C4, #C6-#C7, #C9-#CA, #CC-#FA`
+| Range | Asset |
+|---:|---|
+| `#000000..#03C000` | boot loading DXT-L4 bg |
+| `#03C000..#044000` | boot loading bar |
+| `#044000..#06C000` | ZX Evolution TS anim |
+| `#06C000..#070000` | SFX authors atlas |
+| `#070000..#074000` | PopCap logo |
 
-Крупные непрерывные дыры: `#25-#2C` (8), `#41-#51` (17), `#CC-#FA` (47 — бывшие превью, теперь в PAK). Занятые с 2026-05-27: **`#40`** = loader overlay (RawPak). Рантайм-скретч (НЕ выделять как постоянный block): `#01` (ZX7 unpack), `#03` (RawPak буфер), `#0F` (chunkB трека).
+Max end: `#074000`.
 
-## 8. ZUMALVL.PAK
+## FT812 RAM_G: Main Menu
+
+| Range | Asset |
+|---:|---|
+| `#000000..#04B000` | menu foreground |
+| `#04B000..#065180` | menu sky |
+| `#065180..#0670C4` | sun |
+| `#0670C4..#071D08` | glow |
+| `#071D08..#0ABA58` | buttons |
+| `#0ABA60..#0ABC60` | sky palette |
+| `#0ABC60..#0ABE60` | UI palette |
+| `#0AC000..#0AC480` | menu cursor bitmap |
+
+Cursor details:
+
+- Финальный bitmap курсора: 24x24 ARGB4 = `#480` bytes, `#0AC000..#0AC480`.
+- `Graphics/Menu/Converted/menu_cursor_argb4.zlib` распаковывается padded page на
+  `#0AC000..#0B0000`; палитры `#0ABA60..#0ABE60` после этого пишутся заново.
+- `check_memory_map.py` держит для `MENU_CURSOR` защитное окно
+  `#0AC000..#0AD200`, поэтому его max end для `main_menu` = `#0AD200`.
+
+Max end финальных живых данных: `#0AC480`.
+Max end статической проверки: `#0AD200`.
+
+## FT812 RAM_G: Level Select
+
+| Range | Asset |
+|---:|---|
+| `#000000..#04B000` | level-select bg |
+| `#04B000..#082658` | sky/UI/buttons/badges |
+| `#084000..#08C000` | `LOADING LEVELS...` bitmap |
+| `#0ABA60..#0ABC60` | sky palette |
+| `#0ABC60..#0ABE60` | UI palette |
+| `#0AC000..#0AC480` | cursor bitmap |
+| `#0B0000..#0B2810` | preview markers/frog/killzone |
+| `#0B3000..#0D3000` | preview bg buffer B |
+| `#0D4000..#0F4000` | preview bg buffer A |
+
+Max end: `#0F4000`.
+
+Как и в главном меню, cursor bitmap занимает только `#480` bytes, но
+`check_memory_map.py` проверяет `LS_CURSOR_REUSE` как `#0AC000..#0AD200`, а
+одноразовая zlib-распаковка пишет padded page до `#0B0000` до загрузки
+preview markers и палитр.
+
+## FT812 RAM_G: More Games
+
+| Range | Asset |
+|---:|---|
+| `#000000..#04B000` | More Games bg |
+| `#0ABC60..#0ABE60` | More Games palette |
+
+Max end: `#0ABE60`.
+
+## FT812 RAM_G: Gameplay
+
+Steady-state после загрузки уровня:
+
+| Range | Asset |
+|---:|---|
+| `#000000..#004000` | GAME OVER text |
+| `#004000..#00C000` | `FONT_LEVEL48` |
+| `#00C000..#010000` | sparkle |
+| `#010000..#02D4C0` | level background indices |
+| `#02D500..#02D700` | bg palette |
+| `#02D800..#030000` | dialog OK button |
+| `#030000..#050000` | frog/plate/tongue/overlay ARGB4 |
+| `#050000..#080000` | balls atlas |
+| `#080000..#080200` | balls palette |
+| `#080200..#080400` | frame palette |
+| `#080400..#084000` | top-mask window A |
+| `#084000..#08C000` | frame top |
+| `#08C000..#090000` | frame bottom |
+| `#090000..#094000` | frame left |
+| `#094000..#098000` | frame right |
+| `#098000..#0A0000` | native font |
+| `#0A0000..#0A4000` | Cancun10 stats font |
+| `#0A4000..#0AC000` | Cancun8 HUD font |
+| `#0AC000..#0CC000` | top-mask swap / dialog frame |
+| `#0CC000..#0CC200` | HUD life frog |
+| `#0CC200..#0CC400` | HUD palette |
+| `#0CC400..#0CC600` | dialog palette |
+| `#0CC800..#0CE400` | HUD menu atlas |
+| `#0CE400..#0CED60` | HUD progress atlas |
+| `#0D0000..#0D4000` | cursor upload block |
+| `#0D4000..#0FC000` | killzone + destroy |
+| `#0FC000..#100000` | top-mask window B |
+
+Max end: `#100000`.
+
+Dialog/pause state:
+
+- `#0AC000..#0CC000` содержит `DIALOG_FRAME`.
+- Renderer не рисует tunnel top-cover, пока dialog frame занимает swap-zone.
+
+WIN state:
+
+- `#050000..#064000` содержит `WINEXP_ATLAS` поверх balls atlas.
+- Это допустимо только после окончания gameplay-шаров.
+
+Loading gameplay transient:
+
+- `LOADING_TEXT_GAME_RAMG=#0AC000`.
+- `LOADING LEVEL X-X` рисуется из этой временной области.
+- Frame strips в `#084000..#098000` можно грузить без раннего гашения текста.
+- Перед `ZL_UploadTopMasksMaybe` ставится чёрный DL, потому что top-mask может
+  занять `#0AC000..#0CC000`.
+
+## ZUMALVL.PAK
 
 Формат:
 
-- sector 0: header `ZLVP`, version 1, level_count 22, sector size 512.
-- sector 1: TOC, 22 entries x 20 bytes.
-- sector 2..N: data blob, per level: bg, palette, track, title, preview.
+- sector 0: header `ZLVP`
+- sector 1: TOC, 22 entries x 20 bytes
+- sector 2..N: data blob
 
-Секции на уровень:
+Секции уровня:
 
-| Section | Назначение | Runtime target |
-|---|---|---|
-| `bg` | 8 x 16K PALETTED4444 index pages | `BG_RAMG_ADDR=#010000`. |
-| `pal` | 512-byte ARGB4 palette | `BG_PALETTE_RAMG=#02D500`. |
-| `track` | canonical 640x480 track | chunkA → `TRACK_L01_PAGE=#06` (сэмплы <3276), chunkB → `TRACK_PAGE2=#0F` (>=3276). Pack-стадия `make_level_pack.pagesplit_track` бьёт трек по сэмпл-границе; загрузчик принимает ≤64 сектора (`CP 65`). |
-| `title` | ZX7 text title | Сейчас preview titles рисуются live text; section есть в паке. |
-| `preview` | raw ARGB4 preview pages | Грузятся из PAK в level-select (вынесены из SPG в v038). |
+| Section | Runtime target |
+|---|---|
+| bg | `BG_RAMG_ADDR=#010000`, 8 x 16K pages |
+| pal | `BG_PALETTE_RAMG=#02D500`, 512 bytes |
+| track | Track V2 pages `#06/#0F/#10/#12` |
+| title | title atlas/data section |
+| preview | level-select preview ping-pong buffers |
 
-Текущее состояние (v052-pre): `LoadGameplayLevelSpecificFromPack` АКТИВЕН — двухфазно (SD→FT) стримит bg/pal/track из PAK (CMD17 + LFN). **Все 22 уровня грузятся** (фикс «трек на 2 страницы»). bg = ровно 256 секторов (8×16K, валидируется), track ≤64 секторов, pal = 1 сектор. Геймплейный путь читает PAK через `RawPak_RunTable`, поэтому работает и с непрерывным, и с фрагментированным PAK. При `CF=0` — fallback на компилированный L1.
+`ZUMALVL.PAK` сейчас 7139840 bytes. Все 22 уровня имеют bg/palette/track/title/preview.
 
-## 9. Что проверить перед исправлением загрузки уровней
+## Audio
 
-### Закрыто по загрузчику: вынос RawPak + сегментированный PAK
+GS:
 
-1. RawPak вынесен из Core в overlay-страницу `#40`; резидентными остались `VDC_ReadSampleAtHL` и трамплины.
-2. Сегментированный PAK закрыт через `RawPak_RunTable` + FAT-sector cache.
-3. Локальные проверки: `test_rawpak_z80.py` (непрерывный superfloppy), `test_rawpak_partitioned.py` (MBR + partition offset), `test_rawpak_fragmented.py` (искусственно фрагментированный PAK + полный gameplay loader).
+- `ZUMAAUD.PAK` содержит MOD/audio pack.
+- `ZUMASND.PAK` содержит GS SFX pack.
 
-### Историческая методичка (OBSOLETE для v041 — старый ZiFi-стриминг с чередованием SD/FT)
+AY fallback:
 
-1. Не чинить ZiFi streaming вслепую. Сначала добавить маленький controlled harness/dump marker в Core/slot0, не в `main1_play`.
-2. При входе в `ZiFi_StreamSection` логировать:
-   - `PAGE0..PAGE3`,
-   - `SP`,
-   - `DE remaining`,
-   - chunk size,
-   - `BgRamH:BgRamL`,
-   - return адрес до/после `FT.WriteMem`.
-3. Перед `CALL FT.WriteMem` гарантировать `PAGE0=#00` и `PAGE3=#04` или явно документированную source page.
-4. После `FT.WriteMem` восстановить `PAGE0=#0F` только если следующий вызов действительно ZiFi driver.
-5. Не использовать stack в page, который может быть перезатерт streaming/load512.
-6. После успешного stream bg/pal/track обязательно восстановить normal mapping: `PAGE0=#00`, `PAGE2=track page`, `PAGE3=#04`.
-7. После восстановления ZiFi loader вернуть L02+ не через compiled fallback, а через pack section targets.
+- Исходные WAV берутся из `Sounds/Converted/WAV_GS`.
+- Конвертер: `Source/OTHER/make_ay_sfx.py`.
+- Готовый AY pack: `Sounds/AY/ay_sfx_data.bin`.
+- Отчёт аппроксимации: `Sounds/AY/ay_sfx_report.txt`.
+- ASM metadata: `Source/ASM/ay_sfx_meta.inc`.
+- Runtime player: `Source/ASM/AYSfx.asm`.
+
+## Текущие Допустимые Перекрытия
+
+Cross-profile reuse:
+
+- `level_select:LS_PREVIEW_BG_A` пересекает gameplay `KZ+DESTROY`.
+- `level_select:LS_PREVIEW_BG_B` пересекает gameplay `DIALOG_FRAME`.
+- `main_menu:MENU_CURSOR` пересекает gameplay `DIALOG_FRAME`.
+- `level_select:LS_CURSOR` пересекает gameplay `DIALOG_FRAME`.
+
+Same-profile intentional overlaps:
+
+- `KILLZONE_DESTROY_UPLOAD` и `DESTROY_HANDLE_SOURCE`.
+- WIN-only `WINEXP_ATLAS` поверх balls atlas.
+- `TOP_MASK_SWAP` и `DIALOG_FRAME` как разные состояния одной swap-zone.
+
+## Проверка
+
+Актуальный успешный вывод `check_memory_map.py`:
+
+```text
+[ramg] gameplay: 23 ranges, max end #0FC000
+[ramg] level_select: 10 ranges, max end #0F4000
+[ramg] main_menu: 6 ranges, max end #0AD200
+[ramg] more_games: 2 ranges, max end #0ABE60
+[build] Main0_Size=9211 bytes
+[build] Main1_Size=16136 bytes, free=248 bytes (gameplay overlay page #04)
+[build] UiOvl_Size=14510 bytes, free=1874 bytes (ui overlay page #41)
+[build] LoaderOvl_Size=12351 bytes, free=4033 bytes (loader overlay page #40)
+PASS: memory-map checks
+```
+
+Актуальный успешный вывод `audit_ramg_full.py` заканчивается:
+
+```text
+OK: все профили влезают в 1МБ, живых перекрытий нет.
+```

@@ -6,10 +6,10 @@
 ; VDC — Virtual Discrete Chain physics для Zuma VDAC2 (640x480).
 ; ----------------------------------------------------------------------------
 ; Порт vdc_visual_emulator.py 1:1. Отличия от 360x288 asm-версии:
-;   - CELL_SIZE = 32 (как в 360x288). Track length varies by board; L01 is
-;     ~2774 samples, L22/Space is currently 4354 samples (=136 track cells).
-;     SlotsLen stays byte-sized; HSA is word for headroom.
-;   - LastRenderPos НЕ хранится: при t<0 рендер skip. Trade-off: при cascade
+;   - CELL_SIZE = 32 (как в 360x288). Track length зависит от board; L01 =
+;     ~2774 samples, L22/Space сейчас 4354 samples (=136 track cells).
+;     SlotsLen остаётся byte-sized; HSA — word для headroom.
+;   - LastRenderPos НЕ хранится: при t<0 рендер skip. Компромисс: при cascade
 ;     rollback шары на спавне на 1-2 кадра становятся невидимыми. Можно добавить
 ;     потом как опциональный массив.
 ;   - У match-3 есть visual explosion phase. Slots сохраняют color, пока
@@ -20,38 +20,38 @@
 ;   VDC_Init       — обнулить все массивы, Slots[] = GAP_STOP, RNG seed.
 ;   VDC_Update     — TrySpawn + MoveChain + AnimateChain. Один вызов = один кадр.
 ;   VDC_SlotPos    — для слота A считает (X,Y) центра шара.
-;                    Out: BC=X, DE=Y, CF=1 если skip (gap или t<0).
+;                    Выход: BC=X, DE=Y, CF=1 если skip (gap или t<0).
 ;   VDC_InsertAt   — A=target_idx, B=color. Вставить шар, проверить match.
 ;
-; Все функции корраптят AF/BC/DE/HL; VDC_InsertAt also clobbers IX via
+; Все функции корраптят AF/BC/DE/HL; VDC_InsertAt также портит IX через
 ; VDC_ShiftRight_*.
-; Track V2 layout (active pages selected by VDC_pTrackPages):
-;   pure 16K pages of 8-byte samples: Vx, Vy, tangent, flags, padding.
-;   NumSamples is loaded from the track metadata sector into VDC_ActiveTrackSamples.
+; Track V2 layout (active pages выбираются через VDC_pTrackPages):
+;   чистые 16K pages из 8-byte samples: Vx, Vy, tangent, flags, padding.
+;   NumSamples грузится из track metadata sector в VDC_ActiveTrackSamples.
 ; ============================================================================
 
 VDC_LEVEL_START_BALLS  EQU 35                            ; быстрая фаза: 35 шаров «поездом»
 VDC_FAST_ADVANCE       EQU 12                            ; MoveChain ×12 за tick в fast-фазе
-VDC_ABSORB_ADVANCE     EQU 8                             ; absorb chain advance: 8 px/tick (32/8=4 ticks/cell)
+VDC_ABSORB_ADVANCE     EQU 8                             ; advance absorb chain: 8 px/tick (32/8=4 ticks/cell)
 VDC_CELL_SIZE          EQU 32                            ; sample-units на slot.
 VDC_GLOBAL_SPEED_FACTOR EQU 2                            ; поддерживается 1 или 2; множитель fast-фазы и normal-вызовов SpeedAdvance.
                 ASSERT VDC_GLOBAL_SPEED_FACTOR >= 1
                 ASSERT VDC_GLOBAL_SPEED_FACTOR <= 2
 VDC_DECAY_NEG          EQU 2                             ; insert head slide (neg→0) быстро.
 VDC_DECAY_POS          EQU 1                             ; cascade rollback (pos→0) плавно.
-                                                          ; track chord 1.0815 px/sample: 32×1.08 ≈ 34.6 px
+                                                          ; длина хорды track 1.0815 px/sample: 32×1.08 ≈ 34.6 px
                                                           ; centers, ball 32 px → gap ~2.6 px на прямой.
                                                           ; Используется в VDC_SlotT через ZL_Mul16x8.
                                                          ; track 1.067 px/sample → 42*1.067 ≈ 45 px
                                                          ; между центрами при ball=40 → 5 px gap
                                                          ; (= touching, как в оригинале Zuma).
-VDC_MAX_SLOTS          EQU 192                           ; physical slot buffer: longest track is L22=136 cells,
-                                                         ; leaving insert/gap headroom while fitting Main1.
+VDC_MAX_SLOTS          EQU 192                           ; physical slot buffer: самый длинный track L22=136 cells,
+                                                         ; остаётся insert/gap headroom и всё ещё помещается Main1.
                                                          ; Было 240 — избыток; 128 стало тесно для текущих
-                                                         ; pack-треков. Keep in sync with ZL_BALL_CACHE layout.
+                                                         ; pack-треков. Держать синхронно с ZL_BALL_CACHE layout.
 VDC_GAP_STOP           EQU #FE
 VDC_GAP_CASCADE        EQU #FD
-VDC_NUM_COLORS         EQU 6                             ; 6 colors (atlas already supports 6×32 cells). Pre 2026-05-18: 4.
+VDC_NUM_COLORS         EQU 6                             ; 6 colors (атлас уже поддерживает 6×32 cells). До 2026-05-18: 4.
 VDC_LEVEL_CHAIN_CHANCE EQU 50                            ; level setting: 50% random single, 50% random same-color chain
 ; --- Подтяжка сегментов по референсу Zuma HD (BallChain.c, см. Чат.txt
 ; 2026-06-12). PULL = цвета по краям стыка СОВПАДАЮТ: скорость подтяжки
@@ -64,13 +64,13 @@ VDC_PULL_MAX_X10       EQU 100                            ; BALL_MAX_BACK_SPEED 
 VDC_PULL_BASE_X10      EQU 10                             ; старт = 1 сэмпл/кадр
 VDC_GAP_ACCUM_STEP     EQU 256                            ; порог подтяжки: быстрее полного слота×10
 VDC_DM3_OFFSET_GAP_MAX EQU (VDC_CELL_SIZE / 2) + 2        ; разрешить fresh insert half-cell overlap, но блокировать full gap
-VDC_BALLS_TARGET       EQU VDC_MAX_SLOTS                 ; capacity ceiling; runtime spawn gate =
+VDC_BALLS_TARGET       EQU VDC_MAX_SLOTS                 ; потолок ёмкости; runtime spawn gate =
                                                           ; VDC_GaugeFull (level target score) + GameOver.
 VDC_KZ_FRAMES          EQU 12
 VDC_EXPLOSION_FRAMES   EQU 15
 VDC_DUAL_LOSE_MENU_DELAY EQU 12                          ; post-empty frames перед dual lose dialog
 
-; VDC_GameState values
+; Значения VDC_GameState
 VDC_STATE_PLAY     EQU 0                                  ; обычный gameplay
 VDC_STATE_ABSORB   EQU 1                                  ; balls движутся в killzone
 VDC_STATE_GAMEOVER EQU 2                                  ; GAME OVER screen
@@ -86,6 +86,7 @@ VDC_WIN_FADE_STEP  EQU 16                                 ; FadeAlpha += step/к
 VDC_PREVIEW_TICKS  EQU 193                                ; (NumSamples+trail)/SPEED = (2774+112)/15 ≈ 192.4 → закрытие сразу после влёта последней звезды
 VDC_CLOSING_TICKS  EQU 22                                 ; ~0.37 сек closing anim (2 ticks per frame)
 VDC_WIN_TICKS      EQU VDC_PREVIEW_TICKS                  ; fallback-таймер (когда нет аутро); при активном аутро конец = VDC_WinOutroDone
+VDC_AY_ROLLING_RETRIGGER_TICKS EQU 22                     ; чуть меньше 24 AY ticks у SND_ROLLING, чтобы fast-fill не замолкал
 
 ; ============================================================================
 ; VDC_Init — обнулить state, Slots[] = GAP_STOP. Должен быть вызван 1 раз
@@ -154,7 +155,7 @@ VDC_Init:
                 XOR  A
                 LD   (VDC_WinOutroActive),     A
                 LD   (VDC_ExplodeActive),      A
-                ; Gauge bar reset: без этого GaugeScore/Full
+                ; Сброс Gauge bar: без этого GaugeScore/Full
                 ; тащились с прошлого уровня через Win→AdvanceToNextLevel→VDC_Init,
                 ; и новый уровень стартовал с полным баром → спавн сразу отсекался.
                 LD   (VDC_GaugeFull),          A      ; A=0
@@ -172,14 +173,15 @@ VDC_Init:
                 LD   (VDC_AssertFrame + 1),    A
                 endif
                 LD   (VDC_RollingActive),      A
+                LD   (VDC_RollingLoopTimer),   A
                 LD   (VDC_SfxStopTimer),       A
                 ; Per-level/difficulty ball-color count из settings table
                 ; (поле colors +4). Раньше цвет всегда катился 0..5 (фикс. NUM=6) —
                 ; ранние уровни должны иметь 4. CurrentLevel/Difficulty уже выставлены.
-                CALL VDC_LoadLevelSettings            ; per-level colors/speed/start + accum reset (Core)
+                CALL VDC_LoadLevelSettings            ; per-level colors/speed/start + сброс accum (Core)
                 LD   A, 11                            ; KzFrame=11 (skull mouth wide open) во время intro/preview
                 LD   (VDC_KzFrame),            A
-                ; --- Intro state (3) → Preview (4) → Closing (5) → Play (0) ---
+                ; --- Состояния: Intro (3) → Preview (4) → Closing (5) → Play (0) ---
                 ; INTRO: LEVEL 1-1 + SPIRAL OF DOOM с fade-out
                 ; PREVIEW: sparkle wave вдоль track, череп OPEN
                 ; PLAY: транзишн КзFrame=1 (closed), шары спавнятся
@@ -187,7 +189,7 @@ VDC_Init:
                 LD   (VDC_GameState),          A
                 LD   A, VDC_INTRO_TICKS
                 LD   (VDC_IntroTick),          A
-                ; Reset stats для нового запуска уровня
+                ; Сброс stats для нового запуска уровня
                 XOR  A
                 LD   (VDC_StatCombos),         A
                 LD   (VDC_StatMaxCombo),       A
@@ -483,8 +485,8 @@ ReadRTCSeconds:
                 RET
 
 ; ============================================================================
-; ReadRTCRegister — generic, A = register index (0=sec, 2=min, 4=hour).
-; Out: A = BCD-parsed binary value.
+; ReadRTCRegister — универсальный, A = индекс register (0=sec, 2=min, 4=hour).
+; Выход: A = BCD-parsed binary value.
 ; ============================================================================
 ReadRTCRegister:
                 LD   E, A                              ; E = reg index
@@ -515,9 +517,9 @@ ReadRTCRegister:
 
 ; ============================================================================
 ; VDC_Update — один шаг физики (вызывать раз в кадр).
-; Phase 1 (BallsSpawned < LEVEL_START_BALLS): 12× MoveChain + 1× AnimateChain +
+; Фаза 1 (BallsSpawned < LEVEL_START_BALLS): 12× MoveChain + 1× AnimateChain +
 ;   1× TrySpawn (TrySpawn внутри loop'ит). Это «поезд» влёта 35 шаров за ~90 тиков.
-; Phase 2 (BallsSpawned ≥ LEVEL_START_BALLS): 1× MoveChain каждый кадр (norm-speed
+; Фаза 2 (BallsSpawned ≥ LEVEL_START_BALLS): 1× MoveChain каждый кадр (norm-speed
 ;   подобран под VDAC2 CELL_SIZE=42 — без subdivider /2 как у коллеги).
 ; ============================================================================
 VDC_Update:
@@ -530,8 +532,8 @@ VDC_Update:
                 CALL VDC_UpdateSfxStopTimer
                 LD   A, (VDC_DialogState)
                 CP   3
-                JR   C, .upd_not_pause       ; <3 (none/retry/gameover) → normal path
-                ; >=3: pause (3) or pause fade-out (4) — freeze gameplay, refresh
+                JR   C, .upd_not_pause       ; <3 (none/retry/gameover) → обычный путь
+                ; >=3: pause (3) или pause fade-out (4) — freeze gameplay, refresh
                 ; RTC baseline, чтобы paused/fading seconds не считались.
                 CALL ReadRTCSeconds
                 LD   (VDC_RtcLastSecond), A
@@ -558,8 +560,12 @@ VDC_Update:
                 DEC  A
                 LD   (VDC_IntroTick), A
                 RET  NZ
+                LD   A, (GS_Present)
+                OR   A
+                JR   Z, .intro_no_chant
                 LD   A, SND_CHANT1
                 CALL GS_PlaySfx
+.intro_no_chant:
                 LD   A, VDC_STATE_PREVIEW
                 LD   (VDC_GameState), A
                 LD   A, VDC_PREVIEW_TICKS
@@ -602,6 +608,8 @@ VDC_Update:
                 CALL GS_PlaySfx
                 LD   A, 1
                 LD   (VDC_RollingActive), A
+                LD   A, VDC_AY_ROLLING_RETRIGGER_TICKS
+                LD   (VDC_RollingLoopTimer), A
                 RET
 .upd_play:
                 CALL VDC_UpdateRtcElapsed
@@ -617,6 +625,7 @@ VDC_Update:
                 ; Fast-фаза: VDC_FAST_ADVANCE × VDC_GLOBAL_SPEED_FACTOR MoveChain/тик.
                 ; В fast-фазе spawn без hsub-gate — иначе при wrap-частоте
                 ; редкие spawn'ы ломают fast-фазу.
+                CALL VDC_UpdateRollingLoopMaybe
                 LD   B, VDC_FAST_ADVANCE * VDC_GLOBAL_SPEED_FACTOR
 .upd_fast:      PUSH BC
                 CALL VDC_MoveChain
@@ -630,6 +639,7 @@ VDC_Update:
                 JR   Z, .upd_normal_go
                 XOR  A
                 LD   (VDC_RollingActive), A
+                LD   (VDC_RollingLoopTimer), A
                 LD   A, SND_SILENCE
                 CALL GS_PlaySfx
 .upd_normal_go: ; Нормальная фаза: VDC_GLOBAL_SPEED_FACTOR × SpeedAdvance тиков/кадр.
@@ -656,7 +666,7 @@ VDC_UpdateAllChains:
                 LD   A, (VDC_GameState)
                 CP   VDC_STATE_ABSORB
                 JR   NZ, .upd_primary_normal
-                CALL VDC_UpdateAbsorbOrRush            ; symmetric: chain1 may be the non-triggering chain
+                CALL VDC_UpdateAbsorbOrRush            ; симметрия: chain1 может быть не-triggering chain
                 JR   .upd_primary_done
 .upd_primary_normal:
                 CALL VDC_Update
@@ -963,7 +973,7 @@ VDC_WinSnapAllChains:
                 JP   SetCurrentTrackPage
 
 ; VDC_SnapshotWinChain — макс. track-сэмпл видимых шаров текущей активной цепочки.
-; Out: CF=0 + HL = head sample (фронт), если есть видимый шар; CF=1 если нет.
+; Выход: CF=0 + HL = head sample (фронт), если есть видимый шар; CF=1 если нет.
 VDC_SnapshotWinChain:
                 LD   A, (VDC_SlotsLen)
                 OR   A
@@ -991,7 +1001,7 @@ VDC_SnapshotWinChain:
                 BIT  7, H
                 JR   NZ, .snap_skip
                 
-                ; 4. Clamp t к NumSamples-1
+                ; 4. Ограничить t к NumSamples-1
                 PUSH HL
                 LD   DE, (VDC_ActiveTrackSamples)
                 AND  A
@@ -1032,6 +1042,21 @@ VDC_UpdateSfxStopTimer:
                 LD   A, SND_SILENCE
                 JP   GS_PlaySfx
 
+VDC_UpdateRollingLoopMaybe:
+                LD   A, (GS_Present)
+                OR   A
+                RET  NZ
+                LD   A, (VDC_RollingLoopTimer)
+                OR   A
+                JR   Z, .restart
+                DEC  A
+                LD   (VDC_RollingLoopTimer), A
+                RET  NZ
+.restart:       LD   A, VDC_AY_ROLLING_RETRIGGER_TICKS
+                LD   (VDC_RollingLoopTimer), A
+                LD   A, SND_ROLLING
+                JP   GS_PlaySfx
+
 ; ============================================================================
 ; VDC_UpdateRtcElapsed — real-time game clock по RTC seconds.
 ;   Добавляет delta seconds с 0..59 wrap. Вызывается только во время PLAY; pause
@@ -1062,7 +1087,7 @@ VDC_UpdateRtcElapsed:
 
 ; ============================================================================
 ; VDC_SlotT — для A=i считает t = (HSA-i)*32 + HSub + sext(offsets[i]).
-; Out: HL = signed 16-bit t.  AF/DE clobber.
+; Выход: HL = signed 16-bit t.  AF/DE клобает.
 ; ============================================================================
 VDC_SlotT:
                 LD   C, A                             ; C = i
@@ -1112,7 +1137,7 @@ VDC_SlotT:
 
 ; ============================================================================
 ; VDC_SlotPos — для A=i возвращает центр шара (X,Y) из active Track V2 sample[t].
-;   Out: BC = X (signed word), DE = Y (signed word), CF = 0 если рисуем,
+;   Выход: BC = X (signed word), DE = Y (signed word), CF = 0 если рисуем,
 ;        CF = 1 если skip (gap или t<0).
 ;   AF, HL clobber.
 ;
@@ -1129,14 +1154,14 @@ VDC_SlotPos:
                 LD   A, (HL)
                 CP   VDC_NUM_COLORS
                 JR   C, .not_gap
-                SCF                                    ; CF=1, skip
+                SCF                                    ; CF=1, пропуск
                 RET
 .not_gap:
                 LD   A, C
 VDC_SlotPosAllowGap:
                 ; вход без пропуска gap-ячейки. Вызывающий обязан передать A=i.
                 CALL VDC_SlotT                         ; HL = t
-                ; t < 0 → skip
+                ; t < 0 → пропуск
                 BIT  7, H
                 JR   Z, .t_nonneg
                 SCF
@@ -1151,10 +1176,10 @@ VDC_SlotPosAllowGap:
                 JR   C, .t_in
                 LD   HL, (VDC_ActiveTrackSamples)
                 DEC  HL
-.t_in:          ; HL = t (clamped). Читать sample через Core-resident helper:
+.t_in:          ; HL = t (ограничено). Читать sample через Core-resident helper:
                 ; там живёт Track V2 page lookup, а этот hot path остаётся маленьким —
                 ; Main1/slot3 почти заполнен. Core всегда mapped в slot 1, поэтому
-                ; tail-call resolves at runtime. Helper: out BC=X, DE=Y, CF=0,
+                ; tail-call resolves at runtime. Helper: выход BC=X, DE=Y, CF=0,
                 ; sets VDC_LastT / VDC_LastTangent.
                 JP   VDC_ReadSampleAtHL
 
@@ -1540,11 +1565,11 @@ VDC_AnimateChain:
 .ac_no_gap_step:
                 ; --- 3. Persistent scan. ---
                 CALL VDC_ScanForNewMatch
-                ; --- 4. Clamp offset invariant каждый кадр (покрывает InsertAt
+                ; --- 4. Ограничить offset invariant каждый кадр (покрывает InsertAt
                 ; head_comp/cap_compensate, DoGapStep STOP/CASCADE +CS shifts,
                 ; и любые другие пути модификации offsets) ---
                 CALL ClampOffsetOrder
-                ; --- 4.5. Clear stale Shot2 если cascade chain завершён.
+                ; --- 4.5. Очистить stale Shot2 если cascade chain завершён.
                 ; Внутри есть guard: pending Shot2 с невыровненными offsets
                 ; не чистится, чтобы свежая вставка могла стать match после decay.
                 CALL VDC_ClearStaleShot2
@@ -1599,7 +1624,7 @@ VDC_ClearSettledShot2:
                 RET
 
 ; ============================================================================
-; VDC_ClearStaleShot2 — если cascade chain полностью завершён, очистить ALL Shot2.
+; VDC_ClearStaleShot2 — если cascade chain полностью завершён, очистить все Shot2.
 ; Cascade завершён ⇔ ChainFreezeCnt == 0 AND нет GAP_STOP/CASCADE markers в slots
 ; AND нет ExplodeFrame > 0 (никаких pending animations).
 ; ============================================================================
@@ -1609,13 +1634,13 @@ VDC_ClearStaleShot2:
                 RET  NZ                                ; freeze active → cascade в процессе
                 LD   A, (VDC_SlotsLen)
                 OR   A
-                RET  Z                                  ; empty chain
-                LD   B, A                              ; iter count
+                RET  Z                                  ; пустая chain
+                LD   B, A                              ; счётчик итераций
                 LD   HL, (VDC_pSlots)
                 LD   DE, (VDC_pExplodeFrame)
 .css_check:     LD   A, (HL)
-                CP   VDC_NUM_COLORS                    ; >= NUM_COLORS → gap marker
-                RET  NC                                ; chain has markers → cascade in progress
+                CP   VDC_NUM_COLORS                    ; >= NUM_COLORS → маркер gap
+                RET  NC                                ; chain имеет markers → cascade in progress
                 LD   A, (DE)
                 OR   A
                 RET  NZ                                ; ExplodeFrame > 0 → animation pending
@@ -1643,7 +1668,7 @@ VDC_ClearStaleShot2:
                 INC  HL
                 INC  C
                 DJNZ .css_pending
-                ; Cascade complete — clear all Shot2
+                ; Cascade complete — очистить все Shot2
                 LD   A, (VDC_SlotsLen)
                 LD   B, A
                 LD   HL, (VDC_pShot2)
@@ -1652,7 +1677,7 @@ VDC_ClearStaleShot2:
                 DJNZ .css_clear
                 RET
 
-; In: A=index. Out: NZ если offset[index] или соседний offset ещё не 0.
+; Вход: A=index. Выход: NZ если offset[index] или соседний offset ещё не 0.
 VDC_Shot2OffsetsBusy:
                 LD   C, A
                 LD   H, 0
@@ -1694,18 +1719,18 @@ VDC_TickGaugeShown:
                 SBC  HL, DE
                 RET  Z                                  ; Shown == Score → ничего
                 JR   NC, .tg_decrement                  ; Shown > Score → откатить
-                ; Shown < Score → +STEP, capped at Score
+                ; Shown < Score → +STEP, ограничить Score
                 LD   HL, (VDC_GaugeShown)
                 LD   BC, VDC_GAUGE_SHOWN_STEP
                 ADD  HL, BC
-                ; clamp: if HL > Score → HL = Score
+                ; ограничение: если HL > Score → HL = Score
                 LD   DE, (VDC_GaugeScore)
                 PUSH HL
                 AND  A
                 SBC  HL, DE
                 POP  HL
                 JR   C, .tg_save                        ; HL < Score → ок
-                LD   HL, (VDC_GaugeScore)               ; clamp
+                LD   HL, (VDC_GaugeScore)               ; ограничение
 .tg_save:       LD   (VDC_GaugeShown), HL
                 RET
 .tg_decrement:  ; Restart / Game Over reset: GaugeScore < GaugeShown → быстрый откат
@@ -1715,7 +1740,7 @@ VDC_TickGaugeShown:
 
 ; ============================================================================
 ; VDC_DetectMatch3 — для idx в (TmpInsIdx) ищет run >= 3 одинаковых цветов
-; вокруг idx с offset gap check'ом. Out: A=1 если матч (TmpML/TmpMR/TmpMC заполнены),
+; вокруг idx с offset gap check'ом. Выход: A=1 если матч (TmpML/TmpMR/TmpMC заполнены),
 ; A=0 иначе.
 ; ============================================================================
 VDC_DetectMatch3:
@@ -1732,7 +1757,7 @@ VDC_DetectMatch3:
                 ADD  HL, DE
                 LD   A, (HL)
                 OR   A
-                JP   NZ, .dm3_no                       ; already exploding
+                JP   NZ, .dm3_no                       ; уже взрывается
 
                 ; color = Slots[idx]
                 LD   A, (VDC_TmpInsIdx)
@@ -2100,8 +2125,8 @@ VDC_ApplyMatch3:
                 LD   DE, (VDC_GaugeScore)
                 ADD  HL, DE
                 LD   (VDC_GaugeScore), HL
-                CALL GetCurrentTargetScore             ; DE = per-level target; clobbers HL
-                LD   HL, (VDC_GaugeScore)               ; reload GaugeScore — CALL above trashed HL
+                CALL GetCurrentTargetScore             ; DE = per-level target; портит HL
+                LD   HL, (VDC_GaugeScore)               ; перечитать GaugeScore — CALL выше испортил HL
                 AND  A
                 SBC  HL, DE                             ; GaugeScore - target; CF=1 if still below
                 JR   C, .m3_gauge_not_full
@@ -2188,9 +2213,9 @@ VDC_CheckMatch3_No:
                 RET
 
 ; ============================================================================
-; VDC_DoGapStep — обрабатывает ОДИН маркер за вызов. Pass 1: STOP from tail
-; (right→left), удаляет slot, HSA--, head compensation. Pass 2 (если STOP не было):
-; CASCADE from head (left→right), то же + ChainFreezeCnt = CELL_SIZE.
+; VDC_DoGapStep — обрабатывает ОДИН маркер за вызов. Pass 1: STOP от tail
+; (right→left), удаляет slot, HSA--, компенсация head. Pass 2 (если STOP не было):
+; CASCADE от head (left→right), то же + ChainFreezeCnt = CELL_SIZE.
 ; ============================================================================
 VDC_DoGapStep:
                 ; --- Pass 1: ищем последний GAP_STOP справа налево ---
@@ -2225,7 +2250,7 @@ VDC_DoGapStep:
                 JR   Z, .dgs_stop_catchup
                 CALL VDC_HsaDec                        ; HSA-- если >0
 
-                ; offsets[0..K-1] = min(off[j]+CS, CS) — head compensation
+                ; offsets[0..K-1] = min(off[j]+CS, CS) — компенсация head
                 LD   A, (VDC_TmpGapIdx)
                 OR   A
                 JR   Z, .dgs_stop_no_off
@@ -2679,7 +2704,7 @@ VDC_SetShot2OnNeighbors:
                 DEC  A
                 LD   HL, VDC_SlotsLen
                 CP   (HL)
-                RET  NC                                 ; K-1 out of bounds
+                RET  NC                                 ; K-1 вне bounds
                 LD   H, 0 : LD L, A
                 LD   DE, (VDC_pSlots)
                 ADD  HL, DE
@@ -2886,7 +2911,7 @@ VDC_InsertAt:
                 CALL LogInsert
                 endif
 
-                ; clamp target_idx <= SlotsLen
+                ; ограничить target_idx <= SlotsLen
                 LD   A, (VDC_TmpInsIdx)
                 LD   HL, VDC_SlotsLen
                 CP   (HL)
@@ -2894,12 +2919,12 @@ VDC_InsertAt:
                 LD   A, (HL)
                 LD   (VDC_TmpInsIdx), A
 .ia_idx_ok:
-                ; SlotsLen >= MAX → fail (silent)
+                ; SlotsLen >= MAX → fail (тихо)
                 LD   A, (VDC_SlotsLen)
                 CP   VDC_MAX_SLOTS
                 RET  NC
 
-                ; --- compute new_offset ---
+                ; --- вычислить new_offset ---
                 ; head_off, tail_off:
                 ;   slots_len==0           → head=tail=0
                 ;   target_idx==0          → head=tail=offsets[0]
@@ -2971,11 +2996,11 @@ VDC_InsertAt:
                 SRA  H : RR L
                 LD   DE, -(VDC_CELL_SIZE/2)
                 ADD  HL, DE                            ; HL = -CS/2 + (h+t)/2
-                ; saturate to signed byte [-128..127]
+                ; saturate до signed byte [-128..127]
                 LD   A, L
                 BIT  7, H
                 JR   Z, .ia_off_sat_pos
-                ; negative: clamp to -128 if H < #FF
+                ; negative: ограничить до -128, если H < #FF
                 LD   A, H
                 CP   #FF
                 JR   Z, .ia_off_neg_byte
@@ -3021,7 +3046,7 @@ VDC_InsertAt:
                 ; Shot2
                 CALL VDC_ShiftRight_Shot2
 
-                ; Explosion state follows slot ownership.
+                ; Explosion state следует за владением slot.
                 CALL VDC_ShiftRight_ExplodeFrame
                 CALL VDC_ShiftRight_ExplodeMarker
 .ia_no_shift:
@@ -3064,8 +3089,8 @@ VDC_InsertAt:
 
                 ; HSA++ с cap по TrackNumSlots-1.
                 ; Cap-fix (Z80-симулятор verify 2026-05-14): при HSA == TrackNumSlots-1
-                ; HSA++ skip → нужна компенсация:
-                ;   1) skip head_comp (offsets[0..idx-1] остаются как после shift_right = 0)
+                ; HSA++ пропущен → нужна компенсация:
+                ;   1) пропуск head_comp (offsets[0..idx-1] остаются как после shift_right = 0)
                 ;   2) new ball offset = +CS/2 вместо -CS/2
                 ;   3) offsets[idx+1..SlotsLen-1] += CS
                 ; Тогда t(i) = (HSA - i)*CS + off совпадает с нормальным flow при HSA=cap+1.
@@ -3127,7 +3152,7 @@ VDC_InsertAt:
                 ; cap к -CS (signed): если A < -CELL (signed) → A = -CELL.
                 ; Используем JP PE для отлова wrap-around ниже -128.
                 JP   PE, .ia_head_comp_clamp
-                ; Biased compare: (A XOR #80) < (#80 - CELL_SIZE) → clamp.
+                ; Смещённое сравнение: (A XOR #80) < (#80 - CELL_SIZE) → ограничить.
                 PUSH AF
                 XOR  #80
                 CP   #80 - VDC_CELL_SIZE
@@ -3141,8 +3166,8 @@ VDC_InsertAt:
                 DJNZ .ia_head_comp
 .ia_no_head_comp:
                 ; ChainFreezeCnt НЕ ставим (без freeze head_offsets декают параллельно
-                ; с natural hsub advance, head освобождает место). Trade-off: short
-                ; head_slide animation visible (~32 px over 16 frames) — accepted vs
+                ; с natural hsub advance, head освобождает место). Компромисс: короткая
+                ; head_slide animation visible (~32 px за 16 frames) — принято вместо
                 ; chain-stops-everything на CS frames (хуже визуально).
 
                 ; Immediate CheckMatch3 на target_idx. Для свежей вставки не
@@ -3203,9 +3228,9 @@ VDC_ShiftRight_Common:
 
 ; ============================================================================
 ; VDC_DivHLbyA — целочисленное деление 16-bit на 8-bit.
-;   In:  HL = dividend (unsigned), A = divisor (unsigned, > 0)
-;   Out: HL = quotient, A = remainder
-;   Clobbers BC.
+;   Вход:  HL = dividend (unsigned), A = divisor (unsigned, > 0)
+;   Выход: HL = quotient, A = remainder
+;   Клобает BC.
 ; Bit-by-bit алгоритм. ~80 t-states, ~16 байт кода.
 ; ============================================================================
 VDC_RandomColor:
@@ -3226,14 +3251,14 @@ VDC_RandomColor:
                 XOR  H                                 ; A = 8-bit random
                 LD   L, A
                 LD   H, 0                              ; HL = rand byte (0..255)
-                LD   A, (VDC_LevelColors)              ; per-level color count (set in VDC_Init)
+                LD   A, (VDC_LevelColors)              ; per-level color count (ставится в VDC_Init)
                 CALL ZL_Mul16x8                        ; HL = rand * N (max 6*255 = 1530)
                 LD   A, H                              ; A = (rand * N) >> 8 = 0..N-1
                 RET
 
 ; ============================================================================
-; VDC_RandomClusterLength — random length 1..(VDC_NUM_COLORS-1).
-; Использует rejection of 0 из VDC_RandomColor. Для текущего NUM=6 это 1..5.
+; VDC_RandomClusterLength — случайная длина 1..(VDC_NUM_COLORS-1).
+; Использует отбрасывание 0 из VDC_RandomColor. Для текущего NUM=6 это 1..5.
 ; ============================================================================
 VDC_RandomClusterLength:
 .rcl_loop:      CALL VDC_RandomColor
@@ -3252,7 +3277,7 @@ VDC_ResetBulletGapTracking:
                 RET
 
 ; ============================================================================
-; VDC_UpdateBulletGapTracking — per-frame check каждой GAP-ячейки в Slots[],
+; VDC_UpdateBulletGapTracking — per-frame проверка каждой GAP-ячейки в Slots[],
 ; обновляет VDC_BulletGapMinDist (Manhattan dist) если найдена ближе.
 ; Bullet (X, Y) читается напрямую из Bullet.asm state vars.
 ; ============================================================================
@@ -3271,7 +3296,7 @@ VDC_UpdateBulletGapTracking:
                 LD   A, (HL)
                 CP   VDC_NUM_COLORS
                 JR   C, .ugt_skip                      ; non-gap → пропустить
-                ; Также skip если ExplodeFrame > 0 (gap ещё не "финализирован",
+                ; Также пропуск если ExplodeFrame > 0 (gap ещё не "финализирован",
                 ; это не пустая ячейка а взрывающийся шар)
                 LD   A, C
                 LD   H, 0 : LD L, A
@@ -3280,11 +3305,11 @@ VDC_UpdateBulletGapTracking:
                 LD   A, (HL)
                 OR   A
                 JR   NZ, .ugt_skip
-                ; Compute slot position (allow gap)
+                ; Посчитать slot position (allow gap)
                 LD   A, C
                 CALL VDC_SlotPosAllowGap               ; BC=X, DE=Y, CF=1 если t<0
                 JR   C, .ugt_skip
-                ; Manhattan distance = |bullet_X - X| + |bullet_Y - Y|, clamp 255
+                ; Manhattan distance = |bullet_X - X| + |bullet_Y - Y|, ограничение 255
                 LD   HL, (Bullet_X)
                 AND  A
                 SBC  HL, BC
@@ -3292,7 +3317,7 @@ VDC_UpdateBulletGapTracking:
                 LD   A, H
                 OR   A
                 JR   NZ, .ugt_skip                     ; |dx| > 255 → дальше 255
-                PUSH AF                                ; save dummy
+                PUSH AF                                ; сохранить заглушку
                 LD   B, L                              ; B = |dx|
                 LD   HL, (Bullet_Y)
                 AND  A
@@ -3316,7 +3341,7 @@ VDC_UpdateBulletGapTracking:
                 RET
 
 ; ============================================================================
-; VDC_AwardGapBonus — successful shot уничтожил balls после прохода через visible
+; VDC_AwardGapBonus — успешный shot уничтожил balls после прохода через visible
 ; GAP slot. Miss/offscreen shots никогда не дают этот bonus.
 ; Реализация вынесена в main0: main1_play сейчас почти заполнен.
 ; ============================================================================
@@ -3327,8 +3352,8 @@ VDC_AwardGapBonus:
                 JP   VDC_AwardGapBonusSlot0
 
 ; ============================================================================
-; VDC_BreakShotStats — shot завершился без уничтожения balls. Это breaks chain
-; and consecutive gap-shot streak, but does not award gap points.
+; VDC_BreakShotStats — shot завершился без уничтожения balls. Это сбивает chain
+; и consecutive gap-shot streak, но не выдаёт gap points.
 ; ============================================================================
 VDC_BreakShotStats:
                 XOR  A
@@ -3372,21 +3397,22 @@ VDC_MatchScanIdx:  DEFB 0
 VDC_ScanGapBusy:   DEFB 0
 VDC_BridgeScanActive: DEFB 0
 VDC_TrackNumSlots: DEFW 0
-; VDC_GameState -> hoisted to loader_resident.asm (resident Core)
+; VDC_GameState -> вынесен в loader_resident.asm (resident Core)
 VDC_GameOverTick:  DEFB 0
 VDC_AbsorbPopNote: DEFB 0   ; lose-всасывание: растущий питч SND_POP (полутона от базы), reset на входе в absorb
-VDC_IntroTick:     DEFB 0   ; intro countdown (frames until state→PREVIEW)
-VDC_PreviewTick:   DEFB 0   ; preview countdown (frames until state→CLOSING)
+VDC_IntroTick:     DEFB 0   ; intro countdown (frames до state→PREVIEW)
+VDC_PreviewTick:   DEFB 0   ; preview countdown (frames до state→CLOSING)
 VDC_KzCloseTick:   DEFB 0   ; closing countdown (skull 11→1 animation)
 VDC_WinTick:       DEFB 0   ; win-state countdown перед загрузкой next level
 VDC_KzEndSub:      DEFB 0
 ; VDC_KzFrame, VDC_HeadAbsorbAlpha, VDC_Lives, VDC_DialogState, VDC_PrevMouseL,
 ; VDC_HudMenuState и VDC_HudPointerBlock находятся в loader_resident.asm.
-VDC_LevelColors:  DEFB VDC_NUM_COLORS ; per-level ball-color count, set из settings table в VDC_Init; default 6
-VDC_LevelSpeed:   DEFB 50              ; per-level chain speed_x100; normal-phase advance = speed/100 MoveChain/frame
-VDC_LevelStart:   DEFB VDC_LEVEL_START_BALLS ; per-level lead-in ball count, fast-fill threshold
+VDC_LevelColors:  DEFB VDC_NUM_COLORS ; число ball-color на уровень, берётся из settings table в VDC_Init; default 6
+VDC_LevelSpeed:   DEFB 50              ; chain speed_x100 на уровень; normal-phase advance = speed/100 MoveChain/frame
+VDC_LevelStart:   DEFB VDC_LEVEL_START_BALLS ; lead-in ball count на уровень, fast-fill threshold
 VDC_SpeedAccum:   DEFB 0               ; sub-frame speed accumulator для VDC_LevelSpeed
 VDC_RollingActive: DEFB 0              ; 1, пока SND_ROLLING нужно остановить на fast->normal
+VDC_RollingLoopTimer: DEFB 0           ; No-GS AY retrigger timer для rolling fast-fill
 VDC_ExplodeActive: DEFB 0              ; 1 если в активной цепочке есть ExplodeFrame > 0
 VDC_ChainLocalEnd:
 ; --- Stats counters (показываются в game-over диалоге, reset на VDC_Init) ---
@@ -3395,18 +3421,18 @@ VDC_StatCombos:     DEFB 0  ; текущее combo (≥2 explosions одного
 VDC_StatMaxCombo:   DEFB 0  ; max combo за уровень
 VDC_StatMaxChain:   DEFB 0  ; max chain bonus за уровень
 VDC_StatCoins:      DEFB 0  ; coin pickups: механика монет не реализована, поэтому 0
-VDC_StatPrevMatchColor: DEFB #FF  ; previous match color, sentinel #FF (нет предыдущего)
+VDC_StatPrevMatchColor: DEFB #FF  ; предыдущий match color, sentinel #FF (нет предыдущего)
 VDC_StatChainCount: DEFB 0  ; consecutive explosions без miss-shot. ≥5 + combo=0 = chain bonus
 VDC_BulletGapMinDist: DEFB 255  ; min Manhattan distance bullet → ближайший GAP-slot за полёт.
                                 ; Init=255 на каждый Bullet_Spawn (VDC_ResetBulletGapTracking).
                                 ; Per-frame update в VDC_UpdateBulletGapTracking, проверяется на expire.
 VDC_BulletGapCount: DEFB 0  ; consecutive gap shots для ×2 multiplier (HD-ref Statistics_AddBulletGap)
-; VDC_GaugeScore, VDC_GaugeFull, VDC_PlayerScore, VDC_GameSeconds -> hoisted to
-; loader_resident.asm (resident Core). VDC_GaugeShown stays here (gameplay-only).
-VDC_GaugeShown:     DEFW 0  ; displayed/animated score (LERP'ит к GaugeScore)
-VDC_RtcLastSecond:  DEFB 0  ; last RTC seconds sample (0..59)
-VDC_RtcNoTickFrames: DEFB 0 ; fallback counter when RTC is static in emulator
-VDC_SfxStopTimer:   DEFB 0  ; delayed SND_SILENCE for GS one-shot tails
+; VDC_GaugeScore, VDC_GaugeFull, VDC_PlayerScore, VDC_GameSeconds -> вынесены в
+; loader_resident.asm (resident Core). VDC_GaugeShown остаётся здесь (только gameplay).
+VDC_GaugeShown:     DEFW 0  ; отображаемый/animated score (LERP'ит к GaugeScore)
+VDC_RtcLastSecond:  DEFB 0  ; последний RTC seconds sample (0..59)
+VDC_RtcNoTickFrames: DEFB 0 ; fallback counter, когда RTC статичен в emulator
+VDC_SfxStopTimer:   DEFB 0  ; отложенный SND_SILENCE для хвостов GS one-shot
 
 VDC_TmpInsIdx:    DEFB 0
 VDC_TmpInsColor:  DEFB 0
@@ -3424,7 +3450,7 @@ VDC_LastTangent:  DEFB 0                                ; tangent байт по�
 VDC_LastTrackFlags: DEFB 0                              ; bit0=tunnel/no bullet hit, bit1=draw above top layer
 VDC_LastT:        DEFW 0                                ; t (16-bit signed) последнего VDC_SlotPos — для spin frame по track-advance
 
-; Second chain backing store. Active labels выше остаются единственным VDC engine
+; Backing store второй chain. Active labels выше остаются единственным VDC engine
 ; ABI; two-track levels swap this block вокруг update/render/collision.
 VDC_HasSecondChain: DEFB 0
 VDC_MAIN1_PAGE   EQU #04

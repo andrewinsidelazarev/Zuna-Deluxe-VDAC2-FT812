@@ -12,6 +12,7 @@ LS_HANDLE_SKY       EQU MENU_HANDLE_SKY
 LS_HANDLE_BG        EQU MENU_HANDLE_FG
 LS_HANDLE_BUTTON    EQU MENU_HANDLE_BUTTON
 LS_HANDLE_BADGE     EQU 5
+LS_PREVIEW_SFX_DELAY EQU 12
 
 LevelSelect:
                 CALL LevelSelectClampCurrent
@@ -20,6 +21,9 @@ LevelSelect:
                 LD   (LevelSelectSkyPos), HL                ; позиция неба в 1/16 px
                 XOR  A
                 LD   (LevelSelectLmbPrev), A
+                LD   (LevelSelectPreviewReloadDelay), A
+                LD   A, (CurrentLevel)
+                LD   (LevelSelectPendingLevel), A
                 LD   A, 1                                   ; фронт-флаги = «нажато» -> гасим перенос
                 LD   (LevelSelectKbdUpPrev), A             ; нажатий с предыдущей сцены (Fire, которым
                 LD   (LevelSelectKbdDownPrev), A           ; вошли) до их отпускания
@@ -37,12 +41,14 @@ LevelSelect:
                 LD   A, (LevelSelectPlayClick)
                 OR   A
                 JR   NZ, .play
+                CALL LevelSelectServicePreviewReload
                 CALL LevelSelectAdvanceSky
                 CALL LevelSelectBuildFrame
                 CALL MenuSwapFrame
                 JP   .loop
 
-.play:          LD   A, 1
+.play:          CALL LevelSelectCommitPendingLevelOnly
+                LD   A, 1
                 LD   (CurrentGameMode), A
                 JP   FadeLevelSelectToGameplay
 
@@ -321,20 +327,61 @@ LevelSelectApplyLevelClick:
                 LD   A, (LevelSelectBackClick)
                 OR   A
                 JR   Z, .next
-                LD   A, (CurrentLevel)
+                CALL LevelSelectCurrentOrPending
                 OR   A
                 JR   Z, .next
                 DEC  A
-                LD   (CurrentLevel), A
-                CALL LevelSelectReloadPreviewAtomic
+                CALL LevelSelectQueuePreviewReload
 .next:          LD   A, (LevelSelectNextClick)
                 OR   A
                 RET  Z
-                LD   A, (CurrentLevel)
+                CALL LevelSelectCurrentOrPending
                 CP   LEVEL_SELECT_COUNT - 1
                 RET  NC
                 INC  A
-.store_next:    LD   (CurrentLevel), A
+.store_next:    JP   LevelSelectQueuePreviewReload
+
+LevelSelectCurrentOrPending:
+                LD   A, (LevelSelectPreviewReloadDelay)
+                OR   A
+                JR   Z, .current
+                LD   A, (LevelSelectPendingLevel)
+                RET
+.current:       LD   A, (CurrentLevel)
+                RET
+
+LevelSelectQueuePreviewReload:
+                LD   (LevelSelectPendingLevel), A
+                LD   A, (GS_Present)
+                OR   A
+                JR   Z, .no_gs
+                LD   A, (LevelSelectPendingLevel)
+                LD   (CurrentLevel), A
+                JP   LevelSelectReloadPreviewAtomic
+.no_gs:
+                LD   A, LS_PREVIEW_SFX_DELAY
+                LD   (LevelSelectPreviewReloadDelay), A
+                RET
+
+LevelSelectCommitPendingLevelOnly:
+                LD   A, (LevelSelectPreviewReloadDelay)
+                OR   A
+                RET  Z
+                XOR  A
+                LD   (LevelSelectPreviewReloadDelay), A
+                LD   A, (LevelSelectPendingLevel)
+                LD   (CurrentLevel), A
+                RET
+
+LevelSelectServicePreviewReload:
+                LD   A, (LevelSelectPreviewReloadDelay)
+                OR   A
+                RET  Z
+                DEC  A
+                LD   (LevelSelectPreviewReloadDelay), A
+                RET  NZ
+                LD   A, (LevelSelectPendingLevel)
+                LD   (CurrentLevel), A
                 JP   LevelSelectReloadPreviewAtomic
 
 LevelSelectReloadPreviewAtomic:
@@ -545,7 +592,7 @@ LevelSelectDrawNextButton:
 ; квантования. Центр вращения гарантирован формулой LUT (как у шаров цепи) —
 ; runtime-композиция cmd_scale в цепочке здесь ненадёжна (то теряется, то
 ; двоится: cyan-бокс frog-тела, поплывший центр маркера).
-; In: A = СЫРОЙ угол BRAD (offset +192 native-DOWN вшит в LUT).
+; Вход: A = СЫРОЙ угол BRAD (offset +192 native-DOWN вшит в LUT).
 ; ----------------------------------------------------------------------------
 LevelSelectEmitFrogMarkerMatrix:
                 LD   E, A : LD D, 0                     ; bucket 0..255 (= угол как есть)
@@ -593,5 +640,7 @@ LevelSelectKbdLeftPrev:         DEFB 1
 LevelSelectKbdRightPrev:        DEFB 1
 LevelSelectKbdFirePrev:         DEFB 1
 LevelSelectKbdEscPrev:          DEFB 1
+LevelSelectPreviewReloadDelay:  DEFB 0
+LevelSelectPendingLevel:        DEFB 0
 
                 endif ; _ZUMA_LEVEL_SELECT_
