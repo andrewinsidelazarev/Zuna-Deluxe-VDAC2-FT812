@@ -360,8 +360,8 @@ Bullet_SignExtendA_HL:
 
 
 ; ----------------------------------------------------------------------------
-; Bullet_Draw — вывод sprite пули в DL. Current level выбирает ARGB4 или L19 PALETTED atlas.
-; PALETTED L19 atlas использует local cell = color*12 (neutral phase).
+; Bullet_Draw — вывод sprite пули в DL. Текущий PALETTED path использует
+; local cell = color*12 (neutral spin phase); ARGB4 fallback — color*16.
 ; Matrix должна быть identity/scale-only.
 ; ----------------------------------------------------------------------------
 Bullet_Draw:        LD   A, (Bullet_Active)
@@ -371,7 +371,7 @@ Bullet_Draw:        LD   A, (Bullet_Active)
                     ; Гарантируем identity matrix
                     ; перед draw — иначе если matrix унаследована от tongue/body
                     ; rotation, bullet sprite рисуется в неправильном месте экрана.
-                    ; 1024×768: обычному атласу нужен scale 32px→51px; L19 native 51px использует identity.
+                    ; 1024×768: ARGB4 fallback scale 32px→51px; PALETTED native 51px использует identity.
                     CALL ZL_EmitBallStaticMatrixCurrent
 
                     LD   A, (Bullet_Color)

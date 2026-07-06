@@ -3,15 +3,10 @@
                 define _ZUMA_MAIN_LOOP_
 
 ; ============================================================================
-; MainLoop — главный игровой цикл Zuma VDAC2 (640×480 через FT812)
+; MainLoop — главный игровой цикл Zuma VDAC2 (1024×768 через FT812)
 ; ----------------------------------------------------------------------------
-; Каркас: на этом этапе DL содержит только тёмный фон + анимированную точку
-; (proof-of-life). По мере добавления game-state'а сюда подключатся:
-;   • обновление VDC engine (move_chain, animate_chain, try_spawn, scan_match…)
-;   • Background bitmap из RAM_G
-;   • Цикл по slots[] → BITMAP cells шаров (FT_Vertex2ii)
-;   • Frog с rotation matrix к курсору
-;   • Cursor + score
+; Кадр собирается в host CMD buffer, отправляется в FT812 через DMA/PIO, затем
+; swap'ается по FT_INT_SWAP. Игровая логика обновляется перед построением DL.
 ;
 ; Зависимости подключаются ровно те же что для Init_Video.asm
 ; (TSConf + Video + FT/81x Const + DL + 812 Macro + module FT 812 Func + Coprocessor).
@@ -28,14 +23,6 @@
 ZL_SCR_W        EQU 1024
 ZL_SCR_H        EQU 768
 ZL_SUB          EQU 16                                ; subpixel множитель
-ZL_FT_CMD_DMA_ENABLED EQU 1                           ; отправлять frame CMD buffer в FT812 через TS-Config DMA_RAM_SPI
-ZL_FROG_DRAW_ENABLED EQU 1                            ; общий canary: изолировать источник frog tearing
-ZL_FROG_DRAW_PLATE   EQU 1                            ; без rotation
-ZL_FROG_DRAW_BODY    EQU 1                            ; повернутое основное body
-ZL_FROG_DRAW_TONGUE  EQU 1                            ; повернутый tongue
-ZL_FROG_DRAW_BALL_NOW  EQU 1                          ; шар на tongue / во рту
-ZL_FROG_DRAW_NEXT_BALL EQU 1                          ; следующий шар на спине frog
-ZL_FROG_DRAW_OVERLAY EQU 1                            ; повернутый face overlay
 ZL_SPACE_LEVEL_INDEX EQU LEVEL_RUNTIME_COUNT - 1       ; Space — последний runtime board
 ZL_SPACE_STARS_PER_LAYER EQU 24
 ZL_TRACKF_TUNNEL     EQU #01                           ; track flags bit0: bullet не попадает
@@ -107,9 +94,6 @@ MainLoop:       ; --- Инициализация game state (одноразов�
                 FT_ClearAll
                 CALL ZL_DrawFrame
                 CALL DrawHudClock
-                if DIAG_TRK_PG1
-                CALL ZL_DiagTrkPg1
-                endif
                 FT_Display
 
                 ; --- 3. Синхронизация gameplay-кадра: ставим swap из устойчивой фазы refresh.
@@ -136,11 +120,7 @@ MainLoop:       ; --- Инициализация game state (одноразов�
 .SubmitGameplayFrame:
                 ; Burst write Z80 buffer → FT812 RAM_CMD; дождаться, пока
                 ; coprocessor построит RAM_DL, затем запросить swap.
-                if ZL_FT_CMD_DMA_ENABLED
                 CALL ZL_FT_CMD_Write_DMA
-                else
-                CALL ZL_FT_CMD_Write_PIO
-                endif
                 CALL FT.Coprocessor.WaitFlush
                 FT_WR_REG8 FT_REG_DLSWAP, FT_DLSWAP_FRAME
 
@@ -166,10 +146,10 @@ ZL_BALL_H        EQU ZL_BALL_DIAM_PX
 ZL_BALL_DRAW     EQU 51                               ; 1024×768: экранный размер = round(32×8/5); BitmapSize
 ZL_BALL_HALF     EQU 26                               ; центр draw-rect'а (round(51/2)) для VERTEX2F centering
                                                      ; (вращение/scale запечены в chain_matrix_lut.bin, pivot=16 atlas)
-ZL_BALL_L19_W    EQU 51                               ; L19: 50px ball in native 51×51 PALETTED4444 guarded cell
+ZL_BALL_L19_W    EQU 51                               ; PALETTED: 50px ball in native 51×51 guarded cell
 ZL_BALL_L19_H    EQU 51
 ZL_BALL_L19_PHASES EQU 12
-ZL_BALL_L19_SPIN_K EQU 61                             ; 12-phase analogue of normal K=81
+ZL_BALL_L19_SPIN_K EQU 61                             ; 12-phase PALETTED analogue of normal K=81
 ZL_BALL_L19_HALF_FP EQU #00198000                      ; 25.5 in CMD_TRANSLATE 16.16
 ZL_BALL_L19_NEG_HALF_FP EQU #FFE68000                  ; -25.5 in CMD_TRANSLATE 16.16
 ; --- Spin physics: rolling-without-slip связь между движением t и phase atlas ---
@@ -198,7 +178,7 @@ ZL_SPIN_MASK               EQU ZL_ATLAS_PHASES - 1
 ZL_BUCKETS      EQU 32                                ; старый dead-code; per-ball заменил bucket loop 2026-05-18
 
 ; Legacy PALETTED4444 split-handle offset сохранён для совместимости helper.
-; Текущий L19-вариант — 6×12 = 72 cells, поэтому использует только handle 0.
+; Текущий PALETTED-вариант — 6×12 = 72 cells, поэтому использует только handle 0.
 BALLS_HANDLE9_OFFSET EQU 128 * ZL_BALL_W * ZL_BALL_H        ; PALETTED = 1 byte/pixel cell
 ZL_DESTROY_HANDLE EQU 10                             ; match-3 серый animBallDestroy
 ZL_DESTROY_W      EQU 48                               ; atlas cell (layout) — НЕ масштабировать
@@ -244,8 +224,8 @@ ZL_BALL_COLORS  EQU 6
 
 ; ============================================================================
 ; DrawHudClock — HH:MM:SS в левом нижнем углу над bottom frame.
-; Bottom frame занимает Y=456..479 (24 px). Clock на Y=438 (18 px выше).
-; X=28 — сразу за left frame (24 px) + 4 px отступ.
+; 1024×768: bottom frame занимает Y=730..767 (38 px). Clock на Y=712.
+; X=45 — сразу за left frame (38 px) + 7 px отступ.
 ; Font 26 = FT812 ROM 8×16, "HH:MM:SS" ≈ 64 px шириной.
 ; ============================================================================
 DrawHudClock:
@@ -300,7 +280,7 @@ ZL_DrawFrame:
                 LD   C, 255 : LD D, 255 : LD E, 255
                 CALL FT.Coprocessor.ColorRGB
 
-                ; 400x300 PALETTED4444 background: one pass, NEAREST upscale to 640x480.
+                ; 400x300 PALETTED4444 background: one pass, NEAREST upscale to 1024x768.
                 CALL ZL_EmitLoadId
                 FT_CMD_BUF FT_CMD_SCALE
                 FT_CMD_BUF ZL_BG_SCALE
@@ -562,8 +542,8 @@ EnsureDialogFrameUploaded:
 ; НЕ ВЫКЛЮЧАТЬ и не заменять на RET.
 ;
 ; Host-side CMD buffer живёт в RAM #4CB0..#5C00; сразу после него начинается Core.
-; В длинных кадрах (много шаров, dual-chain, tunnel/top-mask passes, ARGB4 runtime
-; rotation) один поток frame-command может подойти к концу этого RAM-окна до того,
+; В длинных кадрах (много шаров, dual-chain, tunnel/top-mask passes, per-ball
+; matrix rotation) один поток frame-command может подойти к концу этого RAM-окна до того,
 ; как весь display list кадра собран. Старый "быстрый" вариант с RET здесь делал
 ; вызовы flush фиктивными, а draw-loop доходил до жёсткого guard и начинал .PBSkip-ать
 ; оставшиеся шары, чтобы не затереть Core. На экране это выглядит как обрыв
@@ -579,11 +559,7 @@ EnsureDialogFrameUploaded:
 ; не нарисовать хвост цепи или повредить Core-код.
 ; ----------------------------------------------------------------------------
 ZL_FlushCommandBufferMidFrame:
-                if ZL_FT_CMD_DMA_ENABLED
                 CALL ZL_FT_CMD_Write_DMA
-                else
-                CALL ZL_FT_CMD_Write_PIO
-                endif
                 CALL FT.Coprocessor.WaitFlush
                 LD   HL, CMD_ADDRESS_PTR
                 LD   (FT.Coprocessor.BufferPtr), HL
@@ -1306,7 +1282,7 @@ ZL_DrawCachedActiveChain:
                 LD   A, (ZL_TmpLastTangent)
                 CALL ZL_EmitBallMatrixFromBRAD
 .PBNoMatrix:
-                ; normal ARGB4 и L19 72-cell PALETTED4444 оба используют handle 0.
+                ; ARGB4 fallback и текущий 72-cell PALETTED4444 оба используют handle 0.
                 XOR  A
 .PBHSet:        ; lazy: пропустить BITMAP_HANDLE emit, если same как previous ball
                 LD   HL, ZL_TmpLastHandle
@@ -1480,32 +1456,18 @@ ZL_DrawFrogLayer:
                 LD   C, 255 : LD D, 255 : LD E, 255
                 CALL FT.Coprocessor.ColorRGB
                 FT_Begin FT_BITMAPS
-                if ZL_FROG_DRAW_ENABLED
                 XOR  A
                 CALL FT.Coprocessor.Cell
-                if ZL_FROG_DRAW_PLATE
                 CALL Frog_DrawPlate
-                endif
-                if ZL_FROG_DRAW_BODY
                 CALL Frog_DrawBody
-                endif
-                if ZL_FROG_DRAW_TONGUE
                 CALL Frog_DrawTongue
-                endif
                 LD   A, (VDC_GameState)
                 CP   VDC_STATE_WIN
                 JR   Z, .skip_frog_ball_sprites        ; WINEXP overwrites BALLS_RAMG in WIN
-                if ZL_FROG_DRAW_BALL_NOW
                 CALL Frog_DrawBallNow                  ; held ball: в окне, на pos+ballExpand·dir
-                endif
-                if ZL_FROG_DRAW_NEXT_BALL
                 CALL Frog_DrawNextBall                 ; на спине, pos-offset·dir
-                endif
 .skip_frog_ball_sprites:
-                if ZL_FROG_DRAW_OVERLAY
                 CALL Frog_DrawFaceOverlay              ; face overlay поверх (как в HD-оригинале)
-                endif
-                endif
 
                 LD   A, (VDC_GameState)
                 CP   VDC_STATE_WIN
@@ -1597,12 +1559,6 @@ ZL_AfterChains:
                 ; (обычный геймплей) DrawFadeOverlay сразу RET — безвредно. ---
                 CALL DrawFadeOverlay
 
-                ; ============================================================
-                ; SPI/GPU load indicator (temporary):
-                ;   bar в (0,0), длина = ZL_SpiCounter >> 5 px.
-                ;   Длинный = FT812 ещё рендерит когда Z80 готов = FT812 загружен.
-                ;   Короткий = FT812 быстро отрендерил, есть headroom.
-                ; ============================================================
                 RET
 
 ; ----------------------------------------------------------------------------
@@ -1663,7 +1619,7 @@ ZL_BallNeutralCellFromColor:
                 ADD  A, A                             ; x4
                 LD   E, A
                 ADD  A, A                             ; x8
-                ADD  A, E                             ; L19: color*12, spin phase 0
+                ADD  A, E                             ; PALETTED: color*12, spin phase 0
                 RET
 
 ; ZL_EmitBallColorRGB: emit COLOR_RGB(table[A]) для tinting L8 ball.
@@ -1753,7 +1709,7 @@ ZL_DrawExplosions:
                 RRCA : RRCA : RRCA : RRCA
                 AND  #0F                              ; ARGB4 atlas: cell = color*16 + spin
                 JR   .de_color_ready
-.de_pal_color:  LD   C, 0                              ; L19: cell=color*12+spin12
+.de_pal_color:  LD   C, 0                              ; PALETTED: cell=color*12+spin12
 .de_pal_loop:   CP   ZL_BALL_L19_PHASES
                 JR   C, .de_pal_done
                 SUB  ZL_BALL_L19_PHASES
@@ -1814,7 +1770,7 @@ ZL_EmitRotate:  ADD  A, 192                          ; offset native face direct
 ; ZL_EmitSetMatrix — append cmd_setmatrix (4 байт opcode).
 ; Применяет текущую coprocessor матрицу как BITMAP_TRANSFORM_A..F (6 DL cmds).
 ; ----------------------------------------------------------------------------
-ZL_KBD_STEP     EQU 4                                 ; BRAD/frame, ≈1.4°/frame ≈ 80°/sec @57Hz
+ZL_KBD_STEP     EQU 4                                 ; BRAD/frame; 4 BRAD = 5.625° per frame
 ZL_MOTION_THR   EQU 1                                 ; px threshold для motion detection
 
 ZL_AimUpdate:

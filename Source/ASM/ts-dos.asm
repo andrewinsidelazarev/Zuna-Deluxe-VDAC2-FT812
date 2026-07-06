@@ -3118,36 +3118,6 @@ LoadLevelFromPack_Setup:
                 OR   A
                 RET
 
-; LoadLevelFromPack — dead-code entry point для incremental verification.
-; Assets в FT812 не стримит: только открывает pack и читает TOC entry, чтобы
-; подтвердить ZiFi flow без риска сломать compiled-slot path.
-;   Вход : A = level index (0..21)
-;   Выход: CF=1 ok, ZiFi_LevelTOC filled
-LoadLevelFromPack:
-                PUSH AF
-                CALL ZiFi_Init
-                JR   NC, .InitErr
-                POP  AF
-                PUSH AF
-                CALL ZiFi_PakOpen
-                JR   NC, .Err
-                POP  AF
-                CALL ZiFi_PakReadToc
-                PUSH AF
-                CALL ZiFi_Done
-                POP  AF
-                RET
-.Err:           POP  AF
-                PUSH AF
-                CALL ZiFi_Done
-                POP  AF
-                OR   A                   ; CF=0
-                RET
-.InitErr:       POP  AF
-                CALL ZiFi_Done
-                OR   A
-                RET
-
 ; OVL_LoadLevelSelectPreviewAssets — stream preview thumbnail выбранного level
 ; (raw ARGB4, 306x196 padded to 8x16K pages) из ZUMALVL.PAK в выбранный
 ; LevelSelectPreviewLoadRam*. Level-select использует ping-pong RAM_G buffers,

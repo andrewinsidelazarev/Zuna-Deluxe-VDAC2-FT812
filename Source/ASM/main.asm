@@ -67,7 +67,6 @@ FONT_LEVEL48_PAGE_BASE EQU #21                          ; SPG pages #21,#22
 FONT_LEVEL48_NUM_PAGES EQU 2
 FONT_LEVEL48_RAMG      EQU #004000                      ; 2×16K окно → #004000..#00C000
 FONT_LEVEL48_HANDLE    EQU 11
-DIAG_TRK_PG1           EQU 0                            ; diag L18-zone off in normal builds
 
 TEXT_SPIRALDOOM_H      EQU 36                            ; опорная высота строки для Y-раскладки интро (исторический ориентир)
 
@@ -144,7 +143,7 @@ FRAME_BOT_HANDLE     EQU 15
 FRAME_LEFT_HANDLE    EQU 16
 FRAME_RIGHT_HANDLE   EQU 17
 ; 1024×768 порт: рамки рисуются ×1.6 (atlas-размеры W/H выше — для layout; ниже —
-; экранный draw-размер). Одна cmd_scale(1.6) матрица в DrawFrameStrips.
+; экранный draw-размер). Одна точная scale(1.6)-матрица в DrawFrameStrips.
 FRAME_TOP_DRAW_W     EQU 1024                            ; 640×1.6
 FRAME_TOP_DRAW_H     EQU 70                              ; 44×1.6
 FRAME_BOT_DRAW_W     EQU 1024
@@ -887,23 +886,23 @@ DrawRetryDialog:
                 RET
 
 ; ----------------------------------------------------------------------------
-; DrawIntroText — нижний правый угол: LEVEL 1-1 (большой, 64 px via cmd_scale)
-; + SPIRAL OF DOOM (36 px native). Используется когда VDC_GameState == INTRO.
-; Layout (640×480 screen, 30 px margin от правой/нижней рамки):
-;   LEVEL 1-1: X=452, Y=320 (158×64 displayed, BILINEAR scale ×16/9 из 89×36)
-;   SPIRAL OF DOOM: X=418, Y=414 (192×36 native)
+; DrawIntroText — нижний правый угол: LEVEL N-M + название текущего уровня.
+; Используется когда VDC_GameState == INTRO.
+; Layout считается в 640-space и масштабируется ×8/5 в 1024×768:
+;   LEVEL N-M: центрируется по 640-space, Y=382×1.6
+;   Название уровня: 30px nativealien, отдельный draw path.
 ; ----------------------------------------------------------------------------
 ; ----------------------------------------------------------------------------
 ; DrawPreviewSparkles — sparkle wave анимация по track (state=PREVIEW).
 ; Параметры:
-;   N=20 sparkles, head_sample = elapsed * SPEED, trail spacing 60 samples
-;   SPEED = 24, PREVIEW_TICKS = 120 → head_sample доходит до NumSamples (~2774)
+;   PREVIEW_SPARKLE_COUNT sparkles, head_sample = elapsed * PREVIEW_SPARKLE_SPEED,
+;   trail spacing = PREVIEW_SPARKLE_SPACING samples.
 ; Sparkle пропускается, если sample < 0 или sample >= NumSamples (head ещё не дошёл / уже прошёл).
 ; Tint: warm gold. Caller восстанавливает белый ColorRGB.
 ; Активные Track V2 pages выбирает SetCurrentTrackPage.
 ; ----------------------------------------------------------------------------
 ; Comet: 8 sparkles с шагом 16 samples = ~128 samples trail (короткая «очередь»),
-; head проходит 30 samples/tick → ~92 ticks для прохода 2774 samples (вместо 120).
+; head проходит 15 samples/tick; VDC_PREVIEW_TICKS даёт проход всего трека.
 PREVIEW_SPARKLE_COUNT   EQU 8
 PREVIEW_SPARKLE_SPEED   EQU 15
 PREVIEW_SPARKLE_SPACING EQU 16
@@ -985,9 +984,8 @@ DrawPreviewSparklesAll:
 
 ; ----------------------------------------------------------------------------
 ; DrawFrameStrips — 4 PALETTED4444 strip'а вокруг прозрачного центра.
-; 1024×768: frame strips пока рисуются native 640×480. Блокер — page 0 заполнена
-; LOG block'ом; +3 байта под scale CALL не помещаются. Для scale ×1.6 нужно вынести
-; load-time metadata из page 0 в оверлей и освободить место под рамки/HUD.
+; 1024×768: frame strips хранятся в 640×480 layout и рисуются одной точной
+; scale(1.6)-матрицей.
 ; ----------------------------------------------------------------------------
 DrawFrameStrips:
                 LD   C, 255 : LD D, 255 : LD E, 255
@@ -2093,8 +2091,8 @@ HudClockSec:    DEFB 0
 
 ; ============================================================================
 ; DrawTimeValue — нарисовать "M:SS" из VDC_GameSeconds (RTC-based).
-;   Раньше делили StatTimeFrames/60, но при 74Hz видеорежиме это давало
-;   неверное время. Теперь берём VDC_GameSeconds (уже в секундах).
+;   Раньше делили StatTimeFrames/60, но frame counter нельзя считать секундомером
+;   при non-60Hz видео и паузах. Теперь берём VDC_GameSeconds (уже в секундах).
 ; ============================================================================
 DrawTimeValue:
                 ; HL = VDC_GameSeconds (total seconds, RTC-based, pause excluded).
@@ -2894,49 +2892,6 @@ VDC_V16ToCenter_Slot0:
                 ADD  HL, DE
                 RET
 
-                if DIAG_TRK_PG1
-; ----------------------------------------------------------------------------
-; ZL_DiagTrkPg1 — диагностик L18-зоны (#0F-страница трека), slot 0 (Main1 полон).
-; Раз в кадр: Fletcher-16 загруженной второй страницы трека (samples 2048+) →
-; белая полоса шириной = сумма внизу экрана. Длина полосы эмулятор vs реал:
-; совпала → #0F грузится верно (баг ниже по потоку); разная → #0F приходит битой.
-; Геймплейную логику не трогает. module Core → символы без префикса.
-; ----------------------------------------------------------------------------
-ZL_DiagTrkPg1:
-                LD   A, (VDC_TrackPageCount1)
-                CP   2
-                RET  C                                  ; нет второй страницы → нечего мерить
-                LD   A, (VDC_TrackPages1 + 1)           ; физ. страница #0F-сэмплов
-                SetPage2_A
-                LD   HL, #8000
-                LD   BC, 16384
-                LD   DE, 0                              ; D=s2, E=s1 (Fletcher-16)
-.dtp_cs:        LD   A, (HL)
-                ADD  A, E : LD E, A                     ; s1 += byte
-                ADD  A, D : LD D, A                     ; s2 += s1
-                INC  HL
-                DEC  BC
-                LD   A, B : OR C
-                JR   NZ, .dtp_cs
-                LD   H, D : LD L, E                     ; HL = Fletcher-16
-                SRL  H : RR L
-                SRL  H : RR L                           ; HL = sum>>2 = x1 (1/16 px); полоса 0..1023px
-                LD   (ZL_DiagBarX16), HL
-                CALL SetCurrentTrackPage                ; вернуть slot 2 = active track page
-                LD   C, 255 : LD D, 255 : LD E, 255
-                CALL FT.Coprocessor.ColorRGB
-                FT_Begin FT_RECTS
-                LD   BC, 0
-                LD   DE, 740 * 16
-                CALL FT.Coprocessor.Vertex2f
-                LD   BC, (ZL_DiagBarX16)
-                LD   DE, 760 * 16
-                CALL FT.Coprocessor.Vertex2f
-                FT_End
-                RET
-ZL_DiagBarX16:  DEFW 0
-                endif
-
                 include "BulletTraj.asm"              ; slot0 resident ZBT1 bullet trajectory event reader
 
                 endmodule
@@ -2994,7 +2949,7 @@ Start:
                 ; ----- Initialize -----
 Initialize:     CALL Init_Core
                 CALL Init_Int                         ; EI/HALT — ждём первого FRAME INT (HW stab)
-                CALL Init_Video                       ; FT_BOOT_UP + 640×480 + FT_INT_SWAP enable
+                CALL Init_Video                       ; FT_BOOT_UP + 1024×768 + FT_INT_SWAP enable
                 CALL Input.Mouse.Initialize           ; курсор в центр (W/2, H/2)
                 CALL Input_Init                       ; взвести расширенную PC-клавиатуру (Mr.Gluk PS/2)
                 CALL AY_Game.AY_Init                  ; No-GS AY fallback starts silent
@@ -3183,8 +3138,8 @@ LoadGameplayAssets:
                 LD   A, CURSOR_PAGE
                 CALL UnpackAndUploadPage
 
-                ; Залить text atlases (GAME OVER + LEVEL 1-1 + SPIRAL OF DOOM)
-                ; в FT_RAM_G #0..#10000 (свободная зона до bg).
+                ; Залить GAME OVER atlas и intro glyph font в FT_RAM_G #0..#10000
+                ; (свободная зона до bg).
                 LD   HL, TEXT_GAMEOVER_RAMG & 0xFFFF
                 LD   (BgRamL), HL
                 LD   A, (TEXT_GAMEOVER_RAMG >> 16) & 0xFF
@@ -4667,7 +4622,7 @@ PauseMenuFirePrev: DEFB 0
 ; frog не стреляет, game time frozen), пока pause window гаснет за
 ; PAUSE_FADE_FRAMES ticks; затем → PLAY. VDC_PauseAlpha (255=opaque)
 ; масштабирует draw alpha всего окна во время fade.
-PAUSE_FADE_FRAMES EQU 74        ; ~1 s at 74 Hz vsync
+PAUSE_FADE_FRAMES EQU 74        ; fixed 74-frame fade; ~1.25 s at current ~59 Hz video
 PauseFadeTimer:    DEFB 0
 VDC_PauseAlpha:    DEFB 255
 str_pause_exit:    DB "REALLY WANT TO EXIT",0

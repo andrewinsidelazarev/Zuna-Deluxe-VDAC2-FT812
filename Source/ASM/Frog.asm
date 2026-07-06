@@ -25,7 +25,7 @@
 FROG_SPR_W        EQU 122                               ; atlas layout/UV — НЕ масштабировать
 FROG_SPR_HALF     EQU 61                                ; центр atlas = UV pivot
 FROG_SPR_HALF_NEG EQU -FROG_SPR_HALF & 0xFFFF          ; -61 в 16-bit two's complement
-; 1024×768 порт: тело/тарелка/overlay рисуются ×1.6 через cmd_scale + matrix LUT.
+; 1024×768 порт: тело/тарелка/overlay рисуются ×1.6 через запечённые BITMAP_TRANSFORM.
 FROG_SPR_DRAW     EQU 195                               ; экранный размер = round(122×8/5)
 FROG_SPR_SCR_HALF EQU 98                                ; round(195/2) — screen pivot
 FROG_SPR_SCR_HALF_NEG EQU -FROG_SPR_SCR_HALF & 0xFFFF
@@ -726,7 +726,7 @@ Frog_EmitVertex2f_PosCentered:
 ; ----------------------------------------------------------------------------
 ; Frog_DrawBallNow — chain atlas, при pos + ballExpand·dir.
 ; ballExpand = 24 idle, при выстреле 0 → восстанавливается.
-; L19 PALETTED atlas: cell = color*12, hardware rotation matrix.
+; PALETTED atlas: cell = color*12, hardware rotation matrix.
 ; ----------------------------------------------------------------------------
 Frog_DrawBallNow:
                   ; offsetX = (cos · ballExpand) / 128
@@ -801,7 +801,7 @@ Frog_DrawNextBall:
                   ADD  HL, DE
                   LD   (Frog_TmpY), HL
 
-                  ; 1024×768: обычному атласу нужен scale(1.6); L19 native 51px использует identity.
+                  ; 1024×768: ARGB4 fallback scale(1.6); PALETTED native 51px использует identity.
                   CALL ZL_EmitBallStaticMatrixCurrent
                   LD   A, (Frog_NextBallColor)
                   CALL ZL_BallHandleFromColor

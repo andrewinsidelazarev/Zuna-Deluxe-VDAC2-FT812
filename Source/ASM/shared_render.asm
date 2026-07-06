@@ -408,22 +408,6 @@ ZL_CmdDmaWordsHi: DEFB 0
 ZL_CmdDmaWordsLo: DEFB 0
 
 ; ----------------------------------------------------------------------------
-; ZL_FT_CMD_Write_PIO — diagnostic non-DMA sender для того же host CMD buffer.
-; Контракт caller тот же, что у ZL_FT_CMD_Write_DMA: previous chunk/frame drained,
-; CMD_ADDRESS_PTR..BufferPtr помещается в FT812 command FIFO. Отличие: bytes идут
-; через CPU OTIR/FT.WriteMem вместо TS-Config DMA_RAM_SPI.
-; ----------------------------------------------------------------------------
-ZL_FT_CMD_Write_PIO:
-                FT_CMD_Count                            ; BC = byte count
-                LD   A, B
-                OR   C
-                RET  Z
-                LD   HL, CMD_ADDRESS_PTR
-                LD   A, (FT_REG_CMDB_WRITE >> 16) & #FF
-                LD   DE, FT_REG_CMDB_WRITE & #FFFF
-                JP   FT.WriteMem
-
-; ----------------------------------------------------------------------------
 ; ZL_AimUpdate — детектирует mouse motion (с threshold для подавления Hyper-V
 ; Kempston jitter), а keyboard arrows меняют Frog_Angle напрямую.
 ;

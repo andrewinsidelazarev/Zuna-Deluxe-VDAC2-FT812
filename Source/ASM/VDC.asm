@@ -3,7 +3,7 @@
                 define _ZUMA_VDC_
 
 ; ============================================================================
-; VDC — Virtual Discrete Chain physics для Zuma VDAC2 (640x480).
+; VDC — Virtual Discrete Chain physics для Zuma VDAC2 (1024×768 runtime).
 ; ----------------------------------------------------------------------------
 ; Порт vdc_visual_emulator.py 1:1. Отличия от 360x288 asm-версии:
 ;   - CELL_SIZE = 32 (как в 360x288). Track length зависит от board; L01 =
@@ -42,16 +42,13 @@ VDC_DECAY_POS          EQU 1                             ; cascade rollback (pos
                                                           ; длина хорды track 1.0815 px/sample: 32×1.08 ≈ 34.6 px
                                                           ; centers, ball 32 px → gap ~2.6 px на прямой.
                                                           ; Используется в VDC_SlotT через ZL_Mul16x8.
-                                                         ; track 1.067 px/sample → 42*1.067 ≈ 45 px
-                                                         ; между центрами при ball=40 → 5 px gap
-                                                         ; (= touching, как в оригинале Zuma).
 VDC_MAX_SLOTS          EQU 192                           ; physical slot buffer: самый длинный track L22=136 cells,
                                                          ; остаётся insert/gap headroom и всё ещё помещается Main1.
                                                          ; Было 240 — избыток; 128 стало тесно для текущих
                                                          ; pack-треков. Держать синхронно с ZL_BALL_CACHE layout.
 VDC_GAP_STOP           EQU #FE
 VDC_GAP_CASCADE        EQU #FD
-VDC_NUM_COLORS         EQU 6                             ; 6 colors (атлас уже поддерживает 6×32 cells). До 2026-05-18: 4.
+VDC_NUM_COLORS         EQU 6                             ; 6 colors; текущий PALETTED atlas хранит 6×12 spin cells.
 VDC_LEVEL_CHAIN_CHANCE EQU 50                            ; level setting: 50% random single, 50% random same-color chain
 ; --- Подтяжка сегментов по референсу Zuma HD (BallChain.c, см. Чат.txt
 ; 2026-06-12). PULL = цвета по краям стыка СОВПАДАЮТ: скорость подтяжки
@@ -74,11 +71,11 @@ VDC_DUAL_LOSE_MENU_DELAY EQU 12                          ; post-empty frames п�
 VDC_STATE_PLAY     EQU 0                                  ; обычный gameplay
 VDC_STATE_ABSORB   EQU 1                                  ; balls движутся в killzone
 VDC_STATE_GAMEOVER EQU 2                                  ; GAME OVER screen
-VDC_STATE_INTRO    EQU 3                                  ; level intro (LEVEL 1-1 + dispname)
+VDC_STATE_INTRO    EQU 3                                  ; level intro (LEVEL N-M + title)
 VDC_STATE_PREVIEW  EQU 4                                  ; sparkle wave вдоль track перед спавном
 VDC_STATE_CLOSING  EQU 5                                  ; череп закрывается (frame 11→1)
 VDC_STATE_WIN      EQU 6                                  ; level clear: sparkles, bonus, следующий level
-VDC_INTRO_TICKS    EQU 240                                ; ~4 сек @ 60Hz
+VDC_INTRO_TICKS    EQU 240                                ; ~4 сек при текущем ~59Hz video
 ; VDC_DialogState values для win flow (после win-анимации):
 DLG_WIN_DONE       EQU 5                                  ; «LEVEL DONE» диалог, ждём OK
 DLG_WIN_FADE       EQU 6                                  ; OK нажат → fade-out в чёрное, потом AdvanceToNextLevel
@@ -182,7 +179,7 @@ VDC_Init:
                 LD   A, 11                            ; KzFrame=11 (skull mouth wide open) во время intro/preview
                 LD   (VDC_KzFrame),            A
                 ; --- Состояния: Intro (3) → Preview (4) → Closing (5) → Play (0) ---
-                ; INTRO: LEVEL 1-1 + SPIRAL OF DOOM с fade-out
+                ; INTRO: LEVEL N-M + title с fade-out
                 ; PREVIEW: sparkle wave вдоль track, череп OPEN
                 ; PLAY: транзишн КзFrame=1 (closed), шары спавнятся
                 LD   A, VDC_STATE_INTRO
@@ -3416,7 +3413,7 @@ VDC_RollingLoopTimer: DEFB 0           ; No-GS AY retrigger timer для rolling
 VDC_ExplodeActive: DEFB 0              ; 1 если в активной цепочке есть ExplodeFrame > 0
 VDC_ChainLocalEnd:
 ; --- Stats counters (показываются в game-over диалоге, reset на VDC_Init) ---
-VDC_StatTimeFrames: DEFW 0  ; сколько frame'ов прошло в state=PLAY (60Hz tick)
+VDC_StatTimeFrames: DEFW 0  ; сколько frame'ов прошло в state=PLAY; wall time хранит VDC_GameSeconds
 VDC_StatCombos:     DEFB 0  ; текущее combo (≥2 explosions одного цвета подряд)
 VDC_StatMaxCombo:   DEFB 0  ; max combo за уровень
 VDC_StatMaxChain:   DEFB 0  ; max chain bonus за уровень
