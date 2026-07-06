@@ -1354,10 +1354,26 @@ VDC_MoveChain:
 .mc_no_lose_hold:
                 LD   A, (VDC_ChainFreezeCnt)
                 OR   A
-                JR   Z, .mc_no_freeze
+                JR   Z, .mc_check_gap_hold
                 DEC  A
                 LD   (VDC_ChainFreezeCnt), A
                 RET
+.mc_check_gap_hold:
+                LD   A, (VDC_GameState)
+                OR   A
+                JR   NZ, .mc_no_freeze                  ; не стопорим lose/absorb
+                ; Внутренняя дырка (шар -> GAP -> шар) не имеет права ехать
+                ; к kill-zone обычным HSub++. VDC_GapJunction здесь ненадёжен:
+                ; это тип текущего стыка, а не факт наличия живой дырки.
+                CALL VDC_InternalGapExists
+                RET  C
+.mc_check_pos_hold:
+                ; После удаления marker'а передний сегмент удерживается
+                ; положительным offset. Пока он не дотаял, HSub тоже держим,
+                ; иначе обычный ход снова сдвинет дырку вперёд.
+                LD   A, (VDC_GapPosLeft)
+                OR   A
+                RET  NZ
 .mc_no_freeze:
                 LD   A, (VDC_HSub)
                 INC  A
@@ -2462,6 +2478,39 @@ VDC_GapJunctionUpdate:
                 RET
 .gju_catchup:   LD   A, 2
                 LD   (VDC_GapJunction), A
+                RET
+
+; ----------------------------------------------------------------------------
+; VDC_InternalGapExists — CF=1 если внутри цепи есть живая дырка:
+;   живой шар -> один или больше GAP marker'ов -> живой шар.
+; CF=0 для хвостовой уборки marker'ов и для дырки до первого живого шара.
+; ----------------------------------------------------------------------------
+VDC_InternalGapExists:
+                LD   A, (VDC_SlotsLen)
+                OR   A
+                RET  Z
+                LD   B, A
+                LD   HL, (VDC_pSlots)
+                LD   C, 0                              ; bit0=видели шар, bit1=после него был GAP
+.ige_loop:
+                LD   A, (HL)
+                CP   VDC_NUM_COLORS
+                JR   C, .ige_live
+                BIT  0, C
+                JR   Z, .ige_next
+                SET  1, C
+                JR   .ige_next
+.ige_live:
+                BIT  1, C
+                JR   NZ, .ige_yes
+                SET  0, C
+.ige_next:
+                INC  HL
+                DJNZ .ige_loop
+                AND  A
+                RET
+.ige_yes:
+                SCF
                 RET
 
 ; ----------------------------------------------------------------------------
