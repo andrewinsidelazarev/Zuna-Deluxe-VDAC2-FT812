@@ -1,76 +1,62 @@
 v108-2026-07-09-multigap-pull-stable-reference
 
-Purpose
--------
-Reference snapshot after the multi-GAP PULL jitter fix.
+Опорная версия проекта от 2026-07-09 в формате репозитория.
 
-Fix Summary
------------
-VDC_GapJunctionUpdate no longer allows PULL to cross an already open
-front-side marker gap. If another marker gap exists before the left edge of
-the current gap run, the current gap closes as CATCH-UP instead: the front
-segment stays fixed and the rear segment catches up.
+Что реально сделано (главное):
 
-Physical rear recoil on PULL merge is disabled. The merge click and pull-speed
-reset remain, but no extra rear-segment micro-shift is applied.
+1. Своп шаров текущего / следующего хода лягушки по ПКМ
+   (на клавиатуре — Alt Gr, правый ALT) — одна из главных фишек Zuma.
 
-Included
---------
-Source/
-Docs/
-Graphics/
-Sounds/
-Root project files and chat log.
-Final build artifacts with this reference prefix:
-  v108-2026-07-09-multigap-pull-stable-reference.spg
-  v108-2026-07-09-multigap-pull-stable-reference.zumamain.pak
-  v108-2026-07-09-multigap-pull-stable-reference.zumalvl.pak
-  v108-2026-07-09-multigap-pull-stable-reference.zumaaud.pak
-  v108-2026-07-09-multigap-pull-stable-reference.zumasnd.pak
-  v108-2026-07-09-multigap-pull-stable-reference.zuma.sym
-  v108-2026-07-09-multigap-pull-stable-reference.ay_sfx_data.bin
+2. Аппаратная тень шаров на уровнях с лёгкой графикой.
 
-Not Included
-------------
-Build/
-Diagnostics/
-WCImage/
-wc.img
-.git/
+3. Курсор нативный 1024×768 без апскейла.
 
-Checks
-------
-PASS:
-  build.cmd
-  build_wc_img.cmd
-  check_memory_map.py
-  check_host_wc_img.py
-  test_gap_pull_z80.py
-  test_gap_boundary_no_kz_drift_z80.py
-  test_chain_move_step_z80.py
-  test_insert_immediate_match_z80.py
-  test_cascade_requires_gap_bridge_z80.py
-  test_pending_shot2_survives_new_match_z80.py
-  test_shot2_cleanup_z80.py
-  test_no_premature_shot2_z80.py
-  test_lose_waits_chain_settle_z80.py
-  test_v099_lose_state_regression_z80.py
-  test_dual_chain_lose_absorb_z80.py
-  profile_dual_chain_perf.py --warm-frames 1
+Текущие runtime-артефакты:
+- Сохранены SPG, symbol и PAK-файлы текущей сборки.
+- Сохранены AY SFX артефакты, которые нужны текущей No-GS версии.
 
-Build Sizes
------------
-Main0 = 9207 bytes
-Main1 = 16298 bytes
-UiOvl = 14514 bytes
-LoaderOvl = 12318 bytes
-Gameplay overlay free = 86 bytes
+Артефакты сборки (в этой release-папке):
+- v108-2026-07-09-multigap-pull-stable-reference.spg
+- v108-2026-07-09-multigap-pull-stable-reference.zumamain.pak
+- v108-2026-07-09-multigap-pull-stable-reference.zumalvl.pak
+- v108-2026-07-09-multigap-pull-stable-reference.zumaaud.pak
+- v108-2026-07-09-multigap-pull-stable-reference.zumasnd.pak
+- v108-2026-07-09-multigap-pull-stable-reference.zuma.sym
+- v108-2026-07-09-multigap-pull-stable-reference.ay_sfx_data.bin
 
-SHA-256
--------
-ZUMA_VD2.SPG  = FF5DC2C7CBC99EB4CF1CD21B249E066816D1FE92DC9A1E59E1009975851C18BE
-ZUMAMAIN.PAK  = 27360CE45A14775F8B034A494CCA6ACE8AC49CD89161B4C313D27424A30DD533
-ZUMALVL.PAK   = 1C96ECEE314FEBEA1AF914A696EC9070E5F40A467829DC9BCB9BEC76E7BE5179
-ZUMAAUD.PAK   = 72EF97514A816962D725193DC27C3232373505C859362784C469A8CF057FB017
-ZUMASND.PAK   = 8393DB5BB8EC2FDA98C970A3303C43BDEF86A5CA5B4CF09FF09F8FC0C53409DA
-Build/zuma.sym = E229BD9C2A6FDEE486F4D5B876450FC5CA3D36A1526BFC95C8858E76C75CC2D3
+Проверки текущей сборки — PASS:
+- build.cmd
+- build_wc_img.cmd
+- check_memory_map.py
+- check_host_wc_img.py
+- test_gap_pull_z80.py
+- test_gap_boundary_no_kz_drift_z80.py
+- test_chain_move_step_z80.py
+- test_insert_immediate_match_z80.py
+- test_cascade_requires_gap_bridge_z80.py
+- test_pending_shot2_survives_new_match_z80.py
+- test_shot2_cleanup_z80.py
+- test_no_premature_shot2_z80.py
+- test_lose_waits_chain_settle_z80.py
+- test_v099_lose_state_regression_z80.py
+- test_dual_chain_lose_absorb_z80.py
+- profile_dual_chain_perf.py --warm-frames 1
+
+Размеры сборки:
+- Main0 = 9207 байт
+- Main1 = 16298 байт
+- UiOvl = 14514 байт
+- LoaderOvl = 12318 байт
+- Gameplay overlay free = 86 байт
+
+SHA-256 артефактов:
+- ZUMA_VD2.SPG  = FF5DC2C7CBC99EB4CF1CD21B249E066816D1FE92DC9A1E59E1009975851C18BE
+- ZUMAMAIN.PAK  = 27360CE45A14775F8B034A494CCA6ACE8AC49CD89161B4C313D27424A30DD533
+- ZUMALVL.PAK   = 1C96ECEE314FEBEA1AF914A696EC9070E5F40A467829DC9BCB9BEC76E7BE5179
+- ZUMAAUD.PAK   = 72EF97514A816962D725193DC27C3232373505C859362784C469A8CF057FB017
+- ZUMASND.PAK   = 8393DB5BB8EC2FDA98C970A3303C43BDEF86A5CA5B4CF09FF09F8FC0C53409DA
+- Build/zuma.sym = E229BD9C2A6FDEE486F4D5B876450FC5CA3D36A1526BFC95C8858E76C75CC2D3
+
+В GitHub-формате release-папка содержит только этот REFERENCE.txt и runtime
+артефакты. Исходники текущей версии находятся в обычных путях репозитория
+Source/, Docs/, Graphics/, Sounds/AY/ и корневых конфигурациях.
