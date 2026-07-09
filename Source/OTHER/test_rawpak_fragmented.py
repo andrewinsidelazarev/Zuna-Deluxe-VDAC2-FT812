@@ -190,9 +190,20 @@ def main() -> int:
         emu.reg.SP = (sp + 2) & 0xFFFF; emu.reg.PC = ret
         emu.reg.F = (emu.reg.F | 1) if cf else (emu.reg.F & ~1)
     wm = [0]
+    def ft_write_mem():
+        dest = ((emu.reg.A & 0xFF) << 16) | ((emu.reg.D & 0xFF) << 8) | (emu.reg.E & 0xFF)
+        src = ((emu.reg.H & 0xFF) << 8) | (emu.reg.L & 0xFF)
+        size = ((emu.reg.B & 0xFF) << 8) | (emu.reg.C & 0xFF)
+        wm.__setitem__(0, wm[0] + 1)
+        if 0 <= dest < len(emu.ft.ram_g):
+            end = min(dest + size, len(emu.ft.ram_g))
+            chunk = bytes(emu.mem.read((src + i) & 0xFFFF) for i in range(end - dest))
+            emu.ft.ram_g[dest:end] = chunk
+        hook_ret(False)
+
     H = {sym["Core.sd_init"]: lambda: hook_ret(False),
          sym["Core.ZiFi_Done"]: lambda: hook_ret(False),
-         sym["FT.WriteMem"]: lambda: (wm.__setitem__(0, wm[0] + 1), hook_ret(False))}
+         sym["FT.WriteMem"]: ft_write_mem}
     def hooked2():
         h = H.get(emu.reg.PC)
         if emu.reg.PC == sd_read:

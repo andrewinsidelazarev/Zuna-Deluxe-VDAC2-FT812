@@ -12,7 +12,7 @@
 ;       reference_zuma_vdac2_zxevo_ps2_keyboard.
 ;   * Kempston-джойстик (TSLib Input.Kempston). KJoystick=1 направляет PC-стрелки
 ;     сюда же.
-;   * Мышь (TSLib Input.Mouse) — позиция + ЛКМ.
+;   * Мышь (TSLib Input.Mouse) — позиция + ЛКМ/ПКМ.
 ;
 ; Схема управления: лягушка = вращение Влево/Вправо (геймплей). Глобальные UI:
 ;   Up/Down — навигация меню/выбор сложности; Влево/Вправо — активная кнопка в
@@ -26,7 +26,7 @@
 ; ============================================================================
 
 ; Скан-коды PS/2 set-2 (make-коды; стрелки идут с префиксом E0, но их коды
-; уникальны, поэтому при сопоставлении префикс E0 игнорируется).
+; уникальны; E0 нужен только чтобы отличить AltGr от левого Alt).
 INP_SC_ESC      EQU #76
 INP_SC_UP       EQU #75
 INP_SC_DOWN     EQU #72
@@ -34,6 +34,7 @@ INP_SC_LEFT     EQU #6B
 INP_SC_RIGHT    EQU #74
 INP_SC_ENTER    EQU #5A
 INP_SC_SPACE    EQU #29
+INP_SC_ALT      EQU #11          ; AltGr = E0 11; левый Alt = 11 без E0
 INP_SC_Q        EQU #15
 INP_SC_A        EQU #1C
 INP_SC_O        EQU #44          ; O = Влево (классическая ZX-раскладка)
@@ -47,6 +48,7 @@ Input_KLeft:    DEFB 0
 Input_KRight:   DEFB 0
 Input_KEnter:   DEFB 0
 Input_KSpace:   DEFB 0
+Input_KAltGr:   DEFB 0
 Input_KQ:       DEFB 0
 Input_KA:       DEFB 0
 Input_KO:       DEFB 0
@@ -54,7 +56,7 @@ Input_KP:       DEFB 0
 Input_EvUp:     DEFB 0          ; PS/2 make замечен во время этого Input_Scan
 Input_EvDown:   DEFB 0
 Input_EvFireKey: DEFB 0
-Input_PS2Brk:   DEFB 0          ; ожидается префикс отпускания (#F0)
+Input_PS2Brk:   DEFB 0          ; бит0=#F0 отпускание, бит1=#E0 расширенный код
 Input_DrainCnt: DEFB 0          ; ограничитель дренажа FIFO (макс байт за скан)
 
 ; ----------------------------------------------------------------------------
@@ -86,23 +88,31 @@ Input_Scan:
 .drain:         IN   A, (C)
                 OR   A : RET Z                             ; 0 = FIFO пуст -> готово
                 CP   #FF : JR Z, .next                     ; маркер переполнения -> пропустить
-                CP   #E0 : JR Z, .next                     ; префикс extended -> игнор (коды уникальны)
+                CP   #E0 : JR Z, .set_ext                  ; префикс расширенного кода
                 CP   #F0 : JR Z, .set_brk                  ; префикс break -> следующий код = отпускание
                 CALL Input_SetKey
 .next:          LD   A, (Input_DrainCnt) : DEC A : LD (Input_DrainCnt), A : RET Z
                 JR   .drain
-.set_brk:       LD   A, 1 : LD (Input_PS2Brk), A
+.set_ext:       LD   HL, Input_PS2Brk
+                SET  1, (HL)
+                JR   .next
+.set_brk:       LD   HL, Input_PS2Brk
+                SET  0, (HL)
                 JR   .next
 
 ; A = scancode -> выставить/сбросить его флаг (1 если make, 0 если break),
-; затем съесть префикс break. Сохраняет BC (порт дренажа #BFF7). Портит AF, DE, HL.
+; затем съесть префиксы E0/F0. Сохраняет BC (порт дренажа #BFF7). Портит AF, DE, HL.
 Input_SetKey:
                 LD   E, A                                  ; E = scancode
                 LD   A, (Input_PS2Brk)
+                LD   H, A                                  ; H: бит1 = E0 для AltGr
+                AND  1
                 XOR  1                                     ; A = 1 (make) или 0 (break)
                 LD   D, A                                  ; D = значение для записи
-                XOR  A : LD (Input_PS2Brk), A              ; съесть префикс break
+                XOR  A : LD (Input_PS2Brk), A              ; съесть префиксы
                 LD   A, E
+                CP   INP_SC_ALT
+                JR   Z, .maybe_altgr
                 LD   HL, Input_KEsc   : CP INP_SC_ESC   : JR Z, .sk
                 LD   HL, Input_KUp    : CP INP_SC_UP    : JR Z, .sk_ev_up
                 LD   HL, Input_KDown  : CP INP_SC_DOWN  : JR Z, .sk_ev_down
@@ -115,6 +125,10 @@ Input_SetKey:
                 LD   HL, Input_KO     : CP INP_SC_O     : JR Z, .sk
                 LD   HL, Input_KP     : CP INP_SC_P     : JR Z, .sk
                 RET                                        ; неотслеживаемый код
+.maybe_altgr:   BIT  1, H
+                RET  Z                                    ; левый Alt не отслеживаем
+                LD   HL, Input_KAltGr
+                JR   .sk
 .sk:            LD   (HL), D
                 RET
 .sk_ev_up:      LD   (HL), D
@@ -199,10 +213,3 @@ Input_EdgeZ:    JR   Z, .released
 .released:      LD   (HL), 0                               ; отпущено -> сброс
                 XOR  A                                     ; Z = фронта нет
                 RET
-
-; ----------------------------------------------------------------------------
-; Доступ к мыши (единая точка; позиция обновляется в Input_Scan).
-;   Input_MouseX / Input_MouseY -> HL = координата.
-; ----------------------------------------------------------------------------
-Input_MouseX:   LD   HL, (Input.Mouse.PositionX) : RET
-Input_MouseY:   LD   HL, (Input.Mouse.PositionY) : RET

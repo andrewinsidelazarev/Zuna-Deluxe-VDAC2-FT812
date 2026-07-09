@@ -19,19 +19,18 @@ import os
 from dataclasses import dataclass, field
 
 # ---------- Константы (синхронно с текущим asm: VDC.asm + MainLoop.asm) ----------
-CELL_SIZE          = 32          # = VDC_CELL_SIZE в asm. 1 sample ≈ 1.08 px -> ≈ 34.6 px между centers.
-DECAY_NEG_PER_FRAME = 2          # negative offsets (insert head slide / rear comp) -> 0 быстро.
-# positive offsets тают со скоростью vp/10 px/кадр (визуальная скорость подтяжки).
+CELL_SIZE          = 32          # = VDC_CELL_SIZE в asm. 1 sample ≈ 1.08 px -> ≈ 34.6 px между центрами.
+DECAY_NEG_PER_FRAME = 2          # отрицательные offset'ы (insert head-slide / rear-comp) -> 0 быстро.
+# Положительные offset'ы тают со скоростью vp/10 px/кадр (визуальная скорость подтяжки).
 NUM_BALL_COLORS    = 6           # = VDC_NUM_COLORS
 MAX_SLOTS          = 192         # = VDC_MAX_SLOTS
 LEVEL_START_BALLS  = 35          # = VDC_LEVEL_START_BALLS
 FAST_ADVANCE       = 12          # = VDC_FAST_ADVANCE
 MOVE_STEP          = 2           # = VDC_MOVE_STEP
-SPAWN_FRAME_MASK   = 63          # normal phase: VDC_TrySpawn only when frame&63 == 0
-# Подтяжка (референс Zuma HD, BallChain.c) — зеркало VDC.asm:
-PULL_ACCEL_X10     = 4           # = VDC_PULL_ACCEL_X10 (BALL_DECC 0.4 сэмпл/кадр²)
+SPAWN_FRAME_MASK   = 63          # нормальная фаза: VDC_TrySpawn только при frame&63 == 0
+# Подтяжка назад — зеркало VDC.asm:
 PULL_MAX_X10       = 100         # = VDC_PULL_MAX_X10 (10 сэмпл/кадр)
-PULL_BASE_X10      = 10          # = VDC_PULL_BASE_X10 (1 сэмпл/кадр)
+PULL_BASE_X10      = 10          # = VDC_PULL_BASE_X10
 GAP_ACCUM_STEP     = 256         # = VDC_GAP_ACCUM_STEP (ускоренный порог подтяжки)
 GAP_STOP           = 0xFE
 GAP_CASCADE        = 0xFD
@@ -59,7 +58,7 @@ BALL_COLORS = {
     5: '#d0d0d0',                # white/grey
 }
 
-# ---------- TrackData loader ----------
+# ---------- загрузчик TrackData ----------
 # track_640.bin: word NumSamples + N × (X word, Y word, tangent byte) = stride 5.
 # Уже native 640×480 после make_track_640.py — никакого scaling.
 def load_track(path=None):
@@ -97,11 +96,12 @@ class VDCState:
     hsub: int = 0
     slots_len: int = 0
     chain_freeze_counter: int = 0       # пауза chain motion (hsub++) на N кадров после insert/cascade-close
-    gap_pull_vp: int = PULL_BASE_X10    # скорость подтяжки ×10 (разгон PULL) = VDC_GapPullVp
+    gap_pull_vp: int = PULL_BASE_X10    # скорость подтяжки ×10 = VDC_GapPullVp
     gap_accum: int = 0                  # аккумулятор подтяжки ×10 сэмплов = VDC_GapAccum
     gap_junction: int = 0               # 0=нет гэпов / 1=PULL / 2=CATCH-UP = VDC_GapJunction
     gap_tempo: int = PULL_BASE_X10      # темп закрытия ×10 = VDC_GapTempo
     gap_dec_acc: int = 0                # дробный накопитель декея (0..9) = VDC_GapDecAcc
+    gap_pos_left: int = 0               # 1 = положительный offset ещё едет назад
     last_merge_frame: int = -999        # кадр последнего PULL-слияния (клик SND_BALLCLICK1)
     match_scan_idx: int = 0xFF
     balls_spawned: int = 0
@@ -138,7 +138,7 @@ class VDCEngine:
         self.rng = random.Random(seed)
         self.s = VDCState()
 
-    # --------- match detection с offset gap check ----------
+    # --------- поиск match с проверкой offset-дырки ----------
     def detect_match3(self, idx):
         s = self.s
         if idx >= s.slots_len: return None
@@ -169,8 +169,8 @@ class VDCEngine:
         s = self.s
         marker = GAP_STOP
         # CASCADE только если обе стороны — реальные шары одного цвета.
-        # Если хотя бы одна сторона gap — это STOP (иначе два gap'а сравниваются как
-        # равные и тригерят ложный cascade close с HSA-- и head rollback).
+        # Если хотя бы одна сторона gap — это STOP (иначе два gap'а сравниваются
+        # как равные и тригерят ложный cascade close).
         if (lb > 0 and rb + 1 < s.slots_len
                 and not is_gap(s.slots[lb-1])
                 and not is_gap(s.slots[rb+1])
@@ -210,7 +210,7 @@ class VDCEngine:
         # разных цветов» без gap closure). Cascade теперь через DoGapStep после
         # физического закрытия gap.
         # OLD: s.shot2[lb-1] = 1; s.shot2[rb+1] = 1
-        # Свежий взрыв → подтяжка стартует «с нуля»: аккум и разгон сброс
+        # Свежий взрыв → подтяжка стартует «с нуля»: аккум сброшен
         # (= VDC_CheckMatch3 хвост). ТЕМП НЕ ТРОГАЕМ: недотаявшие компенсации
         # прошлого PULL доезжают прежним темпом, пока взрыв не финализирован
         # (junction=0). Freeze до первого DoGapStep — без него head-сегмент
@@ -268,7 +268,10 @@ class VDCEngine:
             v = s.slots[d]
             if is_gap(v):
                 continue
-            s.gap_junction = 1 if v == left_color else 2
+            if v == left_color and not any(is_gap(x) for x in s.slots[:b]):
+                s.gap_junction = 1
+            else:
+                s.gap_junction = 2
             return
         s.gap_junction = 2               # ран до хвоста — справа никого
 
@@ -287,10 +290,25 @@ class VDCEngine:
         s = self.s
         return any(not is_gap(s.slots[j]) for j in range(k, s.slots_len))
 
+    def internal_gap_exists(self):
+        """Есть ли внутри цепи живой gap: шар -> marker(s) -> шар."""
+        s = self.s
+        seen_live = False
+        seen_gap_after_live = False
+        for j in range(s.slots_len):
+            if is_gap(s.slots[j]):
+                if seen_live:
+                    seen_gap_after_live = True
+            else:
+                if seen_gap_after_live:
+                    return True
+                seen_live = True
+        return False
+
     def gap_merge_check_recoil(self, k):
         """= VDC_GapMergeCheckRecoil: после PULL-удаления гэп-слота — если
-        соседи K-1/K оба шары (ран закрыт), отдача тыла vp/2.5
-        (BALL_WEIGHT_RATIO референса) + клик SND_BALLCLICK1, сброс разгона."""
+        соседи K-1/K оба шары (ран закрыт), сброс разгона + клик
+        SND_BALLCLICK1. Физическую отдачу тыла не добавляем."""
         s = self.s
         if s.gap_junction != 1:
             return
@@ -298,16 +316,14 @@ class VDCEngine:
             return
         if is_gap(s.slots[k - 1]) or is_gap(s.slots[k]):
             return
-        recoil = s.gap_pull_vp // 25
-        if recoil > 0:
-            self.gap_rear_comp(k, recoil)
-        s.gap_pull_vp = PULL_BASE_X10    # следующий стык разгоняется заново
+        s.gap_pull_vp = PULL_BASE_X10
         s.last_merge_frame = s.frame     # клик стыковки (SND_BALLCLICK1)
 
     def do_gap_step(self):
         s = self.s
         def set_shot2_on_real_closure(k):
-            # Trigger delayed match only when removing the gap joins two same-color balls.
+            # Отложенный match запускается только если удаление дырки соединяет
+            # два шара одного цвета.
             # Otherwise a pre-existing same-color run on one side can false-trigger.
             if k <= 0 or k >= s.slots_len:
                 return
@@ -318,61 +334,60 @@ class VDCEngine:
             s.shot2[k - 1] = 1
             s.shot2[k] = 1
 
-        # STOP from tail. PULL: HSA-- + head компенсация +CELL_SIZE (фронт
-        # доезжает к тылу decay'ем со скоростью vp). CATCH-UP: фронт СТОИТ —
-        # без HSA-- и front-comp; задний сегмент компенсируется назад и
-        # доезжает decay'ем (хвост догоняет, референс Zuma HD).
+        def close_pull(k):
+            # PULL: цвета по краям совпали — передний сегмент откатывается назад
+            # от kill-zone через HSA-- и положительную компенсацию.
+            if self.gap_rear_exists(k):
+                if s.hsa <= 0:
+                    set_shot2_on_real_closure(k)
+                    s.match_scan_idx = k
+                    return
+                s.hsa -= 1
+                for j in range(k):
+                    s.offsets[j] = min(s.offsets[j] + CELL_SIZE, 2 * CELL_SIZE)
+                s.chain_freeze_counter = CELL_SIZE
+                set_shot2_on_real_closure(k)
+                s.match_scan_idx = k
+                self.gap_merge_check_recoil(k)
+            else:
+                # Гэп у хвоста (заднего сегмента нет) — чистая уборка маркера:
+                # без freeze/comp/доспавна, иначе в зелёной фазе без спавна
+                # каждый концевой маркер стопит цепь на CELL кадров.
+                set_shot2_on_real_closure(k)
+                s.match_scan_idx = k
+
+        def close_catchup(k):
+            # CATCH-UP: фронт-сегмент стоит, задний сегмент догоняет вперёд.
+            if not self.gap_rear_exists(k):
+                set_shot2_on_real_closure(k)
+                s.match_scan_idx = k
+                return
+            self.gap_rear_comp(k, CELL_SIZE)
+            s.chain_freeze_counter = CELL_SIZE
+            set_shot2_on_real_closure(k)
+            s.match_scan_idx = k
+            if s.game_state == 0:
+                self.try_spawn(no_hsub_gate=True)
+
+        def close_by_type(k):
+            if s.gap_junction == 2:
+                close_catchup(k)
+            else:
+                close_pull(k)
+
+        # STOP от хвоста; если STOP нет, CASCADE от головы. Тип стыка
+        # (PULL/CATCH-UP) определяет направление закрытия.
         for k in range(s.slots_len - 1, -1, -1):
             if s.slots[k] == GAP_STOP:
                 self._remove_slot(k)
-                if s.gap_junction == 2:
-                    # Гэп у хвоста (заднего сегмента нет) — чистая уборка маркера:
-                    # без freeze/comp/доспавна, иначе в зелёной фазе (спавн выкл.)
-                    # каждый концевой маркер стопит цепь на CELL кадров = рывки.
-                    if self.gap_rear_exists(k):
-                        self.gap_rear_comp(k, CELL_SIZE)
-                        s.chain_freeze_counter = CELL_SIZE
-                        # Доспавн у жерла (try_spawn проверяет gauge_full → при
-                        # полной шкале no-op, win не ломается).
-                        self.try_spawn(no_hsub_gate=True)
-                    set_shot2_on_real_closure(k)
-                    s.match_scan_idx = k
-                else:
-                    if s.hsa > 0:
-                        s.hsa -= 1
-                    for j in range(k):
-                        # кап 2×CELL: перенос недотаявшего остатка при разгоне
-                        # PULL (кап в CELL срезал его -> микро-рывки головы)
-                        s.offsets[j] = min(s.offsets[j] + CELL_SIZE, 2 * CELL_SIZE)
-                    set_shot2_on_real_closure(k)
-                    s.match_scan_idx = k
-                    self.gap_merge_check_recoil(k)
+                close_by_type(k)
                 return  # обрабатываем ОДИН маркер за вызов — иначе STOP+CASCADE в одном
                         # тике дают HSA-=2 без двойной компенсации -> рывок head назад на 32 px.
-        # CASCADE from head
+        # CASCADE от головы
         for k in range(s.slots_len):
             if s.slots[k] == GAP_CASCADE:
                 self._remove_slot(k)
-                if s.gap_junction == 2:
-                    # Гэп у хвоста — чистая уборка маркера (см. STOP-ветку).
-                    if self.gap_rear_exists(k):
-                        self.gap_rear_comp(k, CELL_SIZE)
-                        s.chain_freeze_counter = CELL_SIZE
-                        self.try_spawn(no_hsub_gate=True)   # доспавн (gauge_full-гейт)
-                    set_shot2_on_real_closure(k)
-                    s.match_scan_idx = k
-                else:
-                    # chain_freeze: head декаится без параллельного chain motion
-                    # -> видимый rollback.
-                    s.chain_freeze_counter = CELL_SIZE
-                    if s.hsa > 0:
-                        s.hsa -= 1
-                    for j in range(k):
-                        # кап 2×CELL: перенос недотаявшего остатка (см. STOP)
-                        s.offsets[j] = min(s.offsets[j] + CELL_SIZE, 2 * CELL_SIZE)
-                    set_shot2_on_real_closure(k)
-                    s.match_scan_idx = k
-                    self.gap_merge_check_recoil(k)
+                close_by_type(k)
                 break
 
     def scan_for_new_match(self):
@@ -385,8 +400,8 @@ class VDCEngine:
                     continue
                 if self.check_match3(k):
                     return True
-                # No match. Keep pending until offsets near k settle; fresh insert
-                # can become a valid match after half-cell slide decays.
+                # Match нет. Оставляем pending, пока offset'ы около k не осядут:
+                # свежий insert может стать валидным match после half-cell slide.
                 settled = (s.offsets[k] == 0)
                 if k > 0:
                     settled = settled and (s.offsets[k-1] == 0)
@@ -397,7 +412,7 @@ class VDCEngine:
         return False
 
     def clamp_offset_order(self):
-        """Prevent a positive tail offset from visually moving in front of its head-side neighbor."""
+        """Не дать положительному хвостовому offset'у визуально обогнать head-соседа."""
         s = self.s
         for i in range(1, s.slots_len):
             if s.offsets[i] > 0 and s.offsets[i] > s.offsets[i - 1]:
@@ -406,19 +421,16 @@ class VDCEngine:
     def animate_chain(self):
         s = self.s
         # Decay offsets — ДРОБНО-ТОЧНЫЙ темп gap_tempo/10 px/кадр с накопителем
-        # остатка (= asm). Усечённый vp/10 терял до 0.9px/кадр на разгоне →
-        # к слиянию копился хвост ~13px и скорость рушилась 10→1 px/кадр =
-        # рывок на каждом стыке. PULL: тают положительные (front-comp);
-        # CATCH-UP: тают отрицательные (rear-comp) точным темпом цепи;
-        # прочие — как раньше (1 / DECAY_NEG).
+        # остатка (= asm). Усечённый vp/10 терял до 0.9px/кадр → к слиянию
+        # копился хвост ~13px и скорость рушилась 10→1 px/кадр = рывок.
+        # PULL закрывается назад; CATCH-UP закрывает задний сегмент вперёд.
         acc = s.gap_dec_acc + s.gap_tempo
         n = acc // 10
         s.gap_dec_acc = acc % 10
-        # Положительные тают точным темпом ВСЕГДА, кроме догона: при PULL это
-        # скорость подтяжки; при junction=0 — последний темп (доезд финальной
-        # клетки слияния); при каскадном матче — темп нового разгона.
-        dec_pos = 1 if s.gap_junction == 2 else n
-        dec_neg = n if s.gap_junction == 2 else DECAY_NEG_PER_FRAME
+        # Положительные остатки тают прежним темпом; отрицательные offsets
+        # живой дырки тают темпом закрытия.
+        dec_pos = n
+        dec_neg = n if s.gap_junction in (1, 2) else DECAY_NEG_PER_FRAME
         pos_left = False
         for k in range(s.slots_len):
             o = s.offsets[k]
@@ -428,26 +440,29 @@ class VDCEngine:
                 if o > 0:
                     pos_left = True
             elif o < 0:
-                s.offsets[k] = min(0, o + dec_neg)
-        # Подтяжка (референс Zuma HD): тип стыка → темп → аккумулятор; порог
-        # GAP_ACCUM_STEP → do_gap_step (макс 1 шаг/кадр). PULL: vp разгоняется
-        # 1→10 сэмпл/кадр (+0.4/кадр²); CATCH-UP: темп = скорость цепи (фронт
-        # стоит, хвост догоняет); нет гэпов — сброс разгона.
+                if k + 1 < s.slots_len and not is_gap(s.slots[k]) and not is_gap(s.slots[k + 1]) and o > s.offsets[k + 1]:
+                    pos_left = True
+                else:
+                    s.offsets[k] = min(0, o + dec_neg)
+        s.gap_pos_left = 1 if pos_left else 0
+        # Подтяжка: тип стыка → темп → аккумулятор; порог GAP_ACCUM_STEP →
+        # do_gap_step. PULL идёт быстрым откатом назад, CATCH-UP — темпом
+        # движения цепи.
         self.gap_junction_update()
         if s.gap_junction == 0:
             s.gap_pull_vp = PULL_BASE_X10
             s.gap_accum = 0
-            # Темп не сбрасываем, пока доезжают положительные комп-офсеты
-            # последнего PULL — иначе финальная клетка ползёт 1px/кадр.
+            # Темп не сбрасываем, пока доезжают положительные остатки
+            # предыдущих компенсаций.
             if not pos_left:
                 s.gap_tempo = PULL_BASE_X10
         else:
             if s.gap_junction == 1:
-                s.gap_pull_vp = min(PULL_MAX_X10, s.gap_pull_vp + PULL_ACCEL_X10)
+                s.gap_pull_vp = PULL_MAX_X10
                 tempo = s.gap_pull_vp
             else:
-                s.gap_pull_vp = PULL_BASE_X10          # разгон подтяжки не копится
-                tempo = MOVE_STEP * 10                 # темп цепи ×10 (= speed_x100/5 в asm)
+                s.gap_pull_vp = PULL_BASE_X10
+                tempo = max(1, s.level_speed // 5)     # догон хвоста темпом цепи
             s.gap_tempo = tempo                        # декей = темп закрытия
             s.gap_accum += tempo
             if s.gap_accum >= GAP_ACCUM_STEP:
@@ -464,6 +479,12 @@ class VDCEngine:
         if s.chain_freeze_counter > 0:
             s.chain_freeze_counter -= 1
             return
+        if s.gap_pos_left:
+            return
+        # Дырка внутри цепи не должна двигаться вперёд обычным ходом цепи.
+        # Хвостовые marker'ы без заднего сегмента пропускаем.
+        if self.internal_gap_exists():
+            return
         s.hsub += MOVE_STEP
         if s.hsub >= CELL_SIZE:
             s.hsub -= CELL_SIZE
@@ -477,10 +498,10 @@ class VDCEngine:
         if s.slots_len >= MAX_SLOTS: return False
         if s.hsa < s.slots_len: return False
         # Спавнить только когда chain выровнен по cell-границе (hsub=0).
-        # Fast phase mirrors asm VDC_TrySpawn_NoHsubGate.
+        # Быстрая фаза повторяет asm VDC_TrySpawn_NoHsubGate.
         if not no_hsub_gate and s.hsub != 0: return False
         # Положительный offset хвоста (head-comp) → ждём settle. Отрицательный
-        # (rear-comp догона / отдача) НЕ блокирует: новый шар наследует offset
+        # (rear-comp догона) НЕ блокирует: новый шар наследует offset
         # и встаёт встык (= asm-гейт RET P).
         if s.slots_len > 0 and s.offsets[s.slots_len - 1] > 0: return False
         if s.spawn_cluster_rem > 0:
@@ -515,6 +536,7 @@ class VDCEngine:
         s = self.s
         if s.slots_len >= MAX_SLOTS: return False
         if target_idx > s.slots_len: target_idx = s.slots_len
+        gap_mode = self.internal_gap_exists()
         # Считаем offset нового шара ДО шифта: midpoint между head_neighbor и tail_neighbor
         # с учётом decay-state. Чистая midpoint формула (см. вывод в комментарии ниже).
         if s.slots_len == 0:
@@ -525,8 +547,13 @@ class VDCEngine:
             head_off = s.offsets[target_idx - 1]; tail_off = s.offsets[target_idx - 1]
         else:
             head_off = s.offsets[target_idx - 1]; tail_off = s.offsets[target_idx]
-        new_offset = -CELL_SIZE // 2 + (head_off + tail_off) // 2
-        # Tail-side (idx target_idx..end -> target_idx+1..end+1): idx +1, HSA +1.
+        if gap_mode:
+            # Свободная клетка уже есть в открытом GAP: не толкаем всю голову
+            # цепи, а ставим новый шар в фазу tail-соседа после shift_right.
+            new_offset = tail_off
+        else:
+            new_offset = -CELL_SIZE // 2 + (head_off + tail_off) // 2
+        # Хвостовая сторона (idx target_idx..end -> target_idx+1..end+1): idx +1, HSA +1.
         # Эти эффекты на slot_t взаимно компенсируются -> offsets без изменений.
         for j in range(s.slots_len, target_idx, -1):
             s.slots[j] = s.slots[j-1]
@@ -539,21 +566,22 @@ class VDCEngine:
         s.shot2[target_idx] = 1
         s.last_render_pos[target_idx] = None
         s.slots_len += 1
-        # HSA+1 = chain продвинулся на 1 cell вперёд (к killzone). Cap по track-end.
-        if s.hsa < len(self.track) // CELL_SIZE - 1:
-            s.hsa += 1
-        # Head-side (idx 0..target_idx-1): idx тот же, HSA+1 -> +32 instant.
-        # offsets -=CELL_SIZE компенсирует instant, декей возвращает к 0 за 32 кадра
-        # -> плавный slide HEAD на 32 px вперёд. Cap'ним на -CELL_SIZE чтобы при
-        # многократных insert/match offsets не уходили в большие отрицательные значения.
-        for i in range(target_idx):
-            s.offsets[i] = max(s.offsets[i] - CELL_SIZE, -CELL_SIZE)
-        # NO freeze (= синхронно с asm `VDC_InsertAt`): head компенсация (-CS) decay'ится
-        # параллельно с natural chain motion -> head «ускоренно уезжает вперёд на 2 cells
-        # за CELL_SIZE кадров», без stutter'а паузы. См. коммент в VDC.asm после InsertAt.
+        if not gap_mode:
+            # HSA+1 = chain продвинулся на 1 cell вперёд (к killzone). Cap по track-end.
+            if s.hsa < len(self.track) // CELL_SIZE - 1:
+                s.hsa += 1
+            # Головная сторона (idx 0..target_idx-1): idx тот же, HSA+1 -> мгновенные +32.
+            # offsets -=CELL_SIZE компенсирует скачок, декей возвращает к 0 за 32 кадра
+            # -> плавный slide HEAD на 32 px вперёд. Cap'ним на -CELL_SIZE чтобы при
+            # многократных insert/match offsets не уходили в большие отрицательные значения.
+            for i in range(target_idx):
+                s.offsets[i] = max(s.offsets[i] - CELL_SIZE, -CELL_SIZE)
+            # Без freeze (= синхронно с asm `VDC_InsertAt`): head-компенсация (-CS) decay'ится
+            # параллельно с обычным движением цепи -> голова «ускоренно уезжает вперёд на 2 cells
+            # за CELL_SIZE кадров», без рывка паузы. См. коммент в VDC.asm после InsertAt.
         matched = self.check_match3(target_idx)
         if not matched:
-            # Shot без match -> BreakChain and reset consecutive gap-shot streak.
+            # Выстрел без match -> BreakChain и сброс серии gap-shot.
             s.bullet_gap_count = 0
             s.stat_chain_count = 0
         self.clamp_offset_order()
@@ -809,7 +837,7 @@ class App:
         e = self.engine
         # Mirror asm VDC_Update:
         # fast phase: 12x MoveChain, then AnimateChain, then TrySpawn_NoHsubGate.
-        # normal phase: MoveChain, AnimateChain, then TrySpawn every 64 frames.
+        # Нормальная фаза: MoveChain, AnimateChain, затем TrySpawn каждые 64 кадра.
         if e.s.balls_spawned < LEVEL_START_BALLS:
             for _ in range(FAST_ADVANCE):
                 e.move_chain()

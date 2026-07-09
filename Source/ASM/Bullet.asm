@@ -186,8 +186,6 @@ Bullet_Update:      LD   A, (VDC_DialogState)
 ; а BulletTraj.asm валидирует их тем же bbox/manhattan тестом.
 ; ----------------------------------------------------------------------------
 Bullet_CheckCollisionAllChains:
-                    JP   Bullet_CheckCollisionEvents
-
 Bullet_CheckCollision:
                     JP   Bullet_CheckCollisionEvents
 
@@ -351,11 +349,10 @@ Bullet_AbsHL:       BIT  7, H
 ; Bullet_SignExtendA_HL — HL = A с расширенным знаком.
 ; ----------------------------------------------------------------------------
 Bullet_SignExtendA_HL:
-                    LD   H, 0
-                    BIT  7, A
-                    JR   Z, .pp
-                    DEC  H
-.pp:                LD   L, A
+                    LD   L, A
+                    ADD  A, A
+                    SBC  A, A
+                    LD   H, A
                     RET
 
 

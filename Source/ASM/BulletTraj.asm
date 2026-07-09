@@ -28,12 +28,11 @@ BULLET_TRAJ_NUM_COLORS    EQU 6
 ; ----------------------------------------------------------------------------
 Bullet_TrajInitForAngle:
                 XOR  A
-                LD   (Bullet_Frame), A
-                LD   (Bullet_PrevFrame), A
-                LD   (Bullet_EventCount), A
-                LD   (Bullet_ExitFrame), A
-                LD   (Bullet_NoHitMask), A
-                LD   (Bullet_EventTrackState), A
+                LD   HL, Bullet_Frame
+                LD   B, 8
+.init_clear:    LD   (HL), A
+                INC  HL
+                DJNZ .init_clear
                 LD   A, (BulletTrajValid)
                 OR   A
                 RET  Z

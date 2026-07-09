@@ -88,21 +88,31 @@ class Harness:
     def _install_fast_step(self) -> None:
         e = self.e
         S = self.S
-        sd_hook_pcs = set(
-            x
-            for x in (
-                S.get(n)
-                for n in ("Core.sd_init", "Core.sd_read_sector")
-            )
-            if x is not None
+        hook_names = (
+            "Core.ZiFi_Init",
+            "Core.ZiFi_Done",
+            "Core.ZiFi_Enter",
+            "Core.ZiFi_Leave",
+            "Core.ZiFi_PakOpen",
+            "Core.ZiFi_Seek0",
+            "Core.ZiFi_SkipSectors16",
+            "Core.ZiFi_PakReadToc",
+            "Core.ZiFi_Load512",
+            "Core.RawPak_ReadOneLogicalIX",
+            "Core.sd_init",
+            "Core.sd_read_sector",
+            "FT.Coprocessor.Inflate",
+            "FT.ReadMem",
+            "FT.WriteMem",
         )
-        hook_pcs = set(
-            x
-            for x in (
-                S.get(n)
-                for n in ("FT.Coprocessor.Inflate", "FT.WriteMem")
-            )
-            if x is not None
+        hook_pcs = {S[n]: n for n in hook_names if n in S}
+        loader_hook_prefixes = (
+            "Core.ZiFi_",
+            "Core.RawPak_",
+            "Core.sd_",
+            "FT.Coprocessor.Inflate",
+            "FT.ReadMem",
+            "FT.WriteMem",
         )
         dzx7 = S.get("Dzx7Turbo")
         ret_now = set(
@@ -119,11 +129,22 @@ class Harness:
             )
             if x is not None
         )
+        read8 = S.get("FT.Read8")
         bare = self.fs.orig_step
         hook_pc = self.fs._hook_pc
 
         def fast() -> int:
             pc = e.reg.PC
+            if pc == read8:
+                addr = ((e.reg.A & 0xFF) << 16) | ((e.reg.D & 0xFF) << 8) | (e.reg.E & 0xFF)
+                if addr == 0x302054:       # FT_REG_DLSWAP: в harness swap считаем завершённым
+                    e.reg.A = 0
+                    self._ret_now(0)
+                    return 0
+                if addr == 0x3020A8:       # FT_REG_INT_FLAGS: дать пройти poll swap/int
+                    e.reg.A = 1
+                    self._ret_now(0)
+                    return 0
             if pc in ret_now:
                 self._ret_now(0)
                 return 0
@@ -143,9 +164,14 @@ class Harness:
                 self._ret_now(0)
                 self.zx7_calls += 1
                 return 0
-            if pc in sd_hook_pcs and e.mem.pages[3] != 0x04 and hook_pc(pc):
-                return 0
-            if pc in hook_pcs and hook_pc(pc):
+            hook_name = hook_pcs.get(pc)
+            # Символы loader/rawpak живут на тех же виртуальных адресах, что и игровая страница #04.
+            # После LoadGameplayAssets не даем старым loader-хукам съесть код VDC.
+            if hook_name and not (
+                pc >= 0xC000
+                and e.mem.pages[3] == 0x04
+                and hook_name.startswith(loader_hook_prefixes)
+            ) and hook_pc(pc):
                 return 0
             return bare()
 
@@ -186,7 +212,10 @@ class Harness:
     def setup(self) -> None:
         self.call("Core.Init_Core")
         self.sb("Core.CurrentLevel", self.level)
-        self.call("Core.LoadGameplayAssets")
+        # Полная загрузка уровня сейчас проходит через PAK/SD staging и несколько
+        # RAM_G upload-фаз. 8 млн шагов стало тесным тестовым лимитом: harness
+        # обрывался уже на завершающем ZiFi_Init, до возврата из загрузчика.
+        self.call("Core.LoadGameplayAssets", max_steps=12_000_000)
         self.e.mem.pages[3] = 0x04
         if "Core.CurrentCodePage" in self.S:
             self.sb("Core.CurrentCodePage", 0x04)
@@ -290,7 +319,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--warm-frames", type=int, default=40)
     args = ap.parse_args()
-    # L01 is the single-chain baseline; L05 is the first dual-chain level.
+    # L01 — базовый уровень с одной цепочкой; L05 — первый уровень с двумя цепочками.
     run_case("single baseline", 0, args.warm_frames)
     run_case("dual chain", 4, args.warm_frames)
 

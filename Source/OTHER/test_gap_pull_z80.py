@@ -3,8 +3,8 @@
 
 Сценарии (полный Z80-эмулятор, прямые поки VDC-состояния):
   A. PULL: цвета по краям гэп-рана СОВПАДАЮТ → закрытие с разгоном
-     (быстрее старой константы 1 слот/32 кадра), на слиянии — отдача
-     (отрицательные offsets у заднего сегмента) и сброс разгона.
+     (быстрее старой константы 1 слот/32 кадра), на слиянии — клик
+     стыка и сброс разгона без физической отдачи.
   B. CATCH-UP: цвета РАЗНЫЕ → HSA не убывает (фронт-сегмент стоит на треке),
      зазор закрывается темпом скорости цепи.
   C. Junction-классификация: 0 без гэпов / 1 одноцветный / 2 разноцветный.
@@ -48,6 +48,16 @@ class Rig:
         h.sb("Core.VDC_ChainFreezeCnt", 0)
         h.sb("Core.VDC_GapJunction", 0)
         h.sb("Core.VDC_GapPullVp", 10)
+        h.sb("Core.VDC_GaugeFull", 0)
+        h.sw("Core.VDC_GaugeScore", 0)
+        h.sb("Core.VDC_BallsSpawned", 0)
+        h.sb("Core.VDC_LevelColors", 6)
+        h.sb("Core.VDC_SpawnClusterColor", 0xFF)
+        h.sb("Core.VDC_SpawnClusterRem", 0)
+        h.sb("Core.VDC_ScanGapBusy", 0)
+        h.sb("Core.VDC_BridgeScanActive", 0)
+        h.sb("Core.VDC_RequireGapBridge", 0)
+        h.sb("Core.VDC_DetectIgnoreOffsets", 0)
         h.sw("Core.VDC_GapAccum", 0)
         for i, c in enumerate(colors):
             h.e.set_byte(self.slots + i, c)
@@ -84,6 +94,7 @@ def main() -> int:
     ok &= j == 0
 
     # --- A: PULL одноцветный стык -------------------------------------------
+    rig = Rig()
     # [кр(3), кр(0), кр(0), GAP×3, 0, 1, 2] — края рана цвет 0 → PULL.
     # Слот 0 (цвет 3) переживает слияние и каскадный матч нулей — метрика
     # плавности по НЕМУ (настоящий видимый шар, не взрыв и не маркер).
@@ -116,10 +127,12 @@ def main() -> int:
           f"(ожид. в [-12..0])")
     ok &= min(head_deltas) >= -12
     ok &= max(head_deltas) <= 0
-    # отдача: задний сегмент получил отрицательные offsets при слиянии
+    # Физическую отдачу отключили: звук стыка остаётся, но тыл не получает
+    # отдельный микросдвиг поверх закрытия gap.
     rear_neg = any(v < 0 for v in rig.offsets())
-    print(f"A: отдача (отрицательные offsets тыла) = {rear_neg}")
-    ok &= rear_neg
+    print(f"A: физическая отдача отключена, отрицательные offsets тыла = {rear_neg} "
+          f"(ожид. False)")
+    ok &= not rear_neg
     vp_after = rig.h.gb("Core.VDC_GapPullVp")
     print(f"A: vp после слияния = {vp_after} (ожид. 10 — сброс)")
     ok &= vp_after == 10
@@ -140,6 +153,7 @@ def main() -> int:
     ok &= min(head_deltas[-8:]) >= -12 and max(head_deltas[-8:]) <= 0
 
     # --- B: CATCH-UP разноцветный стык --------------------------------------
+    rig = Rig()
     rig.build_chain([0, 0, GAP_STOP, GAP_STOP, 1, 1, 2], hsa=150)
     hsa0 = rig.h.gb("Core.VDC_HSA")
     frames = 0
@@ -172,6 +186,7 @@ def main() -> int:
     ok &= all(v <= 0 for v in rig.offsets()[2:])   # хвост скользит вперёд встык
 
     # --- D: гэпы НА КОНЦЕ цепи (зелёная фаза) -------------------------------
+    rig = Rig()
     # Спавн выключен (GaugeFull), хвостовые группы взорваны → маркеры на конце.
     # Уборка БЕЗ заморозки цепи (раньше каждый шаг стопил цепь на 32 кадра =
     # рывки в зелёной фазе) и без доспавна.
@@ -195,7 +210,26 @@ def main() -> int:
     ok &= abs(frames - expected) <= 2
     rig.h.sb("Core.VDC_GaugeFull", 0)
 
+    # --- F: PULL не пересекает другую открытую дырку -------------------------
+    rig = Rig()
+    rig.build_chain([0, GAP_STOP, 0, 1, GAP_STOP, 1, 2], hsa=150)
+    rig.h.sb("Core.VDC_GaugeFull", 1)
+    rig.frame()
+    j = rig.h.gb("Core.VDC_GapJunction")
+    hsa0 = rig.h.gb("Core.VDC_HSA")
+    frames = 1
+    while rig.gaps() > 1 and frames < 120:
+        rig.frame()
+        frames += 1
+    hsa1 = rig.h.gb("Core.VDC_HSA")
+    print(f"F: одноцветный задний gap за передним gap: junction={j}, "
+          f"HSA {hsa0}->{hsa1} после первого закрытия "
+          f"(ожид. junction=2 и HSA без изменений)")
+    ok &= j == 2 and hsa0 == hsa1 and rig.gaps() == 1
+    rig.h.sb("Core.VDC_GaugeFull", 0)
+
     # --- E: НЕСКОЛЬКО гэпов одновременно (зелёная фаза) ----------------------
+    rig = Rig()
     # Инвариант плавности ВСЕХ шаров: ни один не прыгает вперёд быстрее
     # оригинального предела подтяжки (>+10px/кадр) и не дёргается назад (<-12).
     # Ловит телепорт +32 дальних сегментов
@@ -241,6 +275,7 @@ def main() -> int:
     # группы ДОЛЖНО довести цепь до SlotsLen=0 (изолированная тройка) или
     # убрать только тройку (с живым хвостом). Стережёт win-условие SlotsLen==0.
     def drain(colors, shot2_idx, expect, hsa=120):
+        rig = Rig()
         rig.build_chain(colors, hsa=hsa)
         rig.h.e.set_byte(rig.shot2 + shot2_idx, 1)
         rig.h.sb("Core.VDC_LevelSpeed", 50)

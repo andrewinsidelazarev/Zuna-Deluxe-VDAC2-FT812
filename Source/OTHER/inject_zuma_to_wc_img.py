@@ -339,28 +339,21 @@ class Fat32Image:
 def prepare_host_package(root: Path) -> list[Path]:
     package_dir = root / "Build" / "SD" / "Games" / "Zuma Deluxe VDAC2"
     package_dir.mkdir(parents=True, exist_ok=True)
-    stale_nested_pak = package_dir / "ZUMALVL.PAK"
-    if stale_nested_pak.exists():
-        stale_nested_pak.unlink()
+    for stale_name in ("SPGBLD.INI", "ZUMA.SYM", "README.TXT"):
+        stale = package_dir / stale_name
+        if stale.exists():
+            stale.unlink()
     files = [
         (root / "Build" / "ZUMA_VD2.SPG", package_dir / "ZUMA_VD2.SPG"),
         (root / "Build" / "ZUMAMAIN.PAK", package_dir / "ZUMAMAIN.PAK"),
         (root / "Build" / "ZUMALVL.PAK", package_dir / "ZUMALVL.PAK"),
         (root / "Build" / "ZUMAAUD.PAK", package_dir / "ZUMAAUD.PAK"),
         (root / "Build" / "ZUMASND.PAK", package_dir / "ZUMASND.PAK"),
-        (root / "spgbld_boot.ini", package_dir / "SPGBLD.INI"),
-        (root / "Build" / "zuma.sym", package_dir / "ZUMA.SYM"),
     ]
     for src, dst in files:
         if src.exists():
             shutil.copy2(src, dst)
-    (package_dir / "README.TXT").write_text(
-        "Zuma Deluxe VDAC2\n"
-        "Folder for ZX Evolution / Wild Commander delivery.\n"
-        "Run ZUMA_VD2.SPG. Main pack is ZUMAMAIN.PAK; level pack is ZUMALVL.PAK; GS packs are ZUMAAUD.PAK/ZUMASND.PAK.\n",
-        encoding="ascii",
-    )
-    return sorted(dst for _, dst in files if dst.exists()) + [package_dir / "README.TXT"]
+    return sorted(dst for _, dst in files if dst.exists())
 
 
 def main() -> int:
@@ -392,7 +385,7 @@ def main() -> int:
     package_files = prepare_host_package(root)
     games = image.ensure_dir(image.root_cluster, "Games")
     zuma = image.ensure_dir(games, "Zuma Deluxe VDAC2")
-    for stale_name in ("ZUMA_CVX.PAK", "ZUMA_CVX.PAC"):
+    for stale_name in ("SPGBLD.INI", "ZUMA.SYM", "README.TXT", "ZUMA_CVX.PAK", "ZUMA_CVX.PAC"):
         stale = image.find_entry(zuma, stale_name)
         if stale:
             image.free_chain(stale["cluster"])

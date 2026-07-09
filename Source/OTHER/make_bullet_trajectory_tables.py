@@ -34,6 +34,8 @@ VDC_CELL_SIZE = 32
 # The offline corridor uses the wider number to avoid false negatives; Z80 keeps
 # the exact old bbox/manhattan validation before accepting the event.
 HIT_CORRIDOR_RADIUS = 54
+BULLET_HIT_THR = 35
+BULLET_MANHATTAN_THR = 54
 
 EV_TRACK2 = 0x01
 EV_HIT = 0x02
@@ -44,6 +46,10 @@ EV_TUNNEL_EXIT = 0x10
 TRACK_SRC_HDR = 2
 TRACK_SRC_REC = 6
 TRACKF_TUNNEL = 0x01
+
+FROG_SIN127 = tuple(
+    int(round(127 * math.sin(i * math.tau / ANGLE_COUNT))) for i in range(ANGLE_COUNT)
+)
 
 
 @dataclass(frozen=True)
@@ -121,6 +127,17 @@ def distance_to_frame(s: float | int) -> int:
     return max(0, min(255, int(round(float(s) / BULLET_SPEED))))
 
 
+def signed_scale_div128(value: int, scale: int) -> int:
+    sign = -1 if value < 0 else 1
+    return sign * ((abs(value) * scale) // 128)
+
+
+def bullet_velocity_for_angle(angle: int) -> tuple[int, int]:
+    vx = signed_scale_div128(FROG_SIN127[(angle + 64) & 0xFF], BULLET_SPEED)
+    vy = signed_scale_div128(FROG_SIN127[angle & 0xFF], BULLET_SPEED)
+    return vx, vy
+
+
 def sample_projection(
     sample: TrackSample, fx: int, fy: int, dx: float, dy: float
 ) -> tuple[float, float]:
@@ -131,17 +148,108 @@ def sample_projection(
     return s, perp
 
 
+def runtime_hit_distance(
+    bullet_x: int, bullet_y: int, sample: TrackSample
+) -> int | None:
+    dx = abs(bullet_x - sample.x)
+    if dx >= BULLET_HIT_THR:
+        return None
+    dy = abs(bullet_y - sample.y)
+    if dy >= BULLET_HIT_THR:
+        return None
+    dist = dx + dy
+    if dist >= BULLET_MANHATTAN_THR:
+        return None
+    return dist
+
+
+def choose_cell_hit_frame(
+    samples: list[TrackSample],
+    cell: int,
+    tunnel: bool,
+    corridor_ts: list[int],
+    fx: int,
+    fy: int,
+    vx: int,
+    vy: int,
+    exit_frame: int,
+    dx: float,
+    dy: float,
+    exit_s: int,
+) -> tuple[int, int]:
+    """Выбрать кадр события по покрытию всех HSub внутри VDC-ячейки."""
+    first = cell * VDC_CELL_SIZE
+    last = min(len(samples), first + VDC_CELL_SIZE)
+    corridor_set = set(corridor_ts)
+    best: tuple[int, int, int, int, int, int] | None = None
+    best_sub = corridor_ts[0] & (VDC_CELL_SIZE - 1)
+
+    for frame in range(1, max(1, exit_frame)):
+        bullet_x = fx + vx * frame
+        bullet_y = fy + vy * frame
+        hits: list[tuple[int, int]] = []
+        for t in range(first, last):
+            sample = samples[t]
+            if bool(sample.flags & TRACKF_TUNNEL) != tunnel:
+                continue
+            dist = runtime_hit_distance(bullet_x, bullet_y, sample)
+            if dist is not None:
+                hits.append((t, dist))
+        if not hits:
+            continue
+
+        hit_subs = [t & (VDC_CELL_SIZE - 1) for t, _dist in hits]
+        representative_pool = [(t, dist) for t, dist in hits if t in corridor_set] or hits
+        representative_t, representative_dist = min(
+            representative_pool,
+            key=lambda item: (item[1], abs((item[0] & (VDC_CELL_SIZE - 1)) - 16)),
+        )
+        span = max(hit_subs) - min(hit_subs)
+        # Главный критерий — сколько фаз HSub эта запись реально покрывает.
+        # При равенстве берём более широкий кусок ячейки и более ранний кадр:
+        # это ближе к старому full-scan, который вставлял шар при первом хите.
+        rank = (
+            len(hits),
+            span,
+            -representative_dist,
+            -frame,
+            -abs((representative_t & (VDC_CELL_SIZE - 1)) - 16),
+            representative_t,
+        )
+        if best is None or rank > best:
+            best = rank
+            best_sub = representative_t & (VDC_CELL_SIZE - 1)
+
+    if best is not None:
+        return -best[3], best_sub
+
+    # Если runtime-кадр не нашёлся, сохраняем старый recall-safe fallback:
+    # геометрически ближайший sample внутри corridor.
+    def fallback_rank(t: int) -> tuple[float, float, int]:
+        s_float, perp = sample_projection(samples[t], fx, fy, dx, dy)
+        return (perp, abs(s_float - round(s_float)), t & (VDC_CELL_SIZE - 1))
+
+    fallback_t = min(
+        corridor_ts,
+        key=fallback_rank,
+    )
+    s_float, _perp = sample_projection(samples[fallback_t], fx, fy, dx, dy)
+    s_int = max(0, min(exit_s, int(round(s_float))))
+    return distance_to_frame(s_int), fallback_t & (VDC_CELL_SIZE - 1)
+
+
 def emit_hit_events_for_track(
     samples: list[TrackSample],
     track_idx: int,
     fx: int,
     fy: int,
+    angle: int,
     dx: float,
     dy: float,
     exit_s: int,
 ) -> list[Event]:
-    """Emit one best event per VDC cell inside the ray hit corridor."""
-    best: dict[tuple[int, bool], tuple[float, int, int, int]] = {}
+    """Emit one runtime-safe hit event per VDC cell inside the ray corridor."""
+    grouped: dict[tuple[int, bool], list[int]] = {}
     for t, sample in enumerate(samples):
         s_float, perp = sample_projection(sample, fx, fy, dx, dy)
         if s_float < -HIT_CORRIDOR_RADIUS:
@@ -151,22 +259,22 @@ def emit_hit_events_for_track(
         if perp > HIT_CORRIDOR_RADIUS:
             continue
         cell = t // VDC_CELL_SIZE
-        sub = t & (VDC_CELL_SIZE - 1)
         if cell > 255:
             raise ValueError(f"track cell index {cell} does not fit u8")
         tunnel = bool(sample.flags & TRACKF_TUNNEL)
         key = (cell, tunnel)
-        rank = (perp, abs(s_float - round(s_float)), int(round(s_float)), sub)
-        old = best.get(key)
-        if old is None or rank < old:
-            best[key] = rank
+        grouped.setdefault(key, []).append(t)
 
     events: list[Event] = []
     base_flags = EV_HIT | (EV_TRACK2 if track_idx else 0)
-    for (cell, tunnel), (_perp, _frac, s_int, sub) in best.items():
+    vx, vy = bullet_velocity_for_angle(angle)
+    exit_frame = distance_to_frame(exit_s)
+    for (cell, tunnel), corridor_ts in grouped.items():
+        frame, sub = choose_cell_hit_frame(
+            samples, cell, tunnel, corridor_ts, fx, fy, vx, vy, exit_frame, dx, dy, exit_s
+        )
         flags = base_flags | (EV_TUNNEL if tunnel else 0)
-        s_int = max(0, min(exit_s, s_int))
-        events.append(Event(frame=distance_to_frame(s_int), flags=flags, cell=cell, sub=sub))
+        events.append(Event(frame=frame, flags=flags, cell=cell, sub=sub))
     return events
 
 
@@ -265,7 +373,9 @@ def build_level_table(level_idx0: int, scaled_tracks: list[bytes]) -> bytes:
         events: list[Event] = []
         for track_idx, samples in enumerate(tracks):
             events.extend(
-                emit_hit_events_for_track(samples, track_idx, fx, fy, dx, dy, exit_s)
+                emit_hit_events_for_track(
+                    samples, track_idx, fx, fy, angle, dx, dy, exit_s
+                )
             )
             events.extend(
                 emit_tunnel_range_events_for_track(

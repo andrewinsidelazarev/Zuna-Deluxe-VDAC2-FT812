@@ -32,8 +32,8 @@ TRACKF_DRAW_ABOVE = 0x02
 
 TRACK_FLAG_OVERRIDES = {
     "13-groovefest-4-3.dat": [
-        # Upper-right bridge: balls must go under the top mask here.
-        (1614, 2003, TRACKF_TUNNEL),
+        # Верхний правый тоннель заканчивается на видимой дуге; дальше шар должен быть доступен для выстрела.
+        (1614, 1772, TRACKF_TUNNEL),
     ],
 }
 

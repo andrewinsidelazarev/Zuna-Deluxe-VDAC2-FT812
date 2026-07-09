@@ -33,7 +33,7 @@ id name                  src_s  out_s rows  rmse  rms% act% modes
 29 SND_GEMVANISHES        0.949 0.950     8 0.042 103.2  103 sil:28,tone:1
 30 SND_JEWELAPPEAR        1.245 1.250    15 0.154 153.7  154 both:4,sil:34,tone:13
 31 SND_LIGHTTRAIL2        0.529 0.550    11 0.166 275.4  275 sil:6,tone:23
-32 SND_POP                0.215 0.200     4 0.249 174.7  175 sil:3,tone:9
+32 SND_POP                 0.215 0.250     5 0.116  11.6   12 both:5,sil:8,tone:2
 33 SND_REVERSE1           2.970 2.950    59 0.463 210.1  210 both:7,tone:170
 34 SND_ROLLING            1.194 1.200    24 0.570 236.1  236 tone:72
 35 SND_SLOWDOWN1          2.213 2.200    44 0.237 158.4  158 both:5,sil:1,tone:126

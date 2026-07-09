@@ -123,7 +123,8 @@ assets. `ZUMAMAIN.PAK` генерируется из `spgbld_vdac2.ini`; стр�
 | `#43..#4F` | L19 balls atlas + palette |
 | `#52..#5F` | frog/cursor/HUD |
 | `#60..#6D` | dialog/fonts |
-| `#70..#93` | main menu |
+| `#70..#92` | main menu |
+| `#93` | free |
 | `#94..#BB` | level-select |
 | `#BC..#CB` | More Games |
 | `#CC..#F3` | tunnel top-mask data |
@@ -154,17 +155,17 @@ Max end: `#074000`.
 | `#071D08..#0ABA58` | buttons |
 | `#0ABA60..#0ABC60` | sky palette |
 | `#0ABC60..#0ABE60` | UI palette |
-| `#0AC000..#0AC480` | menu cursor bitmap |
+| `#0AC000..#0ACB48` | menu cursor bitmap |
 
 Cursor details:
 
-- Финальный bitmap курсора: 24x24 ARGB4 = `#480` bytes, `#0AC000..#0AC480`.
-- `Graphics/Menu/Converted/menu_cursor_argb4.zlib` распаковывается padded page на
+- Финальный bitmap курсора: 38x38 ARGB4 = `#B48` bytes, `#0AC000..#0ACB48`.
+- Глобальный `Graphics/Converted/cursor_p00.zlib` распаковывается padded page на
   `#0AC000..#0B0000`; палитры `#0ABA60..#0ABE60` после этого пишутся заново.
 - `check_memory_map.py` держит для `MENU_CURSOR` защитное окно
   `#0AC000..#0AD200`, поэтому его max end для `main_menu` = `#0AD200`.
 
-Max end финальных живых данных: `#0AC480`.
+Max end финальных живых данных: `#0ACB48`.
 Max end статической проверки: `#0AD200`.
 
 ## FT812 RAM_G: Level Select
@@ -176,7 +177,7 @@ Max end статической проверки: `#0AD200`.
 | `#084000..#08C000` | `LOADING LEVELS...` bitmap |
 | `#0ABA60..#0ABC60` | sky palette |
 | `#0ABC60..#0ABE60` | UI palette |
-| `#0AC000..#0AC480` | cursor bitmap |
+| `#0AC000..#0ACB48` | cursor bitmap |
 | `#0B0000..#0B2810` | preview markers/frog/killzone |
 | `#0B3000..#0D3000` | preview bg buffer B |
 | `#0D4000..#0F4000` | preview bg buffer A |

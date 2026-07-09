@@ -6,6 +6,8 @@
 за кадр (VDC_GLOBAL_SPEED_FACTOR), а перуровневый темп — speed_x100-аккумом.
 - 0 -> 1 без изменения HSA;
 - 31 -> 0 с HSA+1.
+- на конце трека в PLAY: 31 не заворачивается в 0, чтобы не перескочить KZ;
+- в ABSORB wrap сохраняется, он нужен для всасывания.
 """
 import os
 import sys
@@ -41,6 +43,35 @@ def main() -> int:
     got = (sim.get_byte(s["Core.VDC_HSA"]), sim.get_byte(s["Core.VDC_HSub"]))
     exp = (11, 0)
     print(f"move wrap:   got HSA={got[0]} HSub={got[1]}, expected HSA={exp[0]} HSub={exp[1]}")
+    if got != exp:
+        return 1
+
+    sim.set_byte(s["Core.VDC_GameState"], 0)
+    sim.set_byte(s["Core.VDC_TrackNumSlots"], 10)
+    sim.set_byte(s["Core.VDC_HSA"], 10)
+    sim.set_byte(s["Core.VDC_HSub"], CELL_SIZE - 1)
+    sim.set_byte(s["Core.VDC_SpawnDue"], 1)
+    sim.call(s["Core.VDC_MoveChain"])
+    got = (
+        sim.get_byte(s["Core.VDC_HSA"]),
+        sim.get_byte(s["Core.VDC_HSub"]),
+        sim.get_byte(s["Core.VDC_SpawnDue"]),
+    )
+    exp = (10, CELL_SIZE - 1, 0)
+    print(
+        f"move play cap: got HSA={got[0]} HSub={got[1]} SpawnDue={got[2]}, "
+        f"expected HSA={exp[0]} HSub={exp[1]} SpawnDue={exp[2]}"
+    )
+    if got != exp:
+        return 1
+
+    sim.set_byte(s["Core.VDC_GameState"], 1)
+    sim.set_byte(s["Core.VDC_HSA"], 10)
+    sim.set_byte(s["Core.VDC_HSub"], CELL_SIZE - 1)
+    sim.call(s["Core.VDC_MoveChain"])
+    got = (sim.get_byte(s["Core.VDC_HSA"]), sim.get_byte(s["Core.VDC_HSub"]))
+    exp = (10, 0)
+    print(f"move absorb wrap: got HSA={got[0]} HSub={got[1]}, expected HSA={exp[0]} HSub={exp[1]}")
     if got != exp:
         return 1
 

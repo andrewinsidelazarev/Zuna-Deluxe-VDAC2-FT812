@@ -351,6 +351,7 @@ class ZumaFullZ80Emulator:
                         except Exception:
                             stk.append('????')
                     print(f"  [paging] PC=#{self.reg.PC:04X} SP=#{sp:04X} stk={','.join(stk)}  slot{slot}: {old:#04x} -> {value:#04x}")
+                return
             self.mem.write(ref, value)
 
     def in_port(self, port: int) -> int:

@@ -2,9 +2,9 @@
 """Lose trigger waits until gap/explode work is complete.
 
 Тест напрямую вызывает Core.VDC_CheckKillzone. ABSORB можно запускать только
-когда в active chain и, на dual-уровнях, в inactive chain уже нет gap-маркеров
-и active destroy frames. Пока запуск заблокирован, голова удерживается на
-rem=65, то есть до окна открытия kill-zone.
+когда в active chain и, на dual-уровнях, в inactive chain уже нет живой
+внутренней дырки/cascade/freeze и active destroy frames. Пока запуск
+заблокирован, голова удерживается на rem=65, то есть ДО kill-zone.
 """
 from __future__ import annotations
 
@@ -68,6 +68,12 @@ def make_sim() -> ZumaZ80Sim:
     sb(sim, "Core.VDC_GapPosLeft", 0)
     if "Core.VDC_WarnPlayed" in sim.sym:
         sb(sim, "Core.VDC_WarnPlayed", 0)
+    if "Core.VDC_LoseShotState" in sim.sym:
+        sb(sim, "Core.VDC_LoseShotState", 0)
+    if "Core.VDC_LoseHoldArmed" in sim.sym:
+        sb(sim, "Core.VDC_LoseHoldArmed", 0)
+    if "Core.Bullet_Active" in sim.sym:
+        sb(sim, "Core.Bullet_Active", 0)
     sb(sim, "Core.VDC_GameOverTick", 0)
     sb(sim, "Core.VDC_AbsorbPopNote", 0)
     sb(sim, "Core.VDC_KzFrame", 1)
@@ -153,19 +159,23 @@ def run_absorb_pending_explode_case() -> bool:
     active = sim.get_byte(s["Core.VDC_ExplodeActive"])
     kz = sim.get_byte(s["Core.VDC_KzFrame"])
     hold = sim.get_byte(s["Core.VDC_LoseHoldCnt"])
+    hsa = sim.get_byte(s["Core.VDC_HSA"])
+    hsub = sim.get_byte(s["Core.VDC_HSub"])
     slots_len = sim.get_byte(s["Core.VDC_SlotsLen"])
     ok = (
         state == 1
         and active == 1
         and kz == 1
         and hold == 24
+        and hsa == 8
+        and hsub == 30
         and slots_len == 3
         and after_slots == before_slots
         and frames == [0, 2, 0]
     )
     print(
         f"{'PASS' if ok else 'FAIL'}: absorb pending explode animates before absorb: "
-        f"state={state}, active={active}, kz={kz}, hold={hold}, "
+        f"state={state}, active={active}, kz={kz}, hold={hold}, hsa={hsa}, hsub={hsub}, "
         f"len={slots_len}, slots={after_slots}, frames={frames}"
     )
     return ok
@@ -249,7 +259,7 @@ def main() -> int:
             1,
         ),
         (
-            "active gap marker blocks absorb",
+            "active internal gap marker holds before KZ",
             lambda sim: sim.set_byte(sim.sym["Core.VDC_Slots"] + 1, 0xFE),
             0,
             30,
@@ -257,6 +267,37 @@ def main() -> int:
             False,
             None,
             24,
+            1,
+        ),
+        (
+            "active destroy frame holds current rem=32 inside KZ window",
+            lambda sim: (
+                sb(sim, "Core.VDC_HSA", 9),
+                sb(sim, "Core.VDC_HSub", 31),
+                sim.set_byte(sim.sym["Core.VDC_ExplodeFrame"] + 1, 1),
+            ),
+            0,
+            30,
+            8,
+            False,
+            None,
+            24,
+            1,
+        ),
+        (
+            "active destroy frame holds current rem=1 inside KZ window",
+            lambda sim: (
+                sb(sim, "Core.VDC_HSA", 10),
+                sb(sim, "Core.VDC_HSub", 30),
+                sim.set_byte(sim.sym["Core.VDC_ExplodeFrame"] + 1, 1),
+            ),
+            0,
+            30,
+            8,
+            False,
+            None,
+            24,
+            1,
         ),
         (
             "active destroy frame holds at rem=66 before KZ opening",
@@ -313,6 +354,7 @@ def main() -> int:
             False,
             None,
             24,
+            1,
         ),
         (
             "active destroy frame blocks next wrapped move before KZ",
@@ -328,6 +370,7 @@ def main() -> int:
             True,
             None,
             23,
+            1,
         ),
         (
             "active destroy frame wraps pre-KZ hold at KzEndSub=0",
@@ -342,6 +385,7 @@ def main() -> int:
             False,
             None,
             24,
+            1,
         ),
         (
             "dual inactive destroy frame blocks absorb",
@@ -355,6 +399,7 @@ def main() -> int:
             False,
             None,
             24,
+            1,
         ),
         (
             "dual inactive explode-active flag blocks absorb after gap closure",
@@ -368,9 +413,10 @@ def main() -> int:
             False,
             None,
             24,
+            1,
         ),
         (
-            "dual inactive gap marker blocks absorb",
+            "dual inactive gap marker holds active before KZ",
             lambda sim: (
                 sb(sim, "Core.VDC_HasSecondChain", 1),
                 sim.set_byte(sim.sym["Core.VDC2_Slots"] + 1, 0xFE),
@@ -381,6 +427,7 @@ def main() -> int:
             False,
             None,
             24,
+            1,
         ),
         (
             "dual inactive destroy frame blocks next move before KZ",

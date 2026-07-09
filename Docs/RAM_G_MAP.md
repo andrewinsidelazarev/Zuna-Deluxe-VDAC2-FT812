@@ -39,9 +39,9 @@ Main menu uses 8bpp paletted graphics and its own RAM_G layout.
 | `#09F410..#0ABA58` | Quit button states |
 | `#0ABA60..#0ABC60` | `MENU_SKY_PAL` |
 | `#0ABC60..#0ABE60` | `MENU_UI_PAL` |
-| `#0AC000..#0AC480` | `MENU_CURSOR` |
+| `#0AC000..#0ACB48` | `MENU_CURSOR` |
 
-Max end: `#0AC480`.
+Max end: `#0ACB48`.
 
 ## Level select profile
 
@@ -55,7 +55,7 @@ gameplay regions, but not while gameplay is active.
 | `#084000..#08C000` | `LOADING_TEXT` | same RAM_G range later used by gameplay frame top |
 | `#0ABA60..#0ABC60` | `LS_SKY_PAL` | shared menu palette address |
 | `#0ABC60..#0ABE60` | `LS_UI_PAL` | shared menu palette address |
-| `#0AC000..#0AC480` | `LS_CURSOR` | shared menu cursor address |
+| `#0AC000..#0ACB48` | `LS_CURSOR` | shared menu cursor address |
 | `#0B0000..#0B22AA` | Preview marker/frog/killzone | level preview sprites |
 | `#0D4000..#0F4000` | `LS_PREVIEW_BG` | preview level background |
 

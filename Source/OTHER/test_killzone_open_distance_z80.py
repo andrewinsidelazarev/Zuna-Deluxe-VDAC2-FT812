@@ -61,7 +61,12 @@ def reset_case(sim: ZumaZ80Sim, kz_end_sub: int, rem: int) -> None:
     sb(sim, "Core.VDC_HasSecondChain", 0)
     sb(sim, "Core.VDC_SecondActive", 0)
     sb(sim, "Core.VDC_KzFrame", 99)
-    sb(sim, "Core.VDC_WarnPlayed", 1)
+    if "Core.VDC_WarnPlayed" in sim.sym:
+        sb(sim, "Core.VDC_WarnPlayed", 1)
+    if "Core.VDC_LoseShotState" in sim.sym:
+        sb(sim, "Core.VDC_LoseShotState", 0)
+    if "Core.Bullet_Active" in sim.sym:
+        sb(sim, "Core.Bullet_Active", 0)
     sb(sim, "Core.VDC_ChainFreezeCnt", 0)
     sb(sim, "Core.VDC_GapJunction", 0)
     sb(sim, "Core.VDC_GapPosLeft", 0)
@@ -109,7 +114,7 @@ def main() -> int:
                     f"hsa={hsa:02d} hsub={hsub:02d}: "
                     f"state/frame=({state},{frame}) expected=({exp_state},{exp_frame})"
                 )
-            if kz_end_sub in (0, 1, 31) and rem in (65, 64, 63, 2, 1, 0):
+            if kz_end_sub in (0, 1, 31) and rem in (65, 64, 63, 11, 10, 9, 8, 2, 1, 0):
                 interesting.append(
                     f"kz_end_sub={kz_end_sub:02d} rem={rem:2d} -> "
                     f"state={state} frame={frame}"

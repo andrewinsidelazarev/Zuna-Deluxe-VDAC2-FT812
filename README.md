@@ -40,7 +40,7 @@ tongue / overlay) и вращается матрицей `T·R·T⁻¹`.
 ├── make_bg_level01.py    -- 400×300 RGB565 fade с матрицей scale 1.6×
 ├── make_bg_tile.py       -- bg-тайл 64×64 для не-level превью
 ├── make_misc_sprites.py  -- frog/plate/tongue/overlay (122×122) + killzone + GAME OVER
-├── make_cursor.py        -- стрелка-курсор 24×24
+├── make_cursor.py        -- глобальная стрелка-курсор 38×38
 ├── make_track_640.py     -- TrackData (X,Y по 640×480, stride 6 байт)
 ├── make_test_ball.py     -- одиночный test ball 40×40
 │

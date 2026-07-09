@@ -166,6 +166,7 @@ def ramg_ranges() -> list[Range]:
         Range("gameplay", "BALLS_ATLAS", 0x050000, 0x080000),
         Range("gameplay", "BALLS_PALETTE_SLOT", 0x080000, 0x080200),
         Range("gameplay", "FRAME_PALETTE", 0x080200, 0x080400),
+        Range("gameplay", "BALL_SHADOW_DL_SCRATCH", 0x080400, 0x084000),
         Range("gameplay", "FRAME_STRIPS", 0x084000, 0x098000),
         Range("gameplay", "FONT_NATIVE", 0x098000, 0x0A0000),
         Range("gameplay", "FONT_CANCUN10_STATS", 0x0A0000, 0x0A4000),

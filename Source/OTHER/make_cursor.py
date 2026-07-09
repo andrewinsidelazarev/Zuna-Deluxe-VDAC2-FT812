@@ -1,36 +1,33 @@
 #!/usr/bin/env python3
-"""make_cursor.py — single-sprite cursor (arrow1.png) с белой заливкой внутри outline.
+"""Build the native 38x38 global cursor from Graphics/Original/arrow1.png."""
+from __future__ import annotations
 
-arrow1.png — чёрный outline стрелки (Windows pointer-style), внутри transparent.
-Алгоритм:
-  1. Read RGBA, tight-crop alpha bbox.
-  2. Outline = alpha >= 128.
-  3. Flood-fill from 4 corners — выделяет внешнюю transparent зону.
-  4. Внутренние transparent пиксели (НЕ outline ∧ НЕ внешние) → залить (255,255,255,255).
-  5. Острие = opaque pixel ближайший к top-left углу bbox.
-  6. Resize до CURSOR_W×CURSOR_H, recompute tip.
-  7. Save cursor.bin (ARGB4 LE) + preview + debug overlay.
-"""
-import os, struct
+import struct
+import zlib
 from collections import deque
+from pathlib import Path
+
 from PIL import Image
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
-CONVERTED = os.path.join(PROJECT_ROOT, 'Graphics', 'Converted')
-ORIGINAL = os.path.join(PROJECT_ROOT, 'Graphics', 'Original')
-TEMP_DIR = PROJECT_ROOT
-SRC  = os.path.join(os.path.expanduser('~'), 'Desktop', 'Zuma Deluxe', 'graphics', 'arrow1.png')
 
-CURSOR_W = 24
-CURSOR_H = 24
-PAGE_SZ  = 16384
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent.parent
+ORIGINAL = ROOT / "Graphics" / "Original"
+CONVERTED = ROOT / "Graphics" / "Converted"
+BUILD = ROOT / "Build"
 
-ALPHA_OUTLINE = 128                                     # treat as outline
-ALPHA_TIP     = 200                                     # strong opacity для tip detection
+SRC = ORIGINAL / "arrow1.png"
+CURSOR_PNG = ORIGINAL / "cursor.png"
+CURSOR_BIN = CONVERTED / "cursor_p00.bin"
+CURSOR_ZLIB = CONVERTED / "cursor_p00.zlib"
+DEBUG_PNG = BUILD / "cursor_debug.png"
 
+CURSOR_W = 38
+CURSOR_H = 38
+PAGE_SZ = 16384
+OUTLINE_ALPHA = 32
 
-def to_argb4_le(im):
+def to_argb4_le(im: Image.Image) -> bytes:
     out = bytearray()
     px = im.load()
     w, h = im.size
@@ -38,89 +35,101 @@ def to_argb4_le(im):
         for x in range(w):
             r, g, b, a = px[x, y]
             v = ((a >> 4) << 12) | ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4)
-            out += struct.pack('<H', v)
+            out += struct.pack("<H", v)
+    return bytes(out)
+
+
+def find_tip(im: Image.Image) -> tuple[int, int]:
+    px = im.load()
+    best: tuple[int, int] | None = None
+    best_score: int | None = None
+    for y in range(im.height):
+        for x in range(im.width):
+            if px[x, y][3] >= 128:
+                score = x * x + y * y
+                if best_score is None or score < best_score:
+                    best_score = score
+                    best = (x, y)
+    if best is None:
+        raise RuntimeError("cursor source has no opaque pixels")
+    return best
+
+
+def fill_inside_white(im: Image.Image) -> Image.Image:
+    out = im.copy()
+    px = out.load()
+    w, h = out.size
+    outside = [[False] * w for _ in range(h)]
+    q: deque[tuple[int, int]] = deque()
+
+    def is_open(x: int, y: int) -> bool:
+        return px[x, y][3] < OUTLINE_ALPHA
+
+    for x in range(w):
+        for y in (0, h - 1):
+            if is_open(x, y) and not outside[y][x]:
+                outside[y][x] = True
+                q.append((x, y))
+    for y in range(h):
+        for x in (0, w - 1):
+            if is_open(x, y) and not outside[y][x]:
+                outside[y][x] = True
+                q.append((x, y))
+
+    while q:
+        x, y = q.popleft()
+        for nx, ny in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+            if 0 <= nx < w and 0 <= ny < h and is_open(nx, ny) and not outside[ny][nx]:
+                outside[ny][nx] = True
+                q.append((nx, ny))
+
+    filled = 0
+    for y in range(h):
+        for x in range(w):
+            if is_open(x, y) and not outside[y][x]:
+                px[x, y] = (255, 255, 255, 255)
+                filled += 1
+    print(f"filled inside white: {filled} source pixels")
     return out
 
 
-sheet = Image.open(SRC).convert('RGBA')
-print(f'arrow1.png: {sheet.size}')
+def main() -> int:
+    sheet = Image.open(SRC).convert("RGBA")
+    bbox = sheet.getbbox()
+    if bbox is None:
+        raise RuntimeError("cursor source is fully transparent")
+    crop = fill_inside_white(sheet.crop(bbox))
+    tip_src = find_tip(crop)
+    cursor = crop.resize((CURSOR_W, CURSOR_H), Image.Resampling.LANCZOS)
+    tip_x = round(tip_src[0] * CURSOR_W / crop.width)
+    tip_y = round(tip_src[1] * CURSOR_H / crop.height)
+    tip_x = min(tip_x, CURSOR_W - 1)
+    tip_y = min(tip_y, CURSOR_H - 1)
 
-bbox = sheet.getbbox()
-arrow = sheet.crop(bbox).copy()                         # mutable copy
-w, h = arrow.size
-print(f'tight-crop: {w}x{h} (bbox {bbox})')
+    CURSOR_PNG.parent.mkdir(parents=True, exist_ok=True)
+    CONVERTED.mkdir(parents=True, exist_ok=True)
+    BUILD.mkdir(parents=True, exist_ok=True)
 
-px = arrow.load()
+    cursor.save(CURSOR_PNG)
+    cursor.save(DEBUG_PNG)
 
-# Outline mask.
-outline = [[px[x, y][3] >= ALPHA_OUTLINE for x in range(w)] for y in range(h)]
+    blob = to_argb4_le(cursor)
+    assert len(blob) == CURSOR_W * CURSOR_H * 2
+    zblob = zlib.compress(blob, 9)
+    CURSOR_BIN.write_bytes(blob + b"\x00" * (PAGE_SZ - len(blob)))
+    CURSOR_ZLIB.write_bytes(zblob)
 
-# Flood-fill from 4 corners → external transparent mask.
-external = [[False] * w for _ in range(h)]
-q = deque()
-for cx, cy in [(0, 0), (w-1, 0), (0, h-1), (w-1, h-1)]:
-    if not outline[cy][cx] and not external[cy][cx]:
-        external[cy][cx] = True
-        q.append((cx, cy))
-while q:
-    x, y = q.popleft()
-    for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-        nx, ny = x + dx, y + dy
-        if 0 <= nx < w and 0 <= ny < h and not outline[ny][nx] and not external[ny][nx]:
-            external[ny][nx] = True
-            q.append((nx, ny))
+    print(f"source: {SRC}")
+    print(f"source bbox: {bbox}")
+    print(f"source crop: {crop.width}x{crop.height} -> 38x38")
+    print(f"source tip: {tip_src}")
+    print(f"cursor.png: {cursor.size[0]}x{cursor.size[1]}")
+    print(f"cursor_p00.bin: {len(blob)} real + {PAGE_SZ - len(blob)} padding = {PAGE_SZ}")
+    print(f"cursor_p00.zlib: {CURSOR_ZLIB.stat().st_size} bytes")
+    print(f"CURSOR_W = {CURSOR_W}, CURSOR_H = {CURSOR_H}")
+    print(f"CURSOR_TIP_X = {tip_x}, CURSOR_TIP_Y = {tip_y}")
+    return 0
 
-# Заливка внутренних transparent пикселей белым.
-filled = 0
-for y in range(h):
-    for x in range(w):
-        if not outline[y][x] and not external[y][x]:
-            px[x, y] = (255, 255, 255, 255)
-            filled += 1
-print(f'filled inside (white): {filled} pixels')
 
-# Острие = opaque pixel ближайший к top-left углу (0, 0).
-best, best_score = None, None
-for y in range(h):
-    for x in range(w):
-        if px[x, y][3] >= ALPHA_TIP:
-            score = x * x + y * y
-            if best_score is None or score < best_score:
-                best_score, best = score, (x, y)
-tip_pre = best
-print(f'tip in pre-resize sprite: {tip_pre}')
-
-# Debug overlay (pre-resize, downscaled для просмотра).
-debug = arrow.copy()
-dpx = debug.load()
-for dy_off in range(-12, 13):
-    for dx_off in range(-12, 13):
-        if dx_off*dx_off + dy_off*dy_off <= 144:
-            xx, yy = tip_pre[0] + dx_off, tip_pre[1] + dy_off
-            if 0 <= xx < w and 0 <= yy < h:
-                dpx[xx, yy] = (255, 0, 0, 255)
-debug.thumbnail((400, 400), Image.LANCZOS)
-debug.save(os.path.join(TEMP_DIR, 'cursor_debug.png'))
-
-# Resize.
-arrow_resized = arrow.resize((CURSOR_W, CURSOR_H), Image.LANCZOS)
-tip_x = round(tip_pre[0] * CURSOR_W / w)
-tip_y = round(tip_pre[1] * CURSOR_H / h)
-if tip_x >= CURSOR_W: tip_x = CURSOR_W - 1
-if tip_y >= CURSOR_H: tip_y = CURSOR_H - 1
-print(f'tip in resized sprite: ({tip_x}, {tip_y})')
-
-# Save preview PNG.
-arrow_resized.save(os.path.join(ORIGINAL, 'cursor.png'))
-
-# ARGB4 LE bytes + page.
-blob = to_argb4_le(arrow_resized)
-assert len(blob) == CURSOR_W * CURSOR_H * 2
-blob_padded = blob + b'\x00' * (PAGE_SZ - len(blob))
-with open(os.path.join(CONVERTED, 'cursor_p00.bin'), 'wb') as f:
-    f.write(blob_padded)
-print(f'cursor_p00.bin: {len(blob)} real + {PAGE_SZ - len(blob)} padding = {PAGE_SZ}')
-
-print()
-print(f'CURSOR_W = {CURSOR_W}, CURSOR_H = {CURSOR_H}')
-print(f'CURSOR_TIP_X = {tip_x}, CURSOR_TIP_Y = {tip_y}')
+if __name__ == "__main__":
+    raise SystemExit(main())

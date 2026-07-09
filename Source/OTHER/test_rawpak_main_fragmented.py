@@ -252,8 +252,15 @@ def main() -> int:
         say("FAIL: OVL_LoadMainPack CF=0")
         return 1
 
-    mismatches = []
+    final_pages: dict[int, int] = {}
+    duplicate_writes = 0
     for page, sector in table:
+        if page in final_pages:
+            duplicate_writes += 1
+        final_pages[page] = sector
+
+    mismatches = []
+    for page, sector in final_pages.items():
         off = sector * 512
         exp = pak_ref[off:off + PAGE_SIZE]
         got = bytes(emu.mem.physical[page * PAGE_SIZE:(page + 1) * PAGE_SIZE])
@@ -261,7 +268,8 @@ def main() -> int:
             mismatches.append((page, sector))
             if len(mismatches) >= 8:
                 break
-    say(f"OVL_LoadMainPack CF=1  checked_pages={len(table)} mismatches={len(mismatches)}")
+    say(f"OVL_LoadMainPack CF=1  checked_pages={len(final_pages)} "
+        f"duplicate_writes={duplicate_writes} mismatches={len(mismatches)}")
     if mismatches:
         for page, sector in mismatches:
             say(f"  MISMATCH page=#{page:02X} sector={sector}")

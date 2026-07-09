@@ -116,7 +116,7 @@ def main() -> int:
         ("DIALOG_PALETTE", a("DIALOG_PALETTE_RAMG"), 0x200, ""),
         ("HUD_MENU", a("HUD_MENU_RAMG"), 0x1C00, "79x26x3"),
         ("HUD_PROGRESS", a("HUD_PROGRESS_RAMG"), 0x0960, "63x19x2"),
-        ("CURSOR", a("CURSOR_RAMG_ADDR"), PAGE, "24x24 ARGB4"),
+        ("CURSOR", a("CURSOR_RAMG_ADDR"), PAGE, "38x38 ARGB4 padded page"),
         ("KZ+DESTROY", a("KZ_RAMG_ADDR"), a("KZ_PAGE_COUNT") * PAGE, "killzone 6 + destroy 4 стр"),
         ("TOP_MASK_B", a("TOP_MASK_RAMG_B"), a("TOP_MASK_RAMG_B_END") - a("TOP_MASK_RAMG_B"), "active tunnel ARGB4 top-cover tiles"),
     ]
@@ -150,7 +150,7 @@ def main() -> int:
         *menu_btn("QUIT", 120, 141),
         ("MENU_SKY_PAL", a("MENU_SKY_PAL_RAMG"), 0x200, ""),
         ("MENU_UI_PAL", a("MENU_UI_PAL_RAMG"), 0x200, ""),
-        ("MENU_CURSOR", a("MENU_CURSOR_RAMG"), 24 * 24 * 2, ""),
+        ("MENU_CURSOR", a("MENU_CURSOR_RAMG"), 38 * 38 * 2, ""),
     ]
 
     # ---- LEVEL SELECT ----
@@ -159,7 +159,7 @@ def main() -> int:
         ("LS_SKY..LS_UI", a("LS_SKY_RAMG"), a("LS_RAMG_END") - a("LS_SKY_RAMG"), "sky+sun+кнопки+бейджи"),
         ("LS_SKY_PAL", a("LS_SKY_PAL_RAMG"), 0x200, ""),
         ("LS_UI_PAL", a("LS_UI_PAL_RAMG"), 0x200, ""),
-        ("LS_CURSOR", a("LS_CURSOR_RAMG"), 24 * 24 * 2, ""),
+        ("LS_CURSOR", a("LS_CURSOR_RAMG"), 38 * 38 * 2, ""),
         ("LS_PREVIEW_MARK/FROG/KZ", a("LS_PREVIEW_MARKER_RAMG"),
          a("LS_PREVIEW_KZ_RAMG") + a("LS_PREVIEW_KZ_BYTES") - a("LS_PREVIEW_MARKER_RAMG"), "превью-маркеры"),
         ("LS_PREVIEW_BG_B", a("LS_PREVIEW_BG_RAMG_B"), 0x20000, "ping-pong превью фона уровня"),

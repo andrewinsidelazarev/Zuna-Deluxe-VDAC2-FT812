@@ -69,9 +69,10 @@ Frog_Init:        XOR  A
                   DEC  A                                ; A = #FF
                   LD   (FROG_EXCLUDE_COLOR_ADDR), A    ; exclude-color = 0xFF (none)
                   XOR  A                                ; вернуть A=0 для последующих stores
-                  LD   A, 1                            ; pre-init = pressed → без ложного rise edge
-                  LD   (Frog_PrevMouseLeft), A         ; edge-rise на первом кадре
+                  LD   A, 1                            ; заранее «нажато» -> без ложного фронта
+                  LD   (Frog_PrevMouseLeft), A         ; фронт ЛКМ на первом кадре не нужен
                   LD   (Frog_KeySpacePrev), A
+                  LD   (Frog_SwapPrev), A
                   XOR  A
                   LD   A, 24
                   LD   (Frog_TongueExpand), A
@@ -114,9 +115,54 @@ Frog_Update:      LD   A, (ZL_MouseMoved)
                   JR   NZ, .fu_skip_refilter
                   CALL Frog_RefilterCurrent
 .fu_skip_refilter:
+                  CALL Frog_HandleSwap
                   CALL Frog_HandleKeyboardFire
                   CALL Frog_HandleMouse
                   JP   Frog_TickRecoil
+
+; Frog_HandleSwap — фронт по AltGr/ПКМ. Меняет текущий/следующий шар только в
+; режиме PLAY без диалога и без отдачи, чтобы не менять шар выстрела на лету.
+Frog_HandleSwap:
+                  LD   A, (Input_KAltGr)
+                  OR   A
+                  JR   NZ, .fs_pressed
+                  LD   A, Input.Mouse.SVK_RBUTTON
+                  CALL Input.Mouse.KeyState
+                  CP   Input.Mouse.SVK_RBUTTON
+                  LD   A, 0
+                  JR   Z, .fs_save
+.fs_pressed:
+                  LD   A, 1
+.fs_save:         LD   HL, Frog_SwapPrev
+                  LD   B, (HL)                         ; B = prev
+                  LD   (HL), A                         ; сохранить curr
+                  OR   A
+                  RET  Z
+                  LD   A, B
+                  OR   A
+                  RET  NZ
+                  LD   A, (VDC_GameState)
+                  OR   A
+                  RET  NZ
+                  LD   A, (VDC_DialogState)
+                  OR   A
+                  RET  NZ
+                  LD   A, (Frog_IsFire)
+                  OR   A
+                  RET  NZ
+                  ; дальше сразу Frog_SwapBalls
+
+; Frog_SwapBalls — поменять местами шар во рту и следующий шар на спине.
+; По таблице звуков Zuma: смена шара во рту = SND_POP.
+Frog_SwapBalls:
+                  LD   A, (Frog_BallColor)
+                  LD   B, A
+                  LD   A, (Frog_NextBallColor)
+                  LD   (Frog_BallColor), A
+                  LD   A, B
+                  LD   (Frog_NextBallColor), A
+                  LD   A, SND_POP
+                  JP   GS_PlaySfx
 
 
 Frog_HandleKeyboardFire:
@@ -865,7 +911,8 @@ Frog_SinTable:
 Frog_RecoilTick:   DEFB 0
 Frog_IsFire:       DEFB 0
 Frog_PrevMouseLeft:DEFB 0
-Frog_KeySpacePrev: DEFB 0                              ; SPACE debounce: 0=ready, 1=fired
+Frog_KeySpacePrev: DEFB 0                              ; антидребезг Space: 0=готово, 1=выстрел уже был
+Frog_SwapPrev:     DEFB 0                              ; антидребезг AltGr/ПКМ: 0=готово, 1=удерживается
 Frog_TongueExpand: DEFB 24
 Frog_BallExpand:   DEFB FROG_BALL_IDLE
 Frog_TmpRecoil:    DEFB 0

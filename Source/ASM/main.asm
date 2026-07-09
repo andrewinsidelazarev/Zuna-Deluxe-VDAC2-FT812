@@ -67,6 +67,7 @@ FONT_LEVEL48_PAGE_BASE EQU #21                          ; SPG pages #21,#22
 FONT_LEVEL48_NUM_PAGES EQU 2
 FONT_LEVEL48_RAMG      EQU #004000                      ; 2×16K окно → #004000..#00C000
 FONT_LEVEL48_HANDLE    EQU 11
+FONT_LEVEL48_META_PAGE EQU #23                          ; glyph metadata tables, mapped in slot 2 on demand
 
 TEXT_SPIRALDOOM_H      EQU 36                            ; опорная высота строки для Y-раскладки интро (исторический ориентир)
 
@@ -631,8 +632,22 @@ DrawKillzoneAfterXY:
                 LD   BC, (KzDrawX16)
                 LD   DE, (KzDrawY16)
                 CALL FT.Coprocessor.Vertex2f
-                ; --- pass 2: skull frame (Cell = VDC_KzFrame) ---
+                ; --- pass 2: skull frame ---
                 LD   A, (Core.VDC_KzFrame)
+                LD   B, A
+                LD   A, (CurrentLevel)
+                CP   18
+                LD   A, B
+                JR   NZ, .kz1_have_frame
+                LD   A, (Core.VDC_GameState)
+                CP   3
+                LD   A, B
+                JR   NC, .kz1_have_frame
+                LD   A, (Core.VDC2_KzFrame)
+                CP   B
+                JR   NC, .kz1_have_frame
+                LD   A, B
+.kz1_have_frame:
                 CALL FT.Coprocessor.Cell
                 LD   BC, (KzDrawX16)
                 LD   DE, (KzDrawY16)
@@ -641,7 +656,10 @@ DrawKillzoneAfterXY:
                 LD   A, (Core.VDC_HasSecondChain)
                 OR   A
                 RET  Z
-                JP   L19SecondKillzoneGate
+                LD   A, (CurrentLevel)
+                CP   18
+                RET  Z
+                JP   DrawSecondKillzoneDual
 
 DrawSecondKillzoneDual:
                 XOR  A
@@ -1267,6 +1285,7 @@ DrawIntroText:
                 LD   DE, ((480 - TEXT_SPIRALDOOM_H - 90) * 8 / 5) * 16   ; Y ×1.6
                 LD   HL, IntroLevelBuf
                 CALL DrawString
+                CALL Core.SetCurrentTrackPage            ; SetFontLevel48 temporarily maps slot 2 to font metadata
 
                 ; --- Selected level title (30px nativealien, строка ниже) ---
                 CALL SetFontNative
@@ -1541,9 +1560,9 @@ SetFontNative:
 
 ; SetFontLevel48 — native-48 шрифт для интро «LEVEL N-M» (рисуется 1:1, без upscale).
 SetFontLevel48:
-                ; Таблицы глифов и W/H/STRIDE-EQU лежат в overlay #04 (внутри module
-                ; Core) → ссылаемся с префиксом Core. (RAMG/HANDLE — глобальные, без него).
-                ; Читаются только при slot3=#04 (интро), как и положено для #04-данных.
+                ; Таблицы глифов живут на отдельной page #23 и читаются через slot 2.
+                LD   A, FONT_LEVEL48_META_PAGE
+                SetPage2_A
                 LD   HL, Core.font_level48_glyph_x
                 LD   (FontPtrGlyphX), HL
                 LD   HL, Core.font_level48_glyph_w
@@ -2135,10 +2154,8 @@ DrawTimeValue:
 DrawNumBuf:     DEFS 10
 
                 include "font_native_meta.inc"
-                ; font_level48_meta.inc — НЕ здесь: slot0 (#0000..#3FFF) почти полон, его
-                ; таблицы глифов (~512 б) переполняли бы секцию за #4000 → порча slot1.
-                ; Вынесены в overlay #04 (см. ниже, после MainLoop.asm) — level48 нужен
-                ; только в интро при slot3=#04.
+                ; font_level48_meta.inc — НЕ здесь: slot0 (#0000..#3FFF) почти полон.
+                ; Таблицы вынесены в отдельную page #23 и читаются через slot 2.
                 include "font_cancun10_stats_meta.inc"
                 include "font_cancun8_meta.inc"
 
@@ -2261,7 +2278,7 @@ VDC_CheckKillzone:
                 LD   HL, Core.VDC_HSA
                 SUB  (HL)                              ; A = TNS - HSA (signed-ish)
                 JR   Z, .ck_eqcell                     ; equal cells
-                JR   C, .ck_trigger                    ; HSA > TNS → past
+                JP   C, .ck_trigger                    ; HSA > TNS → past
                 ; --- HSA < TNS: rem = A*CS + KzEndSub - HSub ---
                 LD   H, 0
                 LD   L, A
@@ -2285,7 +2302,7 @@ VDC_CheckKillzone:
                 LD   D, A
                 LD   A, (Core.VDC_HSub)
                 CP   D
-                JR   NC, .ck_trigger                   ; HSub >= KzEndSub → past
+                JP   NC, .ck_trigger                   ; HSub >= KzEndSub → past
                 LD   E, A                              ; HSub
                 LD   A, D
                 SUB  E                                 ; A = KzEndSub - HSub (1..CS-1)
@@ -3127,16 +3144,13 @@ LoadGameplayAssets:
                 ; SPI на входе в WIN (VDC_WinOutroInit), когда шаров уже нет. См.
                 ; WINEXP_RAMG_ADDR.
 
-                ; Залить cursor (page #5A, compressed ZX7) в RAM_G CURSOR_RAMG_ADDR.
-                ; UnpackAndUploadPage заливает 16K — последние ~15K = zeros (padding),
-                ; не страшно потому что #0D0000+1152..#0D4000 пустая зона
-                ; (killzone начинается с #0D4000 и уже залит).
-                LD   HL, CURSOR_RAMG_ADDR & 0xFFFF
-                LD   (BgRamL), HL
-                LD   A, (CURSOR_RAMG_ADDR >> 16) & 0xFF
-                LD   (BgRamH), A
                 LD   A, CURSOR_PAGE
-                CALL UnpackAndUploadPage
+                EX   AF, AF'
+                LD   HL, 0
+                LD   DE, CURSOR_RAMG_ADDR & 0xFFFF
+                LD   BC, CURSOR_Z_SIZE
+                LD   A, (CURSOR_RAMG_ADDR >> 16) & 0xFF
+                CALL SafeInflatePage2
 
                 ; Залить GAME OVER atlas и intro glyph font в FT_RAM_G #0..#10000
                 ; (свободная зона до bg).
@@ -3315,6 +3329,7 @@ LoadGameplayAssets:
 
                 ; --- VDC physics init (Track V2 metadata/pages уже доступны) ---
                 CALL VDC_Init
+                CALL SetCurrentTrackPage               ; VDC_Init на двух цепочках трогает track-2: вход в gameplay всегда с chain-1
                 CALL Frog_Init
                 CALL Bullet_Init
                 if RUNTIME_DIAGNOSTICS_ENABLED
@@ -4170,14 +4185,15 @@ WINEXP_PAGE        EQU #28                              ; SPG #28..#2C (5 стр
 WINEXP_PAGE_COUNT  EQU 5
 WINEXP_RAMG_ADDR   EQU BALLS_RAMG_ADDR                  ; #050000: 17×48×48×2=78336 (80 КБ) влезает в 192 КБ региона шаров
 
-; --- Cursor 24×24 ARGB4 (1 page) ---
+; --- Global cursor 38×38 ARGB4, zlib source page shared by gameplay/menu/level-select ---
 CURSOR_PAGE        EQU #5A
+CURSOR_Z_SIZE      EQU 447
 CURSOR_RAMG_ADDR   EQU #0D0000                         ; after frog overlay area
-CURSOR_W           EQU 24                              ; atlas (layout) — матчится с make_cursor.py
-CURSOR_H           EQU 24
-CURSOR_DRAW        EQU 38                              ; 1024×768: экранный размер = round(24×8/5)
-CURSOR_TIP_X       EQU 0                               ; острие sprite-coords (см. make_cursor.py)
-CURSOR_TIP_Y       EQU 0
+CURSOR_W           EQU 38                              ; atlas (layout) — матчится с make_cursor.py
+CURSOR_H           EQU 38
+CURSOR_DRAW        EQU 38                              ; native 1024×768 cursor, без апскейла
+CURSOR_TIP_X       EQU 1                               ; острие sprite-coords (см. make_cursor.py)
+CURSOR_TIP_Y       EQU 1
 
 BgPg:           DEFB 0
 BgRamL:         DEFW 0
@@ -4633,6 +4649,7 @@ str_no:            DB "NO",0
                 include "shared_render.asm"           ; DL-matrix + frog-render machinery для gameplay (#04) и level-select (#41); resident, без page-swap
                 include "Input.asm"                   ; resident global input module (PS/2 keyboard via Mr.Gluk + Kempston + mouse); вызывается из любой scene
 Main0_End:                                            ; MUST быть после ВСЕГО main0 code (Init_Core/Init_Int/INT_Handler/loader_resident/shared_render)
+                ASSERT Core.Main0_End <= #8000
 
                 ; ----- gameplay overlay (slot 3, page #04) — play-scene code -----
                 ; Mapped в slot 3 только во время gameplay (ставится в FadeLevelSelectToGameplay).
@@ -4646,11 +4663,6 @@ Main1_Start:
                 include "Frog.asm"
                 include "Bullet.asm"
                 include "MainLoop.asm"
-                ; Таблицы глифов native-48 шрифта «LEVEL N-M» живут ЗДЕСЬ (overlay #04),
-                ; а не в slot0 — там не хватило места. Читаются только DrawIntroText при
-                ; slot3=#04; DrawString/SetFontLevel48 в slot0 (всегда замаплен) обращаются
-                ; к ним через FontPtr, пока активна сцена геймплея.
-                include "font_level48_meta.inc"
 Main1_End:
 
                 ; ----- UI overlay (slot 3, page UI_OVL_PAGE) — menu/level-select +
@@ -4677,16 +4689,26 @@ UiOvl_End:
 LoaderOvl_Start:
                 include "ts-dos.asm"
 LoaderOvl_End:
+
+                ; ----- level48 glyph metadata (slot 2, page #23) -----
+                ; DrawIntroText maps this page only while measuring/drawing "LEVEL N-M".
+                SLOT 2 : PAGE FONT_LEVEL48_META_PAGE : ORG #8000
+FontLevel48Meta_Start:
+                include "font_level48_meta.inc"
+FontLevel48Meta_End:
                 endmodule
 
 Main0_Size       EQU Core.Main0_End - Core.Start
 Main1_Size       EQU Core.Main1_End - Core.Main1_Start
 UiOvl_Size       EQU Core.UiOvl_End - Core.UiOvl_Start
 LoaderOvl_Size   EQU Core.LoaderOvl_End - Core.LoaderOvl_Start
+FontLevel48Meta_Size EQU Core.FontLevel48Meta_End - Core.FontLevel48Meta_Start
+                ASSERT FontLevel48Meta_Size <= #4000
                 display "Main0:    \t", /A, Core.Start,        " size=", /D, Main0_Size,     " bytes (slot 1 page 5)"
                 display "Main1:    \t", /A, Core.Main1_Start,  " size=", /D, Main1_Size,     " bytes (slot 3 page #04, gameplay)"
                 display "UiOvl:    \t", /A, Core.UiOvl_Start,  " size=", /D, UiOvl_Size,     " bytes (slot 3 page #41, ui)"
                 display "LoaderOvl:\t", /A, Core.LoaderOvl_Start, " size=", /D, LoaderOvl_Size, " bytes (slot 3 page #40)"
+                display "Level48M:\t", /A, Core.FontLevel48Meta_Start, " size=", /D, FontLevel48Meta_Size, " bytes (slot 2 page #23)"
                 ; main1_play (#04), UI overlay (#41) и loader overlay (#40)
                 ; собираются по logical #C000 на разных physical pages. Перед КАЖДЫМ
                 ; SAVEBIN нужно мапить нужную page, иначе SAVEBIN выгрузит последнюю
@@ -4699,5 +4721,7 @@ LoaderOvl_Size   EQU Core.LoaderOvl_End - Core.LoaderOvl_Start
                 SAVEBIN "Build/ui_ovl.bin",      Core.UiOvl_Start, UiOvl_Size
                 SLOT 3 : PAGE Core.LOADER_OVL_PAGE
                 SAVEBIN "Build/loader_ovl.bin",  Core.LoaderOvl_Start, LoaderOvl_Size
+                SLOT 2 : PAGE FONT_LEVEL48_META_PAGE
+                SAVEBIN "Build/font_level48_meta.bin", Core.FontLevel48Meta_Start, FontLevel48Meta_Size
 
                 END EntryPoint

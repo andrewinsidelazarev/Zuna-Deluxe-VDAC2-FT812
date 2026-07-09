@@ -20,8 +20,10 @@ def main() -> int:
     main_asm = MAIN.read_text(encoding="utf-8")
     failures: list[str] = []
 
-    for_level = block_between(ml, "ZL_DrawActiveChainForLevel:", "ZL_GetTopMaskForCurrentLevel:")
-    if "CALL ZL_RestoreActiveTrackPage" not in for_level.split("CALL ZL_GetTopMaskForCurrentLevel", 1)[0]:
+    for_level = block_between(ml, "ZL_DrawActiveChainsUnified:", "ZL_GetTopMaskForCurrentLevel:")
+    draw_chain1 = block_between(ml, "ZL_DrawChain1:", "ZL_DrawChain2Maybe:")
+    prepared_chain1 = block_between(ml, "ZL_DrawPreparedChain1:", "ZL_DrawPreparedChain2Maybe:")
+    if "CALL ZL_RestoreActiveTrackPage" not in draw_chain1 or "CALL ZL_RestoreActiveTrackPage" not in prepared_chain1:
         failures.append("chain renderer does not restore slot2 track page after lazy dialog upload")
     if "Core.VDC_DialogState" not in for_level:
         failures.append("top-mask path does not branch on VDC_DialogState")
@@ -34,7 +36,7 @@ def main() -> int:
     if "LD   A, 3" not in first_pause or "ZL_DrawTopMaskOverlay" not in first_pause:
         failures.append("first pause frame must skip tunnel balls before disabling top-cover")
 
-    per_ball = block_between(ml, ".PerBallLoop:", ".PBPassUnder:")
+    per_ball = block_between(ml, "ZL_DrawCachedActiveChain:", ".PBPassUnder:")
     if "CP   3" not in per_ball or ".PBPassSkipTunnel" not in per_ball:
         failures.append("per-ball loop does not implement pass 3")
     skip_block = block_between(ml, ".PBPassSkipTunnel:", ".PBPassUnder:")
@@ -56,7 +58,7 @@ def main() -> int:
         failures.append("dialog frame upload does not invalidate top-mask upload state")
     if "LD   (DialogFrameLoaded), A" not in ml:
         failures.append("top-mask upload does not mark dialog frame as evicted")
-    ensure = block_between(ml, "EnsureDialogFrameUploaded:", "ZL_DrawActiveChainForLevel:")
+    ensure = block_between(ml, "EnsureDialogFrameUploaded:", "ZL_DrawActiveChainsUnified:")
     if "ZL_DialogFrameUploadDeferred" not in ensure:
         failures.append("dialog frame upload is not deferred after live top-mask RAM_G use")
     if "ZL_TopMaskUploadedLevel" not in ensure or "CurrentLevel" not in ensure:

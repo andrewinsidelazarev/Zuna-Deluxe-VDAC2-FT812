@@ -90,8 +90,8 @@ MENU_BUTTON_HIT_BORDER EQU 11
 MENU_SKY_PAL_RAMG   EQU #0ABA60
 MENU_UI_PAL_RAMG    EQU #0ABC60
 MENU_CURSOR_RAMG    EQU #0AC000
-MENU_CURSOR_Z_PAGE  EQU #93
-MENU_CURSOR_Z_SIZE  EQU 335
+MENU_CURSOR_Z_PAGE  EQU CURSOR_PAGE
+MENU_CURSOR_Z_SIZE  EQU CURSOR_Z_SIZE
 MENU_SKY_PAL_PAGE   EQU #91
 MENU_UI_PAL_PAGE    EQU #92
 
@@ -567,8 +567,7 @@ MenuBuildFrame:
 
 MenuDrawCredit:
                 ; "Italy, 2026" — на месте игровых часов (45,712), тот же ROM font 26
-                ; native: свой сброс матрицы (кадр меню идёт под scale 1.6), после —
-                ; вернуть 1.6 для курсора.
+                ; native: свой сброс матрицы (кадр меню идёт под scale 1.6).
                 LD   C, 255 : LD D, 255 : LD E, 255
                 CALL FT.Coprocessor.ColorRGB
                 LD   E, 255
@@ -581,7 +580,7 @@ MenuDrawCredit:
                 LD   BC, 12
                 LDIR
                 LD   (FT.Coprocessor.BufferPtr), DE
-                JP   Core.Resident_EmitScale16
+                RET
 .txt:           DB   "Italy, 2026", 0                  ; 11+NUL = 12 байт — ровно 3 CMD-слова
 
 MenuSwapFrame:
@@ -807,11 +806,15 @@ MenuSunSinTable:
                 DB 207, 210, 213, 216, 219, 222, 225, 228, 231, 234, 237, 240, 244, 247, 250, 253
 
 MenuDrawCursor:
+                ; 38×38 курсор уже в screen-native размере; меню и level-select до
+                ; этого работают под scale 1.6, поэтому перед курсором нужен identity.
+                CALL Core.ZL_EmitLoadId
+                CALL Core.ZL_EmitSetMatrix
                 FT_BitmapHandle 7
                 FT_BitmapSource MENU_CURSOR_RAMG
                 FT_BitmapLayout FT_ARGB4, CURSOR_W * 2, CURSOR_H
-                ; Окно = DRAW (38): и меню, и level-select рисуют кадр при
-                ; scale(1.6)-матрице → курсор 38px (24×8/5), позиция = мышь (1024).
+                ; Окно = DRAW (38): меню и level-select используют один
+                ; глобальный курсор.
                 FT_BitmapSize FT_NEAREST, FT_BORDER, FT_BORDER, CURSOR_DRAW, CURSOR_DRAW
                 XOR  A
                 CALL FT.Coprocessor.Cell

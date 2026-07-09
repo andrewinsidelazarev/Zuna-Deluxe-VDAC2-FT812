@@ -40,7 +40,7 @@ VDC_GLOBAL_SPEED_FACTOR EQU 2                            ; поддержива�
 VDC_DECAY_NEG          EQU 2                             ; insert head slide (neg→0) быстро.
 VDC_DECAY_POS          EQU 1                             ; cascade rollback (pos→0) плавно.
                                                           ; длина хорды track 1.0815 px/sample: 32×1.08 ≈ 34.6 px
-                                                          ; centers, ball 32 px → gap ~2.6 px на прямой.
+                                                          ; центрами, шар 32 px → gap ~2.6 px на прямой.
                                                           ; Используется в VDC_SlotT через ZL_Mul16x8.
 VDC_MAX_SLOTS          EQU 192                           ; physical slot buffer: самый длинный track L22=136 cells,
                                                          ; остаётся insert/gap headroom и всё ещё помещается Main1.
@@ -54,8 +54,8 @@ VDC_LEVEL_CHAIN_CHANCE EQU 50                            ; level setting: 50% ra
 ; 2026-06-12). PULL = цвета по краям стыка СОВПАДАЮТ: скорость подтяжки
 ; разгоняется +0.4 сэмпл/кадр² до 10 сэмпл/кадр (vp хранится ×10).
 ; CATCH-UP = цвета разные/нет фронта: фронт-сегмент СТОИТ, зазор закрывается
-; темпом продвижения цепи (хвост догоняет). При слиянии PULL-стыка — отдача
-; заднего сегмента v/2.5 (BALL_WEIGHT_RATIO) и клик SND_BALLCLICK1.
+; темпом продвижения цепи (хвост догоняет). При слиянии PULL-стыка —
+; клик SND_BALLCLICK1 без физической отдачи тыла.
 VDC_PULL_ACCEL_X10     EQU 4                              ; BALL_DECC = 0.4
 VDC_PULL_MAX_X10       EQU 100                            ; BALL_MAX_BACK_SPEED = 10
 VDC_PULL_BASE_X10      EQU 10                             ; старт = 1 сэмпл/кадр
@@ -853,9 +853,8 @@ VDC_LoseStartReady:
                 RET
 
 ; Удержать активную цепь перед окном kill-zone: rem=65, т.е. на один sample
-; до открытия черепа (rem<=64). Это отдельно от ChainFreezeCnt: freeze
-; относится к cascade settle и намеренно проверяется VDC_LoseStartReady,
-; а этот hold только не даёт визуально въехать в KZ раньше времени.
+; до открытия черепа (rem<=64). Этот hold только не даёт визуально въехать
+; в KZ раньше pending gap/explode settle.
 VDC_LoseHoldBeforeKillzone:
                 LD   HL, (VDC_TrackNumSlots)
                 LD   A, (VDC_KzEndSub)
@@ -1210,7 +1209,7 @@ VDC_TrySpawn_NoHsubGate:
 
                 ; SlotsLen > 0 AND offsets[tail-1] > 0 → не спавним (хвост сдвинут
                 ; вперёд head-comp'ом, ждём settle). ОТРИЦАТЕЛЬНЫЙ offset хвоста
-                ; (rear-comp догона / отдача слияния) спавн НЕ блокирует: хвост
+                ; (rear-comp догона) спавн НЕ блокирует: хвост
                 ; скользит ВПЕРЁД, новый шар наследует offset и встаёт встык —
                 ; иначе во время догона выдача обрывается на всю длину закрытия.
                 LD   A, B
@@ -1379,10 +1378,6 @@ VDC_MoveChain:
                 INC  A
                 CP   VDC_CELL_SIZE
                 JR   C, .mc_save_sub
-                XOR  A
-                LD   (VDC_HSub), A
-                INC  A
-                LD   (VDC_SpawnDue), A
                 ; HSA++ с cap по TrackNumSlots-1
                 LD   HL, (VDC_TrackNumSlots)           ; max
                 LD   A, (VDC_HSA)
@@ -1391,9 +1386,21 @@ VDC_MoveChain:
                 SBC  HL, DE
                 JR   Z, .mc_at_max                     ; HSA == max → stop
                 JR   C, .mc_at_max
+                XOR  A
+                LD   (VDC_HSub), A
+                INC  A
+                LD   (VDC_SpawnDue), A
                 LD   HL, VDC_HSA
                 INC  (HL)
+                RET
 .mc_at_max:
+                LD   A, (VDC_GameState)
+                OR   A
+                JR   Z, .mc_play_cap
+                XOR  A
+                LD   (VDC_HSub), A
+                RET
+.mc_play_cap:   LD   (VDC_SpawnDue), A
                 RET
 .mc_save_sub:
                 LD   (VDC_HSub), A
@@ -1499,11 +1506,28 @@ VDC_AnimateChain:
                 SUB  D                                 ; pos (front-comp подтяжки)
                 JR   C, .ac_decay_zero                 ; clamp 0
                 JR   Z, .ac_decay_store                ; дотаял ровно в 0
-                LD   C, 1                              ; ещё положительный — доезд не закончен
+                INC  C                                 ; ещё положительный — доезд не закончен
                 JR   .ac_decay_store
 .ac_decay_zero: XOR  A
                 JR   .ac_decay_store
-.ac_decay_neg:  ADD  A, E                              ; neg (insert slide / rear-comp)
+.ac_decay_neg:  LD   A, B
+                DEC  A
+                JR   Z, .ac_decay_neg_apply            ; хвост
+                LD   A, (HL)
+                XOR  #80
+                LD   (.ac_decay_cur_key), A
+                INC  HL
+                LD   A, (HL)
+                DEC  HL
+                XOR  #80
+.ac_decay_cur_key EQU $+1
+                CP   0
+                JR   NC, .ac_decay_neg_apply
+                INC  C                                 ; передний край offset-дырки: держим
+                JR   .ac_decay_skip
+.ac_decay_neg_apply:
+                LD   A, (HL)
+                ADD  A, E                              ; neg (insert slide / rear-comp)
                 JR   Z, .ac_decay_store
                 BIT  7, A
                 JR   NZ, .ac_decay_store               ; ещё отрицательный
@@ -1589,22 +1613,6 @@ VDC_AnimateChain:
                 ; --- 5. Animate gauge bar — VDC_GaugeShown ползёт к VDC_GaugeScore
                 ; ±N очков за кадр, чтобы chain/combo бонусы не выглядели прыжком ---
                 CALL VDC_TickGaugeShown
-                RET
-
-; ============================================================================
-; VDC_ClearAllShot2 — очистить Shot2[0..SlotsLen-1].
-; Используется при успешном MATCH3: дальнейшие cascade-триггеры должны идти
-; только от VDC_DoGapStep после реального закрытия gap, а не от старых меток.
-; ============================================================================
-VDC_ClearAllShot2:
-                LD   A, (VDC_SlotsLen)
-                OR   A
-                RET  Z
-                LD   B, A
-                LD   HL, (VDC_pShot2)
-.cas2_loop:     LD   (HL), 0
-                INC  HL
-                DJNZ .cas2_loop
                 RET
 
 ; ============================================================================
@@ -2295,7 +2303,7 @@ VDC_DoGapStep:
                 LD   (VDC_MatchScanIdx), A
                 ; Shot2 на соседях K-1 и K (после shift), если они non-gap.
                 CALL VDC_SetShot2OnNeighbors
-                JP   VDC_GapMergeCheckRecoil           ; PULL-слияние? → отдача + клик
+                JP   VDC_GapMergeCheckRecoil           ; PULL-слияние? → клик/сброс
 
 .dgs_stop_catchup:
                 CALL VDC_GapRearExists
@@ -2375,7 +2383,7 @@ VDC_DoGapStep:
                 LD   A, (VDC_TmpGapIdx)
                 LD   (VDC_MatchScanIdx), A
                 CALL VDC_SetShot2OnNeighbors
-                JP   VDC_GapMergeCheckRecoil           ; PULL-слияние? → отдача + клик
+                JP   VDC_GapMergeCheckRecoil           ; PULL-слияние? → клик/сброс
 
 .dgs_casc_catchup:
                 CALL VDC_GapRearExists
@@ -2473,6 +2481,20 @@ VDC_GapJunctionUpdate:
                 JR   NC, .gju_right                    ; ещё маркер
                 CP   E                                 ; цвет тыла == цвету фронта?
                 JR   NZ, .gju_catchup
+                ; PULL не должен проходить через уже открытую переднюю дырку.
+                ; Если перед левым краем текущего гэп-рана есть другой marker,
+                ; закрываем этот ран как CATCH-UP: фронт стоит, хвост догоняет.
+                LD   A, B                              ; B = индекс левого шара рана
+                OR   A
+                JR   Z, .gju_pull
+                LD   B, A
+                LD   HL, (VDC_pSlots)
+.gju_prev_gap:  LD   A, (HL)
+                CP   VDC_NUM_COLORS
+                JR   NC, .gju_catchup
+                INC  HL
+                DJNZ .gju_prev_gap
+.gju_pull:
                 LD   A, 1                              ; PULL — магнетизм цвета
                 LD   (VDC_GapJunction), A
                 RET
@@ -2545,13 +2567,11 @@ VDC_GapRearExists:
 ; t КАЖДОГО слота за стыком на +CELL, а не только ближний сегмент; ранний
 ; выход на первом гэпе оставлял сегменты за вторым гэпом без компенсации →
 ; телепорт +32 на каждом шаге догона при нескольких дырах — «рывки» в зелёной
-; фазе). Кламп к -CELL_SIZE. CATCH-UP: A=CELL; отдача слияния: A=vp/2.5.
+; фазе). Кламп к -CELL_SIZE. CATCH-UP: A=CELL.
 ; ----------------------------------------------------------------------------
 VDC_GapRearComp:
                 LD   (.grc_amount), A
                 LD   A, (VDC_SlotsLen)
-                OR   A
-                RET  Z
                 LD   B, A                              ; B = len
                 LD   A, (VDC_TmpGapIdx)
                 CP   B
@@ -2580,13 +2600,14 @@ VDC_GapRearComp:
 
 ; ----------------------------------------------------------------------------
 ; VDC_GapMergeCheckRecoil — после PULL-удаления гэп-слота: если соседи стыка
-; K-1/K оба шары (ран закрыт, сегменты слились) — отдача заднего сегмента
-; vp/2.5 (референс BALL_WEIGHT_RATIO=2.5), клик SND_BALLCLICK1, сброс разгона.
+; K-1/K оба шары (ран закрыт, сегменты слились) — клик SND_BALLCLICK1 и сброс
+; разгона. Физическую отдачу тыла не добавляем: в multi-GAP она даёт лишний
+; микросдвиг поверх самой подтяжки.
 ; ----------------------------------------------------------------------------
 VDC_GapMergeCheckRecoil:
                 LD   A, (VDC_GapJunction)
                 CP   1
-                RET  NZ                                ; отдача — только у PULL
+                RET  NZ                                ; стыковка — только у PULL
                 LD   A, (VDC_TmpGapIdx)
                 OR   A
                 RET  Z                                 ; слева никого
@@ -2607,17 +2628,7 @@ VDC_GapMergeCheckRecoil:
                 LD   A, (HL)
                 CP   VDC_NUM_COLORS
                 RET  NC
-                ; --- слияние! отдача = vp/2.5 (x10 → /25 = 0..4 сэмпла) ---
-                LD   A, (VDC_GapPullVp)
-                LD   L, A
-                LD   H, 0
-                LD   A, 25
-                CALL VDC_DivHLbyA
-                LD   A, L
-                OR   A
-                JR   Z, .gmr_no_recoil
-                CALL VDC_GapRearComp
-.gmr_no_recoil: LD   A, VDC_PULL_BASE_X10              ; следующий стык разгоняется заново
+                LD   A, VDC_PULL_BASE_X10              ; следующий стык разгоняется заново
                 LD   (VDC_GapPullVp), A
                 LD   A, SND_BALLCLICK1                 ; клик стыковки (референс)
                 JP   GS_PlaySfx
@@ -2970,6 +2981,12 @@ VDC_InsertAt:
                 CP   VDC_MAX_SLOTS
                 RET  NC
 
+                ; Если уже есть внутренняя дырка, вставка не должна делать
+                ; глобальный HSA++/head_comp: место берём из существующего GAP.
+                CALL VDC_InternalGapExists
+                SBC  A, A                              ; 0 или #FF по carry
+                LD   (VDC_ScanGapBusy), A              ; temp flag до ScanForNewMatch
+
                 ; --- вычислить new_offset ---
                 ; head_off, tail_off:
                 ;   slots_len==0           → head=tail=0
@@ -3018,6 +3035,14 @@ VDC_InsertAt:
                 ADD  HL, DE
                 LD   C, (HL)                           ; C = tail_off
 .ia_off_compute:
+                LD   A, (VDC_ScanGapBusy)
+                OR   A
+                JR   Z, .ia_off_compute_normal
+                ; GAP-mode: shift_right уже отодвигает хвостовую сторону на
+                ; одну клетку; новый шар ставим в старую фазу tail-соседа.
+                LD   A, C
+                JR   .ia_off_save
+.ia_off_compute_normal:
                 ; new_off = -CS/2 + (head + tail) / 2 — все signed бытовое сложение.
                 ; Считаем как 16-bit signed для безопасности от переполнения.
                 ; head_ext, tail_ext:
@@ -3133,6 +3158,10 @@ VDC_InsertAt:
                 LD   HL, VDC_SlotsLen
                 INC  (HL)
 
+                LD   A, (VDC_ScanGapBusy)
+                OR   A
+                JR   NZ, .ia_no_head_comp
+
                 ; HSA++ с cap по TrackNumSlots-1.
                 ; Cap-fix (Z80-симулятор verify 2026-05-14): при HSA == TrackNumSlots-1
                 ; HSA++ пропущен → нужна компенсация:
@@ -3212,19 +3241,19 @@ VDC_InsertAt:
                 DJNZ .ia_head_comp
 .ia_no_head_comp:
                 ; ChainFreezeCnt НЕ ставим (без freeze head_offsets декают параллельно
-                ; с natural hsub advance, head освобождает место). Компромисс: короткая
-                ; head_slide animation visible (~32 px за 16 frames) — принято вместо
-                ; chain-stops-everything на CS frames (хуже визуально).
+                ; с обычным advance HSub, голова освобождает место). Компромисс:
+                ; короткая видимая head-slide-анимация (~32 px за 16 frames) —
+                ; принято вместо остановки всей цепи на CS frames (хуже визуально).
 
-                ; Immediate CheckMatch3 на target_idx. Для свежей вставки не
+                ; Немедленный CheckMatch3 на target_idx. Для свежей вставки не
                 ; ждём decay offsets: если слоты одного цвета уже образуют
                 ; тройку, она должна взрываться сразу. Строгий offset-gap
                 ; остаётся для cascade/Shot2 через обычный VDC_CheckMatch3.
                 CALL VDC_CheckMatch3_Insert
                 OR   A
                 RET  NZ                                ; match → chain продолжается
-                ; No match (shot не сработал) → Statistics_BreakChain
-                ; and reset consecutive gap-shot streak.
+                ; Match нет (shot не сработал) → Statistics_BreakChain
+                ; и сброс серии gap-shot.
                 XOR  A
                 LD   (VDC_BulletGapCount), A
                 LD   (VDC_StatChainCount), A
@@ -3511,6 +3540,7 @@ VDC2_KzFrame:      DEFB 0
 VDC2_KzDrawX16:    DEFW 0
 VDC2_KzDrawY16:    DEFW 0
 VDC2_ChainLocal:   DS VDC_ChainLocalEnd - VDC_ChainLocalStart
+VDC2_LoseHoldCnt   EQU VDC2_ChainLocal + (VDC_LoseHoldCnt - VDC_ChainLocalStart)
 VDC_DualLoseMenuDelay: DEFB 0
 VDC_SwapTmp:       DEFB 0
 VDC_SwapPtr1:      DEFW 0

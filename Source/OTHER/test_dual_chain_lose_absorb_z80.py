@@ -126,7 +126,7 @@ def run_case(level: int) -> tuple[bool, str]:
                 level,
                 "\n".join(history),
             )
-        if before_len > 0 and before_kz == 11 and before_hsub == 0:
+        if before_len > 0 and before_kz == 11 and before_hsub == 31:
             boundary_reached = True
             if first_boundary_frame is None:
                 first_boundary_frame = frame
@@ -152,7 +152,10 @@ def run_case(level: int) -> tuple[bool, str]:
                 f"after frame {frame}: len2 {prev_len}->{after_len}, "
                 f"kz2={gb(emu, 'Core.VDC2_KzFrame')} hsub2={gb(emu, 'Core.VDC2_HSub')}"
             )
-            return 1
+            return False, (
+                f"L{level:02d}: chain2 length decreased before reaching kill-zone boundary\n"
+                + "\n".join(history)
+            )
         prev_len = after_len
 
         if after_len == 0 and gb(emu, "Core.VDC_DialogState") != 0:
@@ -267,7 +270,7 @@ def run_primary_after_chain2_trigger_case(level: int) -> tuple[bool, str]:
                 level,
                 "\n".join(history),
             )
-        if before_len > 0 and before_kz == 11 and before_hsub == 0:
+        if before_len > 0 and before_kz == 11 and before_hsub == 31:
             boundary_reached = True
             if first_boundary_frame is None:
                 first_boundary_frame = frame

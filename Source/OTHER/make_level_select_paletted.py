@@ -34,7 +34,8 @@ LS_SKY_PAL_RAMG = 0x0ABA60
 LS_UI_PAL_RAMG = 0x0ABC60
 LS_CURSOR_RAMG = 0x0AC000
 
-# Page numbers above the last main-menu allocation (#93 = menu cursor).
+# Page numbers above the main-menu allocation. Page #93 is intentionally free
+# after the global cursor moved to #5A; keep level-select pages stable at #94+.
 LS_SPG_FIRST_PAGE = 0x94
 
 BACKGROUND = "level_select_screen_background_canvas_4x3.png"

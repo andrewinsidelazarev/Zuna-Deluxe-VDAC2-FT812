@@ -58,6 +58,12 @@ def track_blob(level_index: int) -> bytes:
     return pak[start:end]
 
 
+def adventure_chain_entry(adventure_pos: int) -> tuple[int, int]:
+    chain = (ROOT / "Build" / "level_chain_table.bin").read_bytes()
+    off = adventure_pos * 2
+    return chain[off], chain[off + 1]
+
+
 def expected_track_meta(level_index: int) -> tuple[int, int, int, int]:
     blob = track_blob(level_index)
     assert blob[:4] == b"ZTV2", f"L{level_index + 1:02d}: missing Track V2 magic"
@@ -95,26 +101,55 @@ def assert_track_pages(fs: FullStackTrace, level_index: int) -> None:
         page = TRACK_LOAD_PAGES[index]
         got = bytes(fs.emu.mem.physical[page * PAGE_SIZE : (page + 1) * PAGE_SIZE])
         want = payload[index * PAGE_SIZE : (index + 1) * PAGE_SIZE].ljust(PAGE_SIZE, b"\0")
-        assert got == want, f"L{level_index + 1:02d}: Track V2 page #{page:02X} mismatch"
+        if got != want:
+            diff = next((i for i, (a, b) in enumerate(zip(got, want)) if a != b), 0)
+            raise AssertionError(
+                f"L{level_index + 1:02d}: Track V2 page #{page:02X} mismatch "
+                f"at +#{diff:04X}: got #{got[diff]:02X}, want #{want[diff]:02X}"
+            )
 
     first_page = bytes(fs.emu.mem.physical[TRACK_LOAD_PAGES[0] * PAGE_SIZE : TRACK_LOAD_PAGES[0] * PAGE_SIZE + 4])
     assert first_page != b"ZTV2", "Track metadata stayed mapped as the first sample page"
 
 
-def assert_gameplay_reset(fs: FullStackTrace, level_index: int, expected_adventure_pos: int, expect_second: bool) -> None:
-    assert gb(fs, "Core.CurrentLevel") == level_index
-    assert gb(fs, "Core.AdventurePos") == expected_adventure_pos
-    assert gb(fs, "Core.CurrentSettingIndex") == expected_adventure_pos
-    assert gb(fs, "Core.FadeAlpha") == 0
-    assert gb(fs, "Core.VDC_DialogState") == 0
-    assert gb(fs, "Core.VDC_GameState") == fs.sym["Core.VDC_STATE_INTRO"]
-    assert gb(fs, "Core.VDC_GaugeFull") == 0
-    assert gw(fs, "Core.VDC_GaugeScore") == 0
-    assert gb(fs, "Core.Bullet_Active") == 0
-    assert gb(fs, "Core.Frog_IsFire") == 0
-    assert gb(fs, "Core.VDC_HasSecondChain") == (1 if expect_second else 0)
-    assert gb(fs, "DialogFrameLoaded") == 0
-    assert fs.emu.mem.pages[2] == TRACK_LOAD_PAGES[0], f"slot2 should end on current track page, got #{fs.emu.mem.pages[2]:02X}"
+def assert_gameplay_reset(
+    fs: FullStackTrace,
+    level_index: int,
+    expected_adventure_pos: int,
+    expected_setting_index: int,
+    expect_second: bool,
+) -> None:
+    assert gb(fs, "Core.CurrentLevel") == level_index, (
+        f"CurrentLevel={gb(fs, 'Core.CurrentLevel')} expected={level_index}"
+    )
+    assert gb(fs, "Core.AdventurePos") == expected_adventure_pos, (
+        f"AdventurePos={gb(fs, 'Core.AdventurePos')} expected={expected_adventure_pos}"
+    )
+    assert gb(fs, "Core.CurrentSettingIndex") == expected_setting_index, (
+        f"CurrentSettingIndex={gb(fs, 'Core.CurrentSettingIndex')} expected={expected_setting_index}"
+    )
+    assert gb(fs, "Core.FadeAlpha") == 0, f"FadeAlpha={gb(fs, 'Core.FadeAlpha')}"
+    assert gb(fs, "Core.VDC_DialogState") == 0, f"DialogState={gb(fs, 'Core.VDC_DialogState')}"
+    assert gb(fs, "Core.VDC_GameState") == fs.sym["Core.VDC_STATE_INTRO"], (
+        f"GameState={gb(fs, 'Core.VDC_GameState')} expected INTRO"
+    )
+    assert gb(fs, "Core.VDC_GaugeFull") == 0, f"GaugeFull={gb(fs, 'Core.VDC_GaugeFull')}"
+    assert gw(fs, "Core.VDC_GaugeScore") == 0, f"GaugeScore={gw(fs, 'Core.VDC_GaugeScore')}"
+    assert gb(fs, "Core.Bullet_Active") == 0, f"Bullet_Active={gb(fs, 'Core.Bullet_Active')}"
+    assert gb(fs, "Core.Frog_IsFire") == 0, f"Frog_IsFire={gb(fs, 'Core.Frog_IsFire')}"
+    assert gb(fs, "Core.VDC_HasSecondChain") == (1 if expect_second else 0), (
+        f"HasSecondChain={gb(fs, 'Core.VDC_HasSecondChain')} expected={1 if expect_second else 0}"
+    )
+    assert gb(fs, "DialogFrameLoaded") == 0, f"DialogFrameLoaded={gb(fs, 'DialogFrameLoaded')}"
+    if fs.emu.mem.pages[2] != TRACK_LOAD_PAGES[0]:
+        p1 = [fs.emu.mem.read(fs.sym["Core.VDC_TrackPages1"] + i) for i in range(4)]
+        p2 = [fs.emu.mem.read(fs.sym["Core.VDC_TrackPages2"] + i) for i in range(4)]
+        raise AssertionError(
+            f"slot2 should end on current track page, got #{fs.emu.mem.pages[2]:02X}; "
+            f"TrackPages1={p1} TrackPages2={p2} "
+            f"ActiveTrackPage1=#{gb(fs, 'Core.VDC_ActiveTrackPage1'):02X} "
+            f"SecondActive={gb(fs, 'Core.VDC_SecondActive')}"
+        )
     assert fs.emu.mem.pages[3] == 0x04, f"slot3 should end on gameplay page #04, got #{fs.emu.mem.pages[3]:02X}"
 
 
@@ -147,7 +182,12 @@ def run_case(start_level: int, start_adventure_pos: int, expected_level: int, ex
     fs.call("UpdateDialog", 40_000_000)
 
     expected_adventure_pos = start_adventure_pos + 1
-    assert_gameplay_reset(fs, expected_level, expected_adventure_pos, expected_second)
+    chain_level, chain_setting = adventure_chain_entry(expected_adventure_pos)
+    assert chain_level == expected_level, (
+        f"test case expected L{expected_level + 1:02d}, "
+        f"but adventure pos {expected_adventure_pos} maps to L{chain_level + 1:02d}"
+    )
+    assert_gameplay_reset(fs, expected_level, expected_adventure_pos, chain_setting, expected_second)
     assert_ramg_level(fs, expected_level)
     assert_track_pages(fs, expected_level)
     print(
@@ -158,7 +198,7 @@ def run_case(start_level: int, start_adventure_pos: int, expected_level: int, ex
 
 def main() -> int:
     run_case(start_level=0, start_adventure_pos=0, expected_level=1, expected_second=False)
-    run_case(start_level=3, start_adventure_pos=3, expected_level=4, expected_second=True)
+    run_case(start_level=3, start_adventure_pos=18, expected_level=4, expected_second=True)
     print("PASS: WIN fade -> next level full load resets gameplay state and loads Track V2/RAM_G")
     return 0
 

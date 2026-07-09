@@ -40,9 +40,19 @@ def build_partitioned(superfloppy: bytes) -> bytes:
     return bytes(mbr) + pad + superfloppy
 
 
+def fat32_expected_starts(superfloppy: bytes) -> tuple[int, int]:
+    reserved = struct.unpack_from("<H", superfloppy, 14)[0]
+    fats = superfloppy[16]
+    sectors_per_fat = struct.unpack_from("<I", superfloppy, 36)[0]
+    fatstart = PART_LBA + reserved
+    datastart = fatstart + fats * sectors_per_fat
+    return fatstart, datastart
+
+
 def main() -> int:
     sf = (ROOT / "Build" / "test_wc.img").read_bytes()
     pak_ref = (ROOT / "Build" / "ZUMALVL.PAK").read_bytes()
+    expected_fatstart, expected_datastart = fat32_expected_starts(sf)
     img = build_partitioned(sf)
     print(f"partitioned image: part_lba={PART_LBA}, total {len(img)//SECTOR} sectors")
 
@@ -80,12 +90,11 @@ def main() -> int:
     print(f"OpenRoot CF=1  part_lba={part} (expect {PART_LBA})  FatStart={fatstart}  DataStart={datastart}  PakClus={fsc}")
     if part != PART_LBA:
         print(f"FAIL: part_lba {part} != {PART_LBA}"); return 1
-    # FatStart/DataStart must be the superfloppy values shifted by PART_LBA:
-    # superfloppy FatStart=32, DataStart=3234 (from the contiguous test).
-    if fatstart != PART_LBA + 32:
-        print(f"FAIL: FatStart {fatstart} != {PART_LBA + 32}"); return 1
-    if datastart != PART_LBA + 3234:
-        print(f"FAIL: DataStart {datastart} != {PART_LBA + 3234}"); return 1
+    # FatStart/DataStart must be the current superfloppy BPB values shifted by PART_LBA.
+    if fatstart != expected_fatstart:
+        print(f"FAIL: FatStart {fatstart} != {expected_fatstart}"); return 1
+    if datastart != expected_datastart:
+        print(f"FAIL: DataStart {datastart} != {expected_datastart}"); return 1
 
     # read sampled logical sectors and compare to the original PAK
     def set_ix(v):

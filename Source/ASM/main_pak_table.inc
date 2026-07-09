@@ -190,7 +190,7 @@ MainPakPageTable:
                 ; Graphics/Converted/frog_overlay_argb4_p01_zx7.bin
                 DEFB #5A
                 DEFW 1984
-                ; Graphics/Converted/cursor_p00_zx7.bin
+                ; Graphics/Converted/cursor_p00.zlib
                 DEFB #5B
                 DEFW 2016
                 ; Graphics/Converted/life_frog.bin
@@ -257,255 +257,255 @@ MainPakPageTable:
                 DEFB #22
                 DEFW 2688
                 ; Graphics/Converted/font_level48_atlas_p01_zx7.bin
-                DEFB #24
+                DEFB #23
                 DEFW 2720
+                ; Build/font_level48_meta.bin
+                DEFB #24
+                DEFW 2752
                 ; Graphics/Converted/sparkle_zx7.bin
                 DEFB #3A
-                DEFW 2752
+                DEFW 2784
                 ; Graphics/Converted/frame_top_p0_zx7.bin
                 DEFB #3B
-                DEFW 2784
+                DEFW 2816
                 ; Graphics/Converted/frame_top_p1_zx7.bin
                 DEFB #3C
-                DEFW 2816
+                DEFW 2848
                 ; Graphics/Converted/frame_bot_zx7.bin
                 DEFB #3D
-                DEFW 2848
+                DEFW 2880
                 ; Graphics/Converted/frame_left_zx7.bin
                 DEFB #3E
-                DEFW 2880
+                DEFW 2912
                 ; Graphics/Converted/frame_right_zx7.bin
                 DEFB #3F
-                DEFW 2912
+                DEFW 2944
                 ; Graphics/Converted/frame_palette_argb4.bin
                 DEFB #CC
-                DEFW 2944
+                DEFW 2976
                 ; Graphics/levels/Converted/top_masks/top_mask_meta.bin
                 DEFB #CD
-                DEFW 2976
+                DEFW 3008
                 ; Graphics/levels/Converted/top_masks/top_mask_page_cd.bin
                 DEFB #CE
-                DEFW 3008
+                DEFW 3040
                 ; Graphics/levels/Converted/top_masks/top_mask_page_ce.bin
                 DEFB #CF
-                DEFW 3040
+                DEFW 3072
                 ; Graphics/levels/Converted/top_masks/top_mask_page_cf.bin
                 DEFB #D0
-                DEFW 3072
+                DEFW 3104
                 ; Graphics/levels/Converted/top_masks/top_mask_page_d0.bin
                 DEFB #D1
-                DEFW 3104
+                DEFW 3136
                 ; Graphics/levels/Converted/top_masks/top_mask_page_d1.bin
                 DEFB #D2
-                DEFW 3136
+                DEFW 3168
                 ; Graphics/levels/Converted/top_masks/top_mask_page_d2.bin
                 DEFB #D3
-                DEFW 3168
+                DEFW 3200
                 ; Graphics/levels/Converted/top_masks/top_mask_page_d3.bin
                 DEFB #D4
-                DEFW 3200
+                DEFW 3232
                 ; Graphics/levels/Converted/top_masks/top_mask_page_d4.bin
                 DEFB #D5
-                DEFW 3232
+                DEFW 3264
                 ; Graphics/levels/Converted/top_masks/top_mask_page_d5.bin
                 DEFB #D6
-                DEFW 3264
+                DEFW 3296
                 ; Graphics/levels/Converted/top_masks/top_mask_page_d6.bin
                 DEFB #D7
-                DEFW 3296
+                DEFW 3328
                 ; Graphics/levels/Converted/top_masks/top_mask_page_d7.bin
                 DEFB #D8
-                DEFW 3328
+                DEFW 3360
                 ; Graphics/levels/Converted/top_masks/top_mask_page_d8.bin
                 DEFB #D9
-                DEFW 3360
+                DEFW 3392
                 ; Graphics/levels/Converted/top_masks/top_mask_page_d9.bin
                 DEFB #DA
-                DEFW 3392
+                DEFW 3424
                 ; Graphics/levels/Converted/top_masks/top_mask_page_da.bin
                 DEFB #DB
-                DEFW 3424
+                DEFW 3456
                 ; Graphics/levels/Converted/top_masks/top_mask_page_db.bin
                 DEFB #DC
-                DEFW 3456
+                DEFW 3488
                 ; Graphics/levels/Converted/top_masks/top_mask_page_dc.bin
                 DEFB #DD
-                DEFW 3488
+                DEFW 3520
                 ; Graphics/levels/Converted/top_masks/top_mask_page_dd.bin
                 DEFB #DE
-                DEFW 3520
+                DEFW 3552
                 ; Graphics/levels/Converted/top_masks/top_mask_page_de.bin
                 DEFB #DF
-                DEFW 3552
+                DEFW 3584
                 ; Graphics/levels/Converted/top_masks/top_mask_page_df.bin
                 DEFB #E0
-                DEFW 3584
+                DEFW 3616
                 ; Graphics/levels/Converted/top_masks/top_mask_page_e0.bin
                 DEFB #E1
-                DEFW 3616
+                DEFW 3648
                 ; Graphics/levels/Converted/top_masks/top_mask_page_e1.bin
                 DEFB #E2
-                DEFW 3648
+                DEFW 3680
                 ; Graphics/levels/Converted/top_masks/top_mask_page_e2.bin
                 DEFB #E3
-                DEFW 3680
+                DEFW 3712
                 ; Graphics/levels/Converted/top_masks/top_mask_page_e3.bin
                 DEFB #E4
-                DEFW 3712
+                DEFW 3744
                 ; Graphics/levels/Converted/top_masks/top_mask_page_e4.bin
                 DEFB #E5
-                DEFW 3744
+                DEFW 3776
                 ; Graphics/levels/Converted/top_masks/top_mask_page_e5.bin
                 DEFB #E6
-                DEFW 3776
+                DEFW 3808
                 ; Graphics/levels/Converted/top_masks/top_mask_page_e6.bin
                 DEFB #E7
-                DEFW 3808
+                DEFW 3840
                 ; Graphics/levels/Converted/top_masks/top_mask_page_e7.bin
                 DEFB #E8
-                DEFW 3840
+                DEFW 3872
                 ; Graphics/levels/Converted/top_masks/top_mask_page_e8.bin
                 DEFB #E9
-                DEFW 3872
+                DEFW 3904
                 ; Graphics/levels/Converted/top_masks/top_mask_page_e9.bin
                 DEFB #EA
-                DEFW 3904
+                DEFW 3936
                 ; Graphics/levels/Converted/top_masks/top_mask_page_ea.bin
                 DEFB #EB
-                DEFW 3936
+                DEFW 3968
                 ; Graphics/levels/Converted/top_masks/top_mask_page_eb.bin
                 DEFB #EC
-                DEFW 3968
+                DEFW 4000
                 ; Graphics/levels/Converted/top_masks/top_mask_page_ec.bin
                 DEFB #ED
-                DEFW 4000
+                DEFW 4032
                 ; Graphics/levels/Converted/top_masks/top_mask_page_ed.bin
                 DEFB #EE
-                DEFW 4032
+                DEFW 4064
                 ; Graphics/levels/Converted/top_masks/top_mask_page_ee.bin
                 DEFB #EF
-                DEFW 4064
+                DEFW 4096
                 ; Graphics/levels/Converted/top_masks/top_mask_page_ef.bin
                 DEFB #F0
-                DEFW 4096
+                DEFW 4128
                 ; Graphics/levels/Converted/top_masks/top_mask_page_f0.bin
                 DEFB #F1
-                DEFW 4128
+                DEFW 4160
                 ; Graphics/levels/Converted/top_masks/top_mask_page_f1.bin
                 DEFB #F2
-                DEFW 4160
+                DEFW 4192
                 ; Graphics/levels/Converted/top_masks/top_mask_page_f2.bin
                 DEFB #F3
-                DEFW 4192
+                DEFW 4224
                 ; Graphics/levels/Converted/top_masks/top_mask_page_f3.bin
                 DEFB #70
-                DEFW 4224
+                DEFW 4256
                 ; Graphics/Menu/Converted/main_screen_background_canvas_4x3_z00.zlib
                 DEFB #71
-                DEFW 4256
+                DEFW 4288
                 ; Graphics/Menu/Converted/main_screen_background_canvas_4x3_z00.zlib chunk 1
                 DEFB #72
-                DEFW 4288
+                DEFW 4320
                 ; Graphics/Menu/Converted/main_screen_background_canvas_4x3_z01.zlib
                 DEFB #73
-                DEFW 4320
+                DEFW 4352
                 ; Graphics/Menu/Converted/main_screen_background_canvas_4x3_z01.zlib chunk 1
                 DEFB #74
-                DEFW 4352
+                DEFW 4384
                 ; Graphics/Menu/Converted/main_screen_background_canvas_4x3_z02.zlib
                 DEFB #75
-                DEFW 4384
+                DEFW 4416
                 ; Graphics/Menu/Converted/main_screen_background_canvas_4x3_z02.zlib chunk 1
                 DEFB #76
-                DEFW 4416
+                DEFW 4448
                 ; Graphics/Menu/Converted/main_screen_background_canvas_4x3_z02.zlib chunk 2
                 DEFB #77
-                DEFW 4448
+                DEFW 4480
                 ; Graphics/Menu/Converted/main_screen_background_canvas_4x3_z03.zlib
                 DEFB #78
-                DEFW 4480
+                DEFW 4512
                 ; Graphics/Menu/Converted/main_screen_background_canvas_4x3_z03.zlib chunk 1
                 DEFB #79
-                DEFW 4512
+                DEFW 4544
                 ; Graphics/Menu/Converted/main_screen_background_canvas_4x3_z03.zlib chunk 2
                 DEFB #7A
-                DEFW 4544
+                DEFW 4576
                 ; Graphics/Menu/Converted/main_screen_background_canvas_4x3_z04.zlib
                 DEFB #7B
-                DEFW 4576
+                DEFW 4608
                 ; Graphics/Menu/Converted/main_screen_background_canvas_4x3_z04.zlib chunk 1
                 DEFB #7C
-                DEFW 4608
+                DEFW 4640
                 ; Graphics/Menu/Converted/main_screen_background_canvas_4x3_z04.zlib chunk 2
                 DEFB #7D
-                DEFW 4640
+                DEFW 4672
                 ; Graphics/Menu/Converted/main_screen_sky_canvas_4x3.zlib
                 DEFB #7E
-                DEFW 4672
+                DEFW 4704
                 ; Graphics/Menu/Converted/main_screen_sky_canvas_4x3.zlib chunk 1
                 DEFB #7F
-                DEFW 4704
+                DEFW 4736
                 ; Graphics/Menu/Converted/main_screen_sky_canvas_4x3.zlib chunk 2
                 DEFB #80
-                DEFW 4736
+                DEFW 4768
                 ; Graphics/Menu/Converted/main_sun.zlib
                 DEFB #81
-                DEFW 4768
+                DEFW 4800
                 ; Graphics/Menu/Converted/main_sun_light.zlib
                 DEFB #82
-                DEFW 4800
+                DEFW 4832
                 ; Graphics/Menu/Converted/main_button_adventure_normal.zlib
                 DEFB #83
-                DEFW 4832
+                DEFW 4864
                 ; Graphics/Menu/Converted/main_button_adventure_hover.zlib
                 DEFB #84
-                DEFW 4864
+                DEFW 4896
                 ; Graphics/Menu/Converted/main_button_adventure_pressed.zlib
                 DEFB #85
-                DEFW 4896
+                DEFW 4928
                 ; Graphics/Menu/Converted/main_button_gauntlet_normal.zlib
                 DEFB #86
-                DEFW 4928
+                DEFW 4960
                 ; Graphics/Menu/Converted/main_button_gauntlet_hover.zlib
                 DEFB #87
-                DEFW 4960
+                DEFW 4992
                 ; Graphics/Menu/Converted/main_button_gauntlet_pressed.zlib
                 DEFB #88
-                DEFW 4992
+                DEFW 5024
                 ; Graphics/Menu/Converted/main_button_options_normal.zlib
                 DEFB #89
-                DEFW 5024
+                DEFW 5056
                 ; Graphics/Menu/Converted/main_button_options_hover.zlib
                 DEFB #8A
-                DEFW 5056
+                DEFW 5088
                 ; Graphics/Menu/Converted/main_button_options_pressed.zlib
                 DEFB #8B
-                DEFW 5088
+                DEFW 5120
                 ; Graphics/Menu/Converted/main_button_more_games_normal.zlib
                 DEFB #8C
-                DEFW 5120
+                DEFW 5152
                 ; Graphics/Menu/Converted/main_button_more_games_hover.zlib
                 DEFB #8D
-                DEFW 5152
+                DEFW 5184
                 ; Graphics/Menu/Converted/main_button_more_games_pressed.zlib
                 DEFB #8E
-                DEFW 5184
+                DEFW 5216
                 ; Graphics/Menu/Converted/main_button_quit_normal.zlib
                 DEFB #8F
-                DEFW 5216
+                DEFW 5248
                 ; Graphics/Menu/Converted/main_button_quit_hover.zlib
                 DEFB #90
-                DEFW 5248
+                DEFW 5280
                 ; Graphics/Menu/Converted/main_button_quit_pressed.zlib
                 DEFB #91
-                DEFW 5280
+                DEFW 5312
                 ; Graphics/Menu/Converted/main_menu_sky_palette_argb4.bin
                 DEFB #92
-                DEFW 5312
-                ; Graphics/Menu/Converted/main_menu_ui_palette_argb4.bin
-                DEFB #93
                 DEFW 5344
-                ; Graphics/Menu/Converted/menu_cursor_argb4.zlib
+                ; Graphics/Menu/Converted/main_menu_ui_palette_argb4.bin
                 DEFB #94
                 DEFW 5376
                 ; Graphics/Menu/Converted/level_select_screen_background_canvas_4x3_z00.zlib

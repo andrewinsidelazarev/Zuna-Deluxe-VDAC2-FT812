@@ -17,6 +17,8 @@ def arm_frog_for_spawn(sim) -> None:
     sb(sim, "Core.VDC_DialogState", 0)
     sb(sim, "Core.Bullet_Active", 0)
     sb(sim, "Core.BulletTrajValid", 0)
+    if "Core.VDC_LoseShotState" in s:
+        sb(sim, "Core.VDC_LoseShotState", 0)
     sb(sim, "Core.Frog_BallColor", 2)
     sb(sim, "Core.Frog_Angle", 0)
     sim.set_byte(s["Core.Frog_PosStartX"], 0)
@@ -80,13 +82,33 @@ def run_absorb_clears_active_shot() -> bool:
     return ok
 
 
+def run_absorb_spawn_block_case() -> bool:
+    sim = make_sim()
+    arm_frog_for_spawn(sim)
+    sb(sim, "Core.VDC_GameState", 1)
+    sb(sim, "Core.VDC_KzFrame", 11)
+
+    sim.call(sim.sym["Core.Bullet_Spawn"], max_steps=5_000_000)
+
+    active = bullet_active(sim)
+    ok = active == 0
+    print(
+        f"{'PASS' if ok else 'FAIL'}: ABSORB блокирует новый выстрел: "
+        f"state=1 bullet={active}, ожидалось=0"
+    )
+    return ok
+
+
 def main() -> int:
     checks = [
         run_spawn_case("закрытый череп разрешает обычный выстрел", 1, 0, 1),
-        run_spawn_case("раннее открытие KZ цепи 1 ещё разрешает выстрел", 2, 0, 1),
-        run_spawn_case("раннее открытие KZ цепи 2 ещё разрешает выстрел", 1, 2, 1),
-        run_spawn_case("последняя фаза KZ цепи 1 блокирует выстрел", 9, 0, 0),
-        run_spawn_case("последняя фаза KZ цепи 2 блокирует выстрел", 1, 9, 0),
+        run_spawn_case("открытый KZ цепи 1 в PLAY разрешает спасательный выстрел", 2, 0, 1),
+        run_spawn_case("открытый KZ цепи 2 в PLAY разрешает спасательный выстрел", 1, 2, 1),
+        run_spawn_case("открытый KZ frame 8 цепи 1 ещё разрешает спасательный выстрел", 8, 0, 1),
+        run_spawn_case("открытый KZ frame 8 цепи 2 ещё разрешает спасательный выстрел", 1, 8, 1),
+        run_spawn_case("последняя фаза KZ цепи 1 блокирует новый выстрел", 9, 0, 0),
+        run_spawn_case("последняя фаза KZ цепи 2 блокирует новый выстрел", 1, 9, 0),
+        run_absorb_spawn_block_case(),
         run_absorb_clears_active_shot(),
     ]
     return 0 if all(checks) else 1

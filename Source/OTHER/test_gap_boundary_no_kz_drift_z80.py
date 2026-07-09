@@ -122,14 +122,44 @@ class Rig:
                 return i, self.slot_t(i)
         return None
 
+    def all_visual_gap_front_edges(self):
+        slots = self.slots()
+        offs = self.offsets()
+        out = []
+        i = 0
+        while i < len(slots):
+            if slots[i] < 6:
+                i += 1
+                continue
+            left = i - 1
+            while left >= 0 and slots[left] >= 6:
+                left -= 1
+            right = i
+            while right < len(slots) and slots[right] >= 6:
+                right += 1
+            if left >= 0 and right < len(slots) and slots[right] < 6:
+                out.append(("marker", left, self.slot_t(left)))
+            i = right
+        for i in range(len(slots) - 1):
+            if slots[i] >= 6 or slots[i + 1] >= 6:
+                continue
+            pixel_dist = CELL + offs[i] - offs[i + 1]
+            if pixel_dist > CELL:
+                out.append(("offset", i, self.slot_t(i)))
+        return out
+
     def gap_count(self) -> int:
         return sum(1 for slot in self.slots() if slot >= 6)
 
-    def check_no_front_gap_kz_drift(self, label: str, frames: int) -> bool:
+    def check_no_front_gap_kz_drift(
+        self, label: str, frames: int, check_slow_backward: bool = True
+    ) -> bool:
         prev = None
         prev_front = None
+        prev_fronts = {}
         bad = []
         bad_front = []
+        bad_any_front = []
         slow_front = []
         for frame in range(1, frames + 1):
             self.sim.call(self.s["Core.VDC_Update"])
@@ -161,6 +191,19 @@ class Rig:
                                        self.gb("Core.VDC_GapJunction"),
                                        self.slots(), self.offsets()))
             prev_front = cur_front
+            cur_fronts = {
+                (kind, idx): t
+                for kind, idx, t in self.all_visual_gap_front_edges()
+            }
+            for key, cur_t in cur_fronts.items():
+                if key in prev_fronts and cur_t > prev_fronts[key]:
+                    bad_any_front.append((frame, key, prev_fronts[key], cur_t,
+                                          self.gb("Core.VDC_HSA"), self.gb("Core.VDC_HSub"),
+                                          self.gb("Core.VDC_ChainFreezeCnt"),
+                                          self.gb("Core.VDC_GapJunction"),
+                                          self.slots(), self.offsets()))
+                    break
+            prev_fronts = cur_fronts
         if bad:
             frame, old_idx, new_idx, old_t, new_t, hsa, hsub, freeze, junction, slots, offs = bad[0]
             print(
@@ -177,7 +220,15 @@ class Rig:
                 f"slots={slots} offsets={offs}"
             )
             return False
-        if slow_front:
+        if bad_any_front:
+            frame, key, old_t, new_t, hsa, hsub, freeze, junction, slots, offs = bad_any_front[0]
+            print(
+                f"{label}: FAIL any front moved frame={frame} key={key} "
+                f"t {old_t}->{new_t} HSA={hsa}.{hsub:02d} freeze={freeze} "
+                f"junction={junction} slots={slots} offsets={offs}"
+            )
+            return False
+        if check_slow_backward and slow_front:
             frame, old_idx, new_idx, old_t, new_t, hsa, hsub, freeze, junction, slots, offs = slow_front[0]
             print(
                 f"{label}: FAIL slow backward pull frame={frame} idx={old_idx}->{new_idx} "
@@ -191,6 +242,9 @@ class Rig:
     def trigger_match(self, idx: int) -> None:
         self.sb("Core.VDC_TmpInsIdx", idx)
         self.sim.call(self.s["Core.VDC_CheckMatch3"])
+
+    def insert_at(self, idx: int, color: int) -> None:
+        self.sim.call(self.s["Core.VDC_InsertAt"], a=idx, b=color)
 
 
 def main() -> int:
@@ -206,6 +260,42 @@ def main() -> int:
     stale_ok = rig.gb("Core.VDC_HSub") == hsub0
     print(f"stale GapJunction internal gap hold: {'OK' if stale_ok else 'FAIL'}")
     ok &= stale_ok
+
+    # Insert поверх уже открытой внутренней дырки не должен делать обычный
+    # глобальный HSA++ push. Иначе вставленный шар оставляет отрицательные
+    # offset'ы на переднем сегменте; пока MoveChain удержан дыркой, эти offset'ы
+    # тают и тянут дырку/передние шары к kill-zone.
+    for speed in (50, 100):
+        rig.setup_chain([0, GAP_STOP, 1, 2], freeze=0, speed=speed)
+        before = rig.first_visual_gap_front_edge()
+        hsa0 = rig.gb("Core.VDC_HSA")
+        rig.insert_at(4, 5)  # без match; добавляем за открытой дыркой
+        after = rig.first_visual_gap_front_edge()
+        hsa_ok = rig.gb("Core.VDC_HSA") == hsa0
+        edge_ok = before is not None and after is not None and after[1] <= before[1]
+        print(
+            f"insert over gap no global push speed={speed}: "
+            f"{'OK' if hsa_ok and edge_ok else 'FAIL'} "
+            f"HSA {hsa0}->{rig.gb('Core.VDC_HSA')} edge {before}->{after}"
+        )
+        ok &= hsa_ok and edge_ok
+        ok &= rig.check_no_front_gap_kz_drift(f"post-insert gap no KZ drift speed={speed}", 80)
+
+    # Несколько дырок: отдача от закрытия одного PULL-стыка не должна проходить
+    # через следующую открытую дырку и двигать её передний край к kill-zone.
+    rig.setup_chain([3, 0, GAP_STOP, 0, 1, GAP_STOP, 1, 2], freeze=0, speed=30)
+    rig.insert_at(5, 5)
+    ok &= rig.check_no_front_gap_kz_drift("изоляция отдачи между несколькими дырками после insert", 120)
+
+    # После исчезновения GAP-marker'ов внутренние дырки остаются как разница
+    # offset'ов соседних живых шаров. Если передний шар такой offset-дырки имеет
+    # отрицательный offset, обычное таяние к нулю двигало край к kill-zone.
+    rig.setup_chain([0, GAP_STOP, 1, GAP_STOP, 1], freeze=0, speed=50)
+    ok &= rig.check_no_front_gap_kz_drift(
+        "удержание отрицательного края offset-дырки",
+        120,
+        check_slow_backward=False,
+    )
 
     # Реальный match: 15 кадров взрыва раньше съедали часть freeze, и CATCH-UP
     # успевал начать двигать передний marker к kill-zone до первого DoGapStep.

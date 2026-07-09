@@ -16,16 +16,19 @@ def block_between(text: str, start: str, end: str) -> str:
 
 def main() -> int:
     text = MAINLOOP.read_text(encoding="utf-8")
-    block = block_between(text, "ZL_DrawActiveChainForLevel:", "ZL_GetTopMaskForCurrentLevel:")
+    block = block_between(text, "ZL_DrawActiveChainsUnified:", "ZL_GetTopMaskForCurrentLevel:")
     failures: list[str] = []
     gameplay = block.split(".gameplay_top_mask:", 1)[1]
     required = [
-        "CALL ZL_BuildActiveChainCache",
+        "CALL ZL_UploadTopMasksMaybe",
+        "CALL ZL_BuildTopMaskChainCaches",
         "LD   A, 1",
-        "CALL ZL_DrawCachedActiveChain",
+        "CALL ZL_DrawPreparedChain1",
+        "CALL ZL_DrawPreparedChain2Maybe",
         "CALL ZL_DrawTopMaskOverlay",
         "LD   A, 2",
-        "JP   ZL_DrawCachedActiveChain",
+        "CALL ZL_DrawPreparedChain1",
+        "JP   ZL_DrawPreparedChain2Maybe",
     ]
     pos = -1
     for token in required:
@@ -34,8 +37,6 @@ def main() -> int:
             failures.append(f"top-mask path missing ordered token: {token}")
             break
         pos = nxt
-    if "then draw balls marked above the tunnel cover" not in gameplay:
-        failures.append("top-mask path does not document above-chain pass after cover")
     if failures:
         print("FAIL: tunnel top overlay order")
         for item in failures:

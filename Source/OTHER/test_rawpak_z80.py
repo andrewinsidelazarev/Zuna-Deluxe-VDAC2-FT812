@@ -108,11 +108,21 @@ def main():
         if cf: emu.reg.F |= 0x01
         else:  emu.reg.F &= ~0x01
 
+    def ft_write_mem():
+        dest = ((emu.reg.A & 0xFF) << 16) | ((emu.reg.D & 0xFF) << 8) | (emu.reg.E & 0xFF)
+        src = ((emu.reg.H & 0xFF) << 8) | (emu.reg.L & 0xFF)
+        size = ((emu.reg.B & 0xFF) << 8) | (emu.reg.C & 0xFF)
+        wm_calls.append((emu.reg.A, emu.reg.D, emu.reg.E, emu.reg.B, emu.reg.C, src))
+        if 0 <= dest < len(emu.ft.ram_g):
+            end = min(dest + size, len(emu.ft.ram_g))
+            data = bytes(emu.mem.read((src + i) & 0xFFFF) for i in range(end - dest))
+            emu.ft.ram_g[dest:end] = data
+        hook_ret(False)
+
     H = {
         sym["Core.sd_init"]: lambda: hook_ret(False),
         sym["Core.ZiFi_Done"]: lambda: hook_ret(False),
-        sym["FT.WriteMem"]: lambda: (wm_calls.append((emu.reg.A, emu.reg.D, emu.reg.E,
-                                     emu.reg.B, emu.reg.C, ix_of(emu.reg))), hook_ret(False)),
+        sym["FT.WriteMem"]: ft_write_mem,
     }
     def sd_fill():
         lba = (emu.reg.L | (emu.reg.H << 8)) | ((emu.reg.E | (emu.reg.D << 8)) << 16)
