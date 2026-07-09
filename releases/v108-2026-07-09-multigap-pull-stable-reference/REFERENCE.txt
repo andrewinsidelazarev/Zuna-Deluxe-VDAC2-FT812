@@ -22,7 +22,6 @@ v108-2026-07-09-multigap-pull-stable-reference
 - v108-2026-07-09-multigap-pull-stable-reference.zumaaud.pak
 - v108-2026-07-09-multigap-pull-stable-reference.zumasnd.pak
 - v108-2026-07-09-multigap-pull-stable-reference.zuma.sym
-- v108-2026-07-09-multigap-pull-stable-reference.ay_sfx_data.bin
 
 Проверки текущей сборки — PASS:
 - build.cmd
