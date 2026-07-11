@@ -2885,12 +2885,12 @@ OVL_LoadGameplayLevelSpecificFromPack:
                 XOR  A
                 LD   (BulletTrajValid), A
 
-                ; Metadata magic/version: "ZTV2".
+                ; Сигнатура и версия метаданных: "ZTV4" (упакованный VERTEX2F + spin/флаги).
                 LD   IX, #8000
                 LD   A, (IX+0) : CP #5A : JP NZ, .Err  ; 'Z'
                 LD   A, (IX+1) : CP #54 : JP NZ, .Err  ; 'T'
                 LD   A, (IX+2) : CP #56 : JP NZ, .Err  ; 'V'
-                LD   A, (IX+3) : CP #32 : JP NZ, .Err  ; '2'
+                LD   A, (IX+3) : CP #34 : JP NZ, .Err  ; '4'
                 LD   A, (IX+10) : CP TRACK_V2_REC : JP NZ, .Err
                 LD   L, (IX+11)
                 LD   H, (IX+12)

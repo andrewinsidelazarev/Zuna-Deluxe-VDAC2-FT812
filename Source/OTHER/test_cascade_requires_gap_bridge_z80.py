@@ -41,6 +41,7 @@ def setup(sim, slots, shot2_idx, bridge_k):
             sim.set_byte(s[name], 0)
     sim.set_byte(s["Core.VDC_MatchScanIdx"], bridge_k)
     sim.set_byte(s["Core.VDC_Shot2"] + shot2_idx, 1)
+    sim.call(s["Core.VDC_MarkShot2Maybe"])
 
 
 def explode_frames(sim, count):
@@ -80,6 +81,7 @@ def main():
         slots[i] = 2
     setup(sim, slots, shot2_idx=5, bridge_k=19)
     sim.set_byte(s["Core.VDC_Shot2"] + 18, 1)
+    sim.call(s["Core.VDC_MarkShot2Maybe"])
     sim.set_byte(s["Core.VDC_ChainFreezeCnt"], 1)
     if "Core.VDC_BridgeScanActive" in s:
         sim.set_byte(s["Core.VDC_BridgeScanActive"], 1)

@@ -51,6 +51,10 @@ def main() -> int:
         raise AssertionError("ARGB4 explosion color extraction must shift cell >> 4")
     if ".de_next:       LD   DE, 7" not in text:
         raise AssertionError("ZL_DrawExplosions must step ZL_BALL_CACHE_ADDR by 7-byte records")
+    if "CALL ZL_DecodeCachedVertex2f" not in text:
+        raise AssertionError("ZL_DrawExplosions must decode packed Track V4 cache coordinates")
+    if "CP   #FF" not in text:
+        raise AssertionError("ZL_DrawExplosions must skip gap/offscreen cache records")
 
     ball_table = extract_table(text, "ZL_BallColorRGB")
     explosion_table = extract_table(text, "ZL_ExplosionRGBTable")

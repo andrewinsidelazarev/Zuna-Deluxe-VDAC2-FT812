@@ -64,6 +64,7 @@ class Rig:
             h.e.set_byte(self.offs + i, 0)
             h.e.set_byte(self.shot2 + i, 0)
             h.e.set_byte(self.expl + i, 0)
+        h.call("Core.VDC_MarkTopologyDirty", max_steps=20_000)
 
     def gaps(self):
         n = self.h.gb("Core.VDC_SlotsLen")
@@ -278,6 +279,7 @@ def main() -> int:
         rig = Rig()
         rig.build_chain(colors, hsa=hsa)
         rig.h.e.set_byte(rig.shot2 + shot2_idx, 1)
+        rig.h.call("Core.VDC_MarkShot2Maybe", max_steps=20_000)
         rig.h.sb("Core.VDC_LevelSpeed", 50)
         rig.h.sb("Core.VDC_GaugeFull", 1)       # win-фаза: спавн off, доспавн no-op
         f = 0

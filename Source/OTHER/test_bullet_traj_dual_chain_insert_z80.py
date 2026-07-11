@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import sys
-import struct
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "Source" / "OTHER"))
 
+from make_level_pack import encode_track_v4_record  # noqa: E402
 from zuma_full_z80_emulator import PAGE_SIZE, ZumaFullZ80Emulator  # noqa: E402
 
 
@@ -38,7 +38,8 @@ def seed_dual_chain_fixture(emu: ZumaFullZ80Emulator) -> None:
     sw("Core.VDC_TrackSamples2", 512)
 
     # slot 0 at HSA=5,HSub=0 maps to sample t=160. Put that sample at (200,200).
-    sample = struct.pack("<hhBBxx", (200 - 26) * 16, (200 - 26) * 16, 0, 0)
+    spin12 = ((160 * 61) >> 8) % 12
+    sample = encode_track_v4_record((200 - 26) * 16, (200 - 26) * 16, 0, 0, spin12)
     page_write(0x10, 160 * 8, sample)
 
     sb("Core.VDC_SlotsLen", 3)

@@ -339,12 +339,12 @@ class Fat32Image:
 def prepare_host_package(root: Path) -> list[Path]:
     package_dir = root / "Build" / "SD" / "Games" / "Zuma Deluxe VDAC2"
     package_dir.mkdir(parents=True, exist_ok=True)
-    for stale_name in ("SPGBLD.INI", "ZUMA.SYM", "README.TXT"):
+    for stale_name in ("SPGBLD.INI", "ZUMA.SYM", "README.TXT", "ZUMA_VD2.SPG"):
         stale = package_dir / stale_name
         if stale.exists():
             stale.unlink()
     files = [
-        (root / "Build" / "ZUMA_VD2.SPG", package_dir / "ZUMA_VD2.SPG"),
+        (root / "Build" / "zuma_vdac2.spg", package_dir / "zuma_vdac2.spg"),
         (root / "Build" / "ZUMAMAIN.PAK", package_dir / "ZUMAMAIN.PAK"),
         (root / "Build" / "ZUMALVL.PAK", package_dir / "ZUMALVL.PAK"),
         (root / "Build" / "ZUMAAUD.PAK", package_dir / "ZUMAAUD.PAK"),
@@ -385,7 +385,14 @@ def main() -> int:
     package_files = prepare_host_package(root)
     games = image.ensure_dir(image.root_cluster, "Games")
     zuma = image.ensure_dir(games, "Zuma Deluxe VDAC2")
-    for stale_name in ("SPGBLD.INI", "ZUMA.SYM", "README.TXT", "ZUMA_CVX.PAK", "ZUMA_CVX.PAC"):
+    for stale_name in (
+        "SPGBLD.INI",
+        "ZUMA.SYM",
+        "README.TXT",
+        "ZUMA_CVX.PAK",
+        "ZUMA_CVX.PAC",
+        "ZUMA_VD2.SPG",
+    ):
         stale = image.find_entry(zuma, stale_name)
         if stale:
             image.free_chain(stale["cluster"])

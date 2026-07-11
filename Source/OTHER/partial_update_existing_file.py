@@ -8,7 +8,7 @@ from inject_zuma_to_wc_img import ATTR_DIRECTORY, Fat32Image
 
 
 DEFAULT_IMG = Path(r"\\tsclient\D\Работа.Андрей\unreal_x64\wc.img")
-DEFAULT_TARGET = ("Games", "Zuma Deluxe VDAC2", "ZUMA_VD2.SPG")
+DEFAULT_TARGET = ("Games", "Zuma Deluxe VDAC2", "zuma_vdac2.spg")
 
 
 def find_path(image: Fat32Image, parts: tuple[str, ...]) -> dict:

@@ -25,8 +25,8 @@
 ;
 ; Все функции корраптят AF/BC/DE/HL; VDC_InsertAt также портит IX через
 ; VDC_ShiftRight_*.
-; Track V2 layout (active pages выбираются через VDC_pTrackPages):
-;   чистые 16K pages из 8-byte samples: Vx, Vy, tangent, flags, padding.
+; Раскладка Track V4 (активные страницы выбираются через VDC_pTrackPages):
+;   чистые страницы 16 Кб: упакованный VERTEX2F, касательная, флаги, spin12, признаки знака/видимости.
 ;   NumSamples грузится из track metadata sector в VDC_ActiveTrackSamples.
 ; ============================================================================
 
@@ -85,6 +85,19 @@ VDC_CLOSING_TICKS  EQU 22                                 ; ~0.37 сек closing
 VDC_WIN_TICKS      EQU VDC_PREVIEW_TICKS                  ; fallback-таймер (когда нет аутро); при активном аутро конец = VDC_WinOutroDone
 VDC_AY_ROLLING_RETRIGGER_TICKS EQU 22                     ; чуть меньше 24 AY ticks у SND_ROLLING, чтобы fast-fill не замолкал
 
+; Постоянный кеш топологии. Байт состояния лежит прямо перед Slots[]
+; каждой логической цепочки и выбирается как (VDC_pSlots-1), не увеличивая
+; 33-байтный VDC_SwapBlock.
+VDC_TOPO_INTERNAL_VALUE EQU %00000001
+VDC_TOPO_OFFSETS_MAYBE  EQU %00000010
+VDC_TOPO_OFFSETS_BIT    EQU 1
+VDC_TOPO_SHOT2_MAYBE    EQU %00100000
+VDC_TOPO_SHOT2_BIT      EQU 5
+VDC_TOPO_JUNCTION_DIRTY EQU %01000000
+VDC_TOPO_INTERNAL_DIRTY EQU %10000000
+VDC_TOPO_DIRTY_MASK     EQU %11000000
+VDC_TOPO_KEEP_INTERNAL  EQU %01111110
+
 ; ============================================================================
 ; VDC_Init — обнулить state, Slots[] = GAP_STOP. Должен быть вызван 1 раз
 ; до любого VDC_Update / VDC_SlotPos / VDC_InsertAt.
@@ -120,6 +133,9 @@ VDC_Init:
                 LD   (VDC_GapAccum),           A
                 LD   (VDC_GapAccum + 1),       A
                 LD   (VDC_GapJunction),        A
+                ; Для обеих пустых цепочек точный кешированный результат равен нулю.
+                LD   (VDC_TopologyState1),     A
+                LD   (VDC_TopologyState2),     A
                 LD   (VDC_GapDecAcc),          A
                 LD   (VDC_GapPosLeft),         A
                 LD   (VDC_BallsSpawned),       A
@@ -323,6 +339,12 @@ VDC_InitSecondChainMaybe:
                 LD   DE, VDC2_Slots
                 LD   BC, VDC_MAX_SLOTS * 5
                 LDIR
+                ; Сейчас инициализатор копирует пустую цепочку, но признаки «грязно»
+                ; сохраняют корректность и при будущем копировании непустой цепочки.
+                LD   A, (VDC_TopologyState1)
+                AND  VDC_TOPO_SHOT2_MAYBE | VDC_TOPO_OFFSETS_MAYBE
+                OR   VDC_TOPO_DIRTY_MASK
+                LD   (VDC_TopologyState2), A
                 LD   A, (VDC_HSub)
                 LD   (VDC2_HSub), A
                 LD   A, (VDC_SlotsLen)
@@ -398,6 +420,34 @@ VDC_SwapChains:
                 LD   DE, VDC2_ChainLocal
                 LD   BC, VDC_ChainLocalEnd - VDC_ChainLocalStart
                 JP   VDC_SwapBlock
+
+; Лёгкое переключение представления цепочки только для построителя кеша отрисовки.
+; ZL_BuildActiveChainCache читает из ChainLocal лишь HSA; остальные нужные ему
+; данные — HSub, SlotsLen и массивы через VDC_pSlots/VDC_pOffsets. SecondActive
+; сохраняет выбор WIN-снимка. Вызывать строго парой вокруг построения кеша:
+; физическое состояние обеих цепочек после второго вызова побайтно неизменно.
+VDC_SwapRenderChains:
+                LD   A, (VDC_HasSecondChain)
+                OR   A
+                RET  Z
+                LD   A, (VDC_SecondActive)
+                XOR  1
+                LD   (VDC_SecondActive), A
+                OR   A
+                JR   NZ, .toChain2
+                CALL VDC_SelectChain1
+                JR   .scalars
+.toChain2:      CALL VDC_SelectChain2
+.scalars:
+                LD   HL, VDC_HSub
+                LD   DE, VDC2_HSub
+                CALL VDC_SwapByte
+                LD   HL, VDC_SlotsLen
+                LD   DE, VDC2_SlotsLen
+                CALL VDC_SwapByte
+                LD   HL, VDC_HSA
+                LD   DE, VDC2_ChainLocal + (VDC_HSA - VDC_ChainLocalStart)
+                JP   VDC_SwapByte
 
 VDC_SwapBlock:
                 LD   A, B
@@ -653,13 +703,6 @@ VDC_Update:
                 JP   VDC_TrySpawnBoundaryAware
 
 VDC_UpdateAllChains:
-                ; WIN-снимок позиций/цветов шаров ДО апдейта (только в PLAY), пока
-                ; цепочка ещё видима. К моменту WIN (SlotsLen==0) шаров уже нет.
-                ; Вся снимок-логика — в VDC_WinSnapAllChains (read-only, свопы цепочек
-                ; парные → состояние восстановлено). Поток апдейта ниже = оригинал.
-                LD   A, (VDC_GameState)
-                OR   A
-                CALL Z, VDC_WinSnapAllChains
                 LD   A, (VDC_GameState)
                 CP   VDC_STATE_ABSORB
                 JR   NZ, .upd_primary_normal
@@ -945,88 +988,6 @@ VDC_UpdateActiveChainPlayOnly:
                 ENDIF
                 CALL VDC_AnimateChain
                 JP   VDC_TrySpawnBoundaryAware
-
-; ============================================================================
-; WIN-снимок: сэмпл ГОЛОВНОГО шара (ближайшего к килл-зоне) каждой цепочки.
-; Снимается каждый PLAY-кадр ДО апдейта. keep-last-non-empty: обновляем только
-; если в цепочке есть видимые шары (иначе храним прошлый кадр — к WIN цепочка
-; пуста). Голова = максимальный track-сэмпл среди видимых шаров (фронт цепи).
-; Свопы цепочек парные → read-only по отношению к состоянию цепочек.
-; ============================================================================
-VDC_WinSnapAllChains:
-                CALL VDC_SnapshotWinChain              ; chain1 (текущий трек активен)
-                JR   C, .c2                            ; нет видимых шаров → храним прошлый
-                LD   (VDC_WinHeadS1), HL
-.c2:            LD   A, (VDC_HasSecondChain)
-                OR   A
-                RET  Z
-                CALL VDC_SwapChains
-                CALL SetSecondTrackPage
-                CALL VDC_SnapshotWinChain              ; chain2
-                JR   C, .c2_keep
-                LD   (VDC_WinHeadS2), HL               ; запись в резидент — до возврата цепочки
-.c2_keep:       CALL VDC_SwapChains
-                JP   SetCurrentTrackPage
-
-; VDC_SnapshotWinChain — макс. track-сэмпл видимых шаров текущей активной цепочки.
-; Выход: CF=0 + HL = head sample (фронт), если есть видимый шар; CF=1 если нет.
-VDC_SnapshotWinChain:
-                LD   A, (VDC_SlotsLen)
-                OR   A
-                JR   Z, .none
-                LD   B, A                              ; B = число слотов
-                LD   C, 0                              ; C = индекс слота
-                LD   HL, 0
-                LD   (VDC_WinTmpMax), HL
-                XOR  A
-                LD   (VDC_WinTmpFound), A
-.snap_loop:     PUSH BC
-                ; 1. Проверяем маркер/gap
-                LD   HL, (VDC_pSlots)
-                LD   B, 0
-                ADD  HL, BC
-                LD   A, (HL)
-                CP   VDC_NUM_COLORS
-                JR   NC, .snap_skip                    ; пропускаем если это gap/маркер
-                
-                ; 2. Вычисляем t
-                LD   A, C
-                CALL VDC_SlotT                         ; HL = t
-                
-                ; 3. Пропускаем если t < 0
-                BIT  7, H
-                JR   NZ, .snap_skip
-                
-                ; 4. Ограничить t к NumSamples-1
-                PUSH HL
-                LD   DE, (VDC_ActiveTrackSamples)
-                AND  A
-                SBC  HL, DE
-                POP  HL
-                JR   C, .t_in
-                LD   HL, (VDC_ActiveTrackSamples)
-                DEC  HL
-.t_in:
-                ; 5. Обновляем максимум
-                LD   A, 1
-                LD   (VDC_WinTmpFound), A
-                LD   DE, (VDC_WinTmpMax)
-                AND  A
-                SBC  HL, DE                            ; t - max
-                JR   C, .snap_skip                     ; t < max → пропускаем
-                ADD  HL, DE                            ; восстанавливаем t
-                LD   (VDC_WinTmpMax), HL               ; новый максимум
-.snap_skip:     POP  BC
-                INC  C
-                DJNZ .snap_loop
-                LD   A, (VDC_WinTmpFound)
-                OR   A
-                JR   Z, .none
-                LD   HL, (VDC_WinTmpMax)
-                AND  A                                 ; CF=0
-                RET
-.none:          SCF
-                RET
 
 VDC_UpdateSfxStopTimer:
                 LD   A, (VDC_SfxStopTimer)
@@ -1320,8 +1281,8 @@ VDC_TrySpawn_NoHsubGate:
                 JR   NZ, .spawn_done
                 DEC  (HL)                              ; насыщение на 255; без wrap в fast-фазе
 .spawn_done:
-                RET                                    ; один spawn на тик (= Python коллеги).
-                                                       ; Множественный spawn даёт мгновенный рост цепи = дёрганость.
+                JP   VDC_MarkTopologyDirty             ; один шар за такт (как в эталоне Python).
+                                                       ; Выдача нескольких шаров даёт мгновенный рост цепи = дёрганость.
 
 ; Нормальная фаза: если в этом кадре уже был переход HSub 31→0, разрешаем
 ; spawn без повторной проверки текущего HSub. Иначе используем обычный gate.
@@ -1364,7 +1325,7 @@ VDC_MoveChain:
                 ; Внутренняя дырка (шар -> GAP -> шар) не имеет права ехать
                 ; к kill-zone обычным HSub++. VDC_GapJunction здесь ненадёжен:
                 ; это тип текущего стыка, а не факт наличия живой дырки.
-                CALL VDC_InternalGapExists
+                CALL VDC_InternalGapExistsCached
                 RET  C
 .mc_check_pos_hold:
                 ; После удаления marker'а передний сегмент удерживается
@@ -1411,7 +1372,12 @@ VDC_MoveChain:
 ; После — ScanForNewMatch + UpdateStall.
 ; ============================================================================
 VDC_AnimateChain:
-                ; --- 0. Match-3 explosion animation.
+                ; --- 0. Анимация взрыва match-3. VDC_ApplyMatch3 поднимает
+                ; отдельный флаг цепочки до записи таймеров; последний активный кадр
+                ; сбрасывает его ниже. В обычном кадре без взрывов не сканируем весь массив.
+                LD   A, (VDC_ExplodeActive)
+                OR   A
+                JR   Z, .ac_after_explode
                 XOR  A
                 LD   (VDC_ExplodeActive), A
                 LD   A, (VDC_SlotsLen)
@@ -1442,6 +1408,7 @@ VDC_AnimateChain:
                 LD   DE, (VDC_pSlots)
                 ADD  HL, DE
                 LD   (HL), C
+                CALL VDC_MarkTopologyDirty
                 ; Чистый offset для закрытия гэпа — слот стал маркером и больше
                 ; не рендерится (обнулять раньше нельзя: прыжок взрыва).
                 LD   A, (VDC_SlotsLen)
@@ -1491,10 +1458,14 @@ VDC_AnimateChain:
                 LD   D, 1                              ; догон: положительные «как раньше»
                 LD   E, C                              ; CATCH-UP: точный темп для отрицательных
 .ac_dec_rates_ok:
-                LD   C, 0                              ; C = флаг «положительные остались»
+                LD   C, 0                              ; bit0 = доезд, bit7 = любой offset после decay
+                LD   HL, (VDC_pSlots)
+                DEC  HL
+                BIT  VDC_TOPO_OFFSETS_BIT, (HL)
+                JR   Z, .ac_dec_flag                   ; нулевой latch строго доказывает чистый массив
                 LD   A, (VDC_SlotsLen)
                 OR   A
-                JR   Z, .ac_dec_flag
+                JR   Z, .ac_offsets_done
                 LD   B, A
                 LD   HL, (VDC_pOffsets)
 .ac_decay:
@@ -1506,7 +1477,7 @@ VDC_AnimateChain:
                 SUB  D                                 ; pos (front-comp подтяжки)
                 JR   C, .ac_decay_zero                 ; clamp 0
                 JR   Z, .ac_decay_store                ; дотаял ровно в 0
-                INC  C                                 ; ещё положительный — доезд не закончен
+                SET  0, C                              ; ещё положительный — доезд не закончен
                 JR   .ac_decay_store
 .ac_decay_zero: XOR  A
                 JR   .ac_decay_store
@@ -1523,7 +1494,8 @@ VDC_AnimateChain:
 .ac_decay_cur_key EQU $+1
                 CP   0
                 JR   NC, .ac_decay_neg_apply
-                INC  C                                 ; передний край offset-дырки: держим
+                SET  0, C                              ; передний край offset-дырки: держим
+                SET  7, C                              ; удержанный отрицательный offset остаётся ненулевым
                 JR   .ac_decay_skip
 .ac_decay_neg_apply:
                 LD   A, (HL)
@@ -1534,17 +1506,27 @@ VDC_AnimateChain:
                 XOR  A                                 ; overshoot → 0
 .ac_decay_store:
                 LD   (HL), A
+                OR   A
+                JR   Z, .ac_decay_skip
+                SET  7, C
 .ac_decay_skip:
                 INC  HL
                 DJNZ .ac_decay
+.ac_offsets_done:
+                BIT  7, C
+                JR   NZ, .ac_dec_flag
+                LD   HL, (VDC_pSlots)
+                DEC  HL
+                RES  VDC_TOPO_OFFSETS_BIT, (HL)        ; снятие только после полного доказавшего прохода
 .ac_dec_flag:   LD   A, C
+                AND  1
                 LD   (VDC_GapPosLeft), A
 .ac_after_decay:
                 ; --- 2. Подтяжка (референс Zuma HD): тип стыка → темп → аккумулятор;
                 ; порог VDC_GAP_ACCUM_STEP → DoGapStep. PULL: vp разгоняется 1→10
                 ; сэмпл/кадр (+0.4/кадр²); CATCH-UP: темп = скорость цепи (фронт
                 ; «стоит», хвост догоняет); нет гэпов — сброс разгона.
-                CALL VDC_GapJunctionUpdate
+                CALL VDC_EnsureGapJunction
                 LD   A, (VDC_GapJunction)
                 OR   A
                 JR   NZ, .ac_gap_have
@@ -1601,15 +1583,26 @@ VDC_AnimateChain:
                 LD   (VDC_GapAccum), HL
 .ac_no_gap_step:
                 ; --- 3. Persistent scan. ---
+                ; ClearStale нужен только для сканирования стыка: без него основной ScanForNewMatch
+                ; либо сам очищает устоявшиеся Shot2, либо оставляет ожидающие смещения/маркеры,
+                ; на которых ClearStale всё равно сразу возвращается.
+                LD   A, (VDC_BridgeScanActive)
+                PUSH AF
                 CALL VDC_ScanForNewMatch
                 ; --- 4. Ограничить offset invariant каждый кадр (покрывает InsertAt
-                ; head_comp/cap_compensate, DoGapStep STOP/CASCADE +CS shifts,
-                ; и любые другие пути модификации offsets) ---
-                CALL ClampOffsetOrder
+                ; компенсацию головы/предела, сдвиги DoGapStep STOP/CASCADE на +CS
+                ; и любые другие пути изменения смещений). Без положительного
+                ; хвоста и активного стыка инверсия порядка невозможна.
+                LD   A, (VDC_GapPosLeft)
+                LD   HL, VDC_GapJunction
+                OR   (HL)
+                CALL NZ, ClampOffsetOrder
                 ; --- 4.5. Очистить stale Shot2 если cascade chain завершён.
-                ; Внутри есть guard: pending Shot2 с невыровненными offsets
-                ; не чистится, чтобы свежая вставка могла стать match после decay.
-                CALL VDC_ClearStaleShot2
+                ; Внутри есть защита: Shot2 в ожидании с невыровненными смещениями не очищается,
+                ; чтобы свежая вставка могла стать совпадением после затухания.
+                POP  AF
+                OR   A
+                CALL NZ, VDC_ClearStaleShot2
                 ; --- 5. Animate gauge bar — VDC_GaugeShown ползёт к VDC_GaugeScore
                 ; ±N очков за кадр, чтобы chain/combo бонусы не выглядели прыжком ---
                 CALL VDC_TickGaugeShown
@@ -1624,7 +1617,7 @@ VDC_AnimateChain:
 VDC_ClearSettledShot2:
                 LD   A, (VDC_SlotsLen)
                 OR   A
-                RET  Z
+                JP   Z, VDC_ClearShot2Maybe
                 LD   B, A
                 LD   C, 0
                 LD   HL, (VDC_pShot2)
@@ -1655,7 +1648,7 @@ VDC_ClearStaleShot2:
                 RET  NZ                                ; freeze active → cascade в процессе
                 LD   A, (VDC_SlotsLen)
                 OR   A
-                RET  Z                                  ; пустая chain
+                JP   Z, VDC_ClearShot2Maybe             ; пустая цепочка точно не имеет Shot2
                 LD   B, A                              ; счётчик итераций
                 LD   HL, (VDC_pSlots)
                 LD   DE, (VDC_pExplodeFrame)
@@ -1696,7 +1689,7 @@ VDC_ClearStaleShot2:
 .css_clear:     LD   (HL), 0
                 INC  HL
                 DJNZ .css_clear
-                RET
+                JP   VDC_ClearShot2Maybe
 
 ; Вход: A=index. Выход: NZ если offset[index] или соседний offset ещё не 0.
 VDC_Shot2OffsetsBusy:
@@ -2263,6 +2256,7 @@ VDC_DoGapStep:
                 LD   A, C
                 LD   (VDC_TmpGapIdx), A
                 CALL VDC_RemoveSlotAt                  ; удаляет slot C, len-=1
+                CALL VDC_MarkOffsetsMaybe
                 ; CATCH-UP стык (цвета разные / нет фронта): фронт-сегмент СТОИТ —
                 ; без HsaDec и front-comp; задний сегмент компенсируется назад
                 ; и доезжает decay'ем (хвост догоняет, референс Zuma HD).
@@ -2353,6 +2347,7 @@ VDC_DoGapStep:
                 CALL LogCascadeTrigger
                 endif
                 CALL VDC_RemoveSlotAt
+                CALL VDC_MarkOffsetsMaybe
                 LD   A, (VDC_GapJunction)
                 CP   2
                 JR   Z, .dgs_casc_catchup              ; разные цвета → хвост догоняет
@@ -2428,30 +2423,34 @@ VDC_GapJunctionUpdate:
                 OR   A
                 RET  Z
                 DEC  A
-                LD   C, A                              ; C = idx (от len-1 вниз)
+                LD   C, A                              ; C = индекс (от длины-1 вниз)
                 LD   H, 0 : LD L, A
                 LD   DE, (VDC_pSlots)
                 ADD  HL, DE
-.gju_stop:      LD   A, (HL)
+                LD   D, #FF                           ; самый левый CASCADE, если STOP не найдётся
+.gju_scan:      LD   A, (HL)
                 CP   VDC_GAP_STOP
                 JR   Z, .gju_found
+                CP   VDC_GAP_CASCADE
+                JR   NZ, .gju_scan_next
+                LD   D, C                              ; обратный проход оставит минимальный индекс
+.gju_scan_next:
                 LD   A, C
                 OR   A
-                JR   Z, .gju_casc
+                JR   Z, .gju_scan_done
                 DEC  C
                 DEC  HL
-                JR   .gju_stop
-.gju_casc:      LD   A, (VDC_SlotsLen)
-                LD   B, A
-                LD   C, 0
+                JR   .gju_scan
+.gju_scan_done:
+                LD   A, D
+                INC  A
+                RET  Z                                 ; ни STOP, ни CASCADE
+                DEC  A
+                LD   C, A
+                LD   E, A
+                LD   D, 0
                 LD   HL, (VDC_pSlots)
-.gju_cscan:     LD   A, (HL)
-                CP   VDC_GAP_CASCADE
-                JR   Z, .gju_found
-                INC  HL
-                INC  C
-                DJNZ .gju_cscan
-                RET                                    ; гэпов нет (junction=0)
+                ADD  HL, DE
 .gju_found:     ; C = индекс гэп-слота, HL = &Slots[C]. Левый край рана:
                 LD   B, C
                 PUSH HL
@@ -2502,6 +2501,19 @@ VDC_GapJunctionUpdate:
                 LD   (VDC_GapJunction), A
                 RET
 
+; Пересчитать VDC_GapJunction только после изменения Slots/SlotsLen.
+; Место в кадре остаётся прежним: вызов стоит после затухания смещений.
+VDC_EnsureGapJunction:
+                LD   HL, (VDC_pSlots)
+                DEC  HL
+                BIT  6, (HL)
+                RET  Z
+                PUSH HL
+                CALL VDC_GapJunctionUpdate
+                POP  HL
+                RES  6, (HL)
+                RET
+
 ; ----------------------------------------------------------------------------
 ; VDC_InternalGapExists — CF=1 если внутри цепи есть живая дырка:
 ;   живой шар -> один или больше GAP marker'ов -> живой шар.
@@ -2513,26 +2525,94 @@ VDC_InternalGapExists:
                 RET  Z
                 LD   B, A
                 LD   HL, (VDC_pSlots)
-                LD   C, 0                              ; bit0=видели шар, bit1=после него был GAP
-.ige_loop:
+.ige_find_front:
                 LD   A, (HL)
-                CP   VDC_NUM_COLORS
-                JR   C, .ige_live
-                BIT  0, C
-                JR   Z, .ige_next
-                SET  1, C
-                JR   .ige_next
-.ige_live:
-                BIT  1, C
-                JR   NZ, .ige_yes
-                SET  0, C
-.ige_next:
                 INC  HL
-                DJNZ .ige_loop
+                CP   VDC_NUM_COLORS
+                JR   C, .ige_find_marker
+                DJNZ .ige_find_front
+                AND  A
+                RET
+.ige_find_marker:
+                DJNZ .ige_marker_loop
+                AND  A                                 ; один фронтовой шар, хвоста нет
+                RET
+.ige_marker_loop:
+                LD   A, (HL)
+                INC  HL
+                CP   VDC_NUM_COLORS
+                JR   NC, .ige_find_rear
+                DJNZ .ige_marker_loop
+                AND  A
+                RET
+.ige_find_rear:
+                DJNZ .ige_rear_loop
+                AND  A                                 ; последовательность маркеров ушла в хвост
+                RET
+.ige_rear_loop:
+                LD   A, (HL)
+                INC  HL
+                CP   VDC_NUM_COLORS
+                JR   C, .ige_yes
+                DJNZ .ige_rear_loop
                 AND  A
                 RET
 .ige_yes:
                 SCF
+                RET
+
+; Запрос с кешем и тем же контрактом: CF=1 для последовательности
+; «живой шар → маркеры → живой шар». A нормализуется в 0/1; штатные вызовы читают CF.
+VDC_InternalGapExistsCached:
+                LD   HL, (VDC_pSlots)
+                DEC  HL
+                BIT  7, (HL)
+                JR   NZ, .ige_cached_rebuild
+.ige_cached_return:
+                LD   A, (HL)
+                AND  VDC_TOPO_INTERNAL_VALUE
+                RET  Z                                  ; A=0, CF=0
+                SCF
+                RET                                     ; A=1, CF=1
+.ige_cached_rebuild:
+                PUSH HL
+                CALL VDC_InternalGapExists
+                POP  HL
+                LD   A, 0                               ; LD сохраняет CF исходного прохода
+                ADC  A, A                               ; A=0/1; дальше CF будет восстановлен из кеша
+                LD   C, A
+                LD   A, (HL)
+                AND  VDC_TOPO_KEEP_INTERNAL             ; сбросить биты «грязно» и старого ответа
+                OR   C                                  ; не менять независимый признак стыка
+                LD   (HL), A
+                JR   .ige_cached_return
+
+; Любое изменение Slots/SlotsLen делает оба результата топологии неактуальными.
+; Изменяет AF, HL; сохраняет BC, DE, что важно для цикла анимации взрыва.
+VDC_MarkTopologyDirty:
+                LD   HL, (VDC_pSlots)
+                DEC  HL
+                LD   A, (HL)
+                OR   VDC_TOPO_DIRTY_MASK
+                LD   (HL), A
+                RET
+
+; Консервативная защёлка Shot2: 0 гарантирует пустой живой диапазон,
+; 1 означает «возможно есть». Ложное 1 безопасно, ложный 0 запрещён.
+VDC_MarkShot2Maybe:
+                LD   HL, (VDC_pSlots)
+                DEC  HL
+                SET  VDC_TOPO_SHOT2_BIT, (HL)
+                RET
+VDC_MarkOffsetsMaybe:
+                LD   HL, (VDC_pSlots)
+                DEC  HL
+                SET  VDC_TOPO_OFFSETS_BIT, (HL)
+                RET
+VDC_ClearShot2Maybe:
+                LD   HL, (VDC_pSlots)
+                DEC  HL
+                RES  VDC_TOPO_SHOT2_BIT, (HL)
                 RET
 
 ; ----------------------------------------------------------------------------
@@ -2736,7 +2816,7 @@ VDC_RemoveSlotAt:
 .rsa_no_shift:
                 LD   HL, VDC_SlotsLen
                 DEC  (HL)
-                RET
+                JP   VDC_MarkTopologyDirty
 
 ; ----------------------------------------------------------------------------
 ; VDC_HsaDec — HSA-- если HSA>0, иначе nop.
@@ -2797,6 +2877,7 @@ VDC_SetShot2OnNeighbors:
                 LD   DE, (VDC_pShot2)
                 ADD  HL, DE
                 LD   (HL), 1
+                CALL VDC_MarkShot2Maybe
                 LD   A, 1
                 LD   (VDC_BridgeScanActive), A
                 RET
@@ -2808,11 +2889,30 @@ VDC_SetShot2OnNeighbors:
 VDC_ScanForNewMatch:
                 LD   A, (VDC_SlotsLen)
                 OR   A
-                RET  Z
-                LD   E, A                              ; сохранить len; XOR ниже не должен превратить DJNZ в 256 iterations
+                JP   Z, VDC_ClearShot2Maybe
+                LD   E, A                              ; сохранить длину; XOR ниже не должен превратить DJNZ в 256 повторов
                 XOR  A
                 LD   (VDC_ScanGapBusy), A
-                ; Если в цепочке ещё есть GAP/CASCADE markers, нельзя сканировать
+                LD   HL, (VDC_pSlots)
+                DEC  HL
+                BIT  VDC_TOPO_SHOT2_BIT, (HL)
+                JR   NZ, .snm_maybe_shot2
+                XOR  A                                  ; восстановить прежние A=0, Z=1, CF=0
+                RET                                     ; ни один штатный писатель не оставил Shot2
+.snm_maybe_shot2:
+                ; Обычный кадр не имеет ни одного Shot2. Сначала дешёво это
+                ; доказываем и не сканируем Slots и соседние смещения повторно.
+                LD   B, E
+                LD   HL, (VDC_pShot2)
+.snm_any_shot2:
+                LD   A, (HL)
+                OR   A
+                JR   NZ, .snm_have_shot2
+                INC  HL
+                DJNZ .snm_any_shot2
+                JP   VDC_ClearShot2Maybe                ; ложное 1 опровергнуто полным проходом
+.snm_have_shot2:
+                ; Если в цепочке ещё есть маркеры GAP/CASCADE, нельзя сканировать
                 ; дальние Shot2: они видят неполную цепь. Но активную границу K-1/K
                 ; надо оставить проверяемой, иначе легальный bridge может быть
                 ; потерян, если следующий gap успеет перезаписать MatchScanIdx.
@@ -2983,7 +3083,7 @@ VDC_InsertAt:
 
                 ; Если уже есть внутренняя дырка, вставка не должна делать
                 ; глобальный HSA++/head_comp: место берём из существующего GAP.
-                CALL VDC_InternalGapExists
+                CALL VDC_InternalGapExistsCached
                 SBC  A, A                              ; 0 или #FF по carry
                 LD   (VDC_ScanGapBusy), A              ; temp flag до ScanForNewMatch
 
@@ -3035,15 +3135,10 @@ VDC_InsertAt:
                 ADD  HL, DE
                 LD   C, (HL)                           ; C = tail_off
 .ia_off_compute:
-                LD   A, (VDC_ScanGapBusy)
-                OR   A
-                JR   Z, .ia_off_compute_normal
-                ; GAP-mode: shift_right уже отодвигает хвостовую сторону на
-                ; одну клетку; новый шар ставим в старую фазу tail-соседа.
-                LD   A, C
-                JR   .ia_off_save
-.ia_off_compute_normal:
-                ; new_off = -CS/2 + (head + tail) / 2 — все signed бытовое сложение.
+                ; new_off = ±CS/2 + (head + tail) / 2. Обычная вставка
+                ; раздвигает переднюю часть и начинает с -CS/2; при внутренней
+                ; дырке HSA не растёт, поэтому симметричная задняя анимация
+                ; начинает с +CS/2.
                 ; Считаем как 16-bit signed для безопасности от переполнения.
                 ; head_ext, tail_ext:
                 LD   A, B
@@ -3066,7 +3161,12 @@ VDC_InsertAt:
                 ; /2 (signed): SRA H, RR L
                 SRA  H : RR L
                 LD   DE, -(VDC_CELL_SIZE/2)
-                ADD  HL, DE                            ; HL = -CS/2 + (h+t)/2
+                LD   A, (VDC_ScanGapBusy)
+                OR   A
+                JR   Z, .ia_off_delta_ready
+                LD   DE, VDC_CELL_SIZE / 2
+.ia_off_delta_ready:
+                ADD  HL, DE                            ; HL = выбранная полуклетка + average
                 ; saturate до signed byte [-128..127]
                 LD   A, L
                 BIT  7, H
@@ -3135,12 +3235,14 @@ VDC_InsertAt:
                 ADD  HL, DE
                 LD   A, (VDC_TmpInsNewOff)
                 LD   (HL), A
+                CALL VDC_MarkOffsetsMaybe
 
                 LD   A, (VDC_TmpInsIdx)
                 LD   H, 0 : LD L, A
                 LD   DE, (VDC_pShot2)
                 ADD  HL, DE
                 LD   (HL), 1
+                CALL VDC_MarkShot2Maybe
 
                 LD   A, (VDC_TmpInsIdx)
                 LD   H, 0 : LD L, A
@@ -3157,10 +3259,11 @@ VDC_InsertAt:
                 ; SlotsLen++
                 LD   HL, VDC_SlotsLen
                 INC  (HL)
+                CALL VDC_MarkTopologyDirty
 
                 LD   A, (VDC_ScanGapBusy)
                 OR   A
-                JR   NZ, .ia_no_head_comp
+                JR   NZ, .ia_rear_comp_entry
 
                 ; HSA++ с cap по TrackNumSlots-1.
                 ; Cap-fix (Z80-симулятор verify 2026-05-14): при HSA == TrackNumSlots-1
@@ -3180,13 +3283,20 @@ VDC_InsertAt:
                 INC  (HL)
                 JP   .ia_head_comp_entry
 .ia_cap_branch:
-                ; --- Cap compensation: переписать offsets[idx] на +CS/2 (был -CS/2) ---
+                ; Без HSA++ новый шар начинает симметричную заднюю анимацию:
+                ; (-CS/2 + average) + CS = +CS/2 + average.
                 LD   A, (VDC_TmpInsIdx)
                 LD   H, 0 : LD L, A
                 LD   DE, (VDC_pOffsets)
                 ADD  HL, DE
-                LD   (HL), VDC_CELL_SIZE / 2
+                LD   A, (VDC_TmpInsNewOff)
+                ADD  A, VDC_CELL_SIZE
+                JP   PO, .ia_cap_new_off_save
+                LD   A, #7F                            ; signed byte saturation
+.ia_cap_new_off_save:
+                LD   (HL), A
                 ; --- offsets[idx+1 .. SlotsLen-1] += CS ---
+.ia_rear_comp_entry:
                 LD   A, (VDC_TmpInsIdx)
                 INC  A                                  ; A = idx+1
                 LD   B, A
@@ -3198,24 +3308,18 @@ VDC_InsertAt:
                 LD   DE, (VDC_pOffsets)
                 ADD  HL, DE
                 LD   B, A
-.ia_cap_compensate_loop:
+.ia_rear_compensate_loop:
                 LD   A, (HL)
                 ADD  A, VDC_CELL_SIZE
-                JP   PE, .ia_cap_compensate_clamp
-                PUSH AF
-                XOR  #80
-                CP   #80 + VDC_CELL_SIZE + 1
-                POP  AF
-                JR   C, .ia_cap_compensate_save
-.ia_cap_compensate_clamp:
-                LD   A, VDC_CELL_SIZE
-.ia_cap_compensate_save:
+                JP   PO, .ia_rear_compensate_save
+                LD   A, #7F                            ; не терять прошлую компенсацию
+.ia_rear_compensate_save:
                 LD   (HL), A
                 INC  HL
-                DJNZ .ia_cap_compensate_loop
+                DJNZ .ia_rear_compensate_loop
                 JP   .ia_no_head_comp
 .ia_head_comp_entry:
-                ; offsets[0..idx-1] -= CS, cap to -CS (= -64)
+                ; offsets[0..idx-1] -= CS с насыщением только на границе signed byte.
                 LD   A, (VDC_TmpInsIdx)
                 OR   A
                 JR   Z, .ia_no_head_comp
@@ -3224,17 +3328,8 @@ VDC_InsertAt:
 .ia_head_comp:
                 LD   A, (HL)
                 SUB  VDC_CELL_SIZE                     ; off -= CS
-                ; cap к -CS (signed): если A < -CELL (signed) → A = -CELL.
-                ; Используем JP PE для отлова wrap-around ниже -128.
-                JP   PE, .ia_head_comp_clamp
-                ; Смещённое сравнение: (A XOR #80) < (#80 - CELL_SIZE) → ограничить.
-                PUSH AF
-                XOR  #80
-                CP   #80 - VDC_CELL_SIZE
-                POP  AF
-                JR   NC, .ia_head_comp_save            ; A >= -CELL → ОК
-.ia_head_comp_clamp:
-                LD   A, 256 - VDC_CELL_SIZE            ; -CELL
+                JP   PO, .ia_head_comp_save
+                LD   A, #80                            ; signed byte saturation
 .ia_head_comp_save:
                 LD   (HL), A
                 INC  HL
@@ -3446,6 +3541,7 @@ VDC_BreakShotStats:
 ; STATE — массивы и скаляры. SAVEBIN их сохранит как нули; VDC_Init
 ; явно инициализирует на старте (см. feedback_zuma_init_explicit.md).
 ; ============================================================================
+VDC_TopologyState1: DEFB VDC_TOPO_DIRTY_MASK | VDC_TOPO_SHOT2_MAYBE
 VDC_Slots:        DS VDC_MAX_SLOTS
 VDC_Offsets:      DS VDC_MAX_SLOTS
 VDC_Shot2:        DS VDC_MAX_SLOTS
@@ -3529,6 +3625,7 @@ VDC_LastT:        DEFW 0                                ; t (16-bit signed) по
 ; ABI; two-track levels swap this block вокруг update/render/collision.
 VDC_HasSecondChain: DEFB 0
 VDC_MAIN1_PAGE   EQU #04
+VDC_TopologyState2: DEFB VDC_TOPO_DIRTY_MASK | VDC_TOPO_SHOT2_MAYBE
 VDC2_Slots:        DS VDC_MAX_SLOTS
 VDC2_Offsets:      DS VDC_MAX_SLOTS
 VDC2_Shot2:        DS VDC_MAX_SLOTS
@@ -3555,6 +3652,10 @@ VDC_pShot2:         DEFW VDC_Shot2
 VDC_pExplodeFrame:  DEFW VDC_ExplodeFrame
 VDC_pExplodeMarker: DEFW VDC_ExplodeMarker
 VDC_SecondActive:   DEFB 0               ; 0 = активна цепочка 1, 1 = цепочка 2
-VDC_SwapBuf:       DS VDC_MAX_SLOTS * 5
+VDC_SwapBuf:       DS VDC_ChainLocalEnd - VDC_ChainLocalStart
+VDC_SwapBufEnd:
+                ASSERT VDC_SwapBufEnd - VDC_SwapBuf == VDC_ChainLocalEnd - VDC_ChainLocalStart
+                ASSERT VDC_Slots - VDC_TopologyState1 == 1
+                ASSERT VDC2_Slots - VDC_TopologyState2 == 1
 
                 endif ; ~_ZUMA_VDC_

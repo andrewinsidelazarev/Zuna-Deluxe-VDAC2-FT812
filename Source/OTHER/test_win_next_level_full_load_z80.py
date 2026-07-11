@@ -66,7 +66,7 @@ def adventure_chain_entry(adventure_pos: int) -> tuple[int, int]:
 
 def expected_track_meta(level_index: int) -> tuple[int, int, int, int]:
     blob = track_blob(level_index)
-    assert blob[:4] == b"ZTV2", f"L{level_index + 1:02d}: missing Track V2 magic"
+    assert blob[:4] == b"ZTV4", f"L{level_index + 1:02d}: missing Track V4 magic"
     c1 = struct.unpack_from("<H", blob, 4)[0]
     p1 = blob[6]
     c2 = struct.unpack_from("<H", blob, 7)[0]
@@ -109,7 +109,7 @@ def assert_track_pages(fs: FullStackTrace, level_index: int) -> None:
             )
 
     first_page = bytes(fs.emu.mem.physical[TRACK_LOAD_PAGES[0] * PAGE_SIZE : TRACK_LOAD_PAGES[0] * PAGE_SIZE + 4])
-    assert first_page != b"ZTV2", "Track metadata stayed mapped as the first sample page"
+    assert first_page != b"ZTV4", "Track metadata stayed mapped as the first sample page"
 
 
 def assert_gameplay_reset(
@@ -154,7 +154,10 @@ def assert_gameplay_reset(
 
 
 def run_case(start_level: int, start_adventure_pos: int, expected_level: int, expected_second: bool) -> None:
-    fs = FullStackTrace(ROOT, shadow_ft812=True)
+    # Этот end-to-end loader test исполняет десятки миллионов Z80 инструкций.
+    # PC-ring нужен для интерактивной диагностики, но не для semantic assertions
+    # ниже; отключаем только его сбор, сохраняя все I/O hooks и реальный ASM path.
+    fs = FullStackTrace(ROOT, shadow_ft812=True, capture_step_trace=False)
     fs.call("Core.Init_Core", 1_000_000)
     patch_ret(fs, 0x04, "Core.MainLoop")
     patch_ret(fs, 0x05, "Core.DrawBlackLoadingFrame")
@@ -179,6 +182,7 @@ def run_case(start_level: int, start_adventure_pos: int, expected_level: int, ex
     fs.emu.mem.pages[2] = 0x31
     fs.emu.mem.pages[3] = 0x04
 
+    print(f"RUN WIN fade transition L{start_level + 1:02d}->L{expected_level + 1:02d}", flush=True)
     fs.call("UpdateDialog", 40_000_000)
 
     expected_adventure_pos = start_adventure_pos + 1
@@ -199,7 +203,7 @@ def run_case(start_level: int, start_adventure_pos: int, expected_level: int, ex
 def main() -> int:
     run_case(start_level=0, start_adventure_pos=0, expected_level=1, expected_second=False)
     run_case(start_level=3, start_adventure_pos=18, expected_level=4, expected_second=True)
-    print("PASS: WIN fade -> next level full load resets gameplay state and loads Track V2/RAM_G")
+    print("PASS: WIN fade -> next level full load resets gameplay state and loads Track V4/RAM_G")
     return 0
 
 

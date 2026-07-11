@@ -6,8 +6,8 @@ Layout (512-byte sectors):
   Sector 2..N       : data blob, per-level: bg -> pal -> track -> title -> preview
                       each section sector-aligned (zero-padded tail)
                       missing section => off=0xFFFF in TOC
-                      track sections are Track V2 + bullet trajectory table:
-                        sector 0: metadata "ZTV2" + chain sample/page counts
+                      track sections are Track V4 + bullet trajectory table:
+                        sector 0: metadata "ZTV4" + chain sample/page counts
                         then pure 16K pages of 8-byte baked render samples
                         then one 16K "ZBT1" page for bullet collision events
                       runtime maps up to four pages from the same section.
@@ -82,16 +82,16 @@ def pad_to_sector(blob: bytes) -> bytes:
     return blob + b"\x00" * pad
 
 
-# --- track v2 ---------------------------------------------------------------
+# --- track v4 ---------------------------------------------------------------
 # Runtime track pages are pure arrays of 8-byte samples:
-#   +0..1 Vx = (scaled X - 26) * 16
-#   +2..3 Vy = (scaled Y - 26) * 16
+#   +0..3 exact FT812 VERTEX2F command (little-endian)
 #   +4    tangent
 #   +5    flags
-#   +6..7 padding
+#   +6    baked spin12 = floor(sample*61/256) mod 12
+#   +7    meta: bit0=Vx sign, bit1=Vy sign, bit2=visible by legacy cull
 #
 # A 16K page holds exactly 2048 samples. The track section starts with one 512B
-# metadata sector ("ZTV2", counts and page counts), followed by all chain1 pages
+# metadata sector ("ZTV4", counts and page counts), followed by all chain1 pages
 # then all chain2 pages. Source track_l*_640.bin files remain old 6-byte
 # 640x480-space assets; only the packed PAK data is converted.
 PAGE = 16384
@@ -99,11 +99,19 @@ TRACK_SRC_HDR = 2
 TRACK_SRC_REC = 6
 TRACK_V2_REC = 8
 TRACK_V2_SAMPLES_PER_PAGE = PAGE // TRACK_V2_REC
-TRACK_V2_MAGIC = b"ZTV2"
+TRACK_V2_MAGIC = b"ZTV4"
 TRACK_BULLET_MAGIC = b"ZBT1"
 TRACK_V2_MAX_PAGES = 4
 TRACK_V2_BALL_HALF = 26
 TRACK_BULLET_PAGES = 1
+TRACK_SPIN12_K = 61
+TRACK_SPIN12_PHASES = 12
+TRACK_V4_META_VISIBLE = 0x01
+TRACK_V4_META_VY_SIGN = 0x40
+TRACK_V4_META_VX_SIGN = 0x80
+TRACK_V4_CULL_MIN = -832
+TRACK_V4_CULL_X_MAX = 0x4000
+TRACK_V4_CULL_Y_MAX = 0x3000
 
 # --- 1024x768 upscale: scale stored sample X/Y x1.6 (640->1024, 480->768) ----
 # Source track bins (track_l*_640.bin) stay in 640x480 space; we scale ONLY the
@@ -132,17 +140,59 @@ def scale_track_samples(blob: Optional[bytes]) -> Optional[bytes]:
     return bytes(out)
 
 
+def track_v4_visible(vx: int, vy: int) -> bool:
+    """Return the exact legacy cache-builder cull result for baked corners."""
+    return (
+        TRACK_V4_CULL_MIN <= vx < TRACK_V4_CULL_X_MAX
+        and TRACK_V4_CULL_MIN <= vy < TRACK_V4_CULL_Y_MAX
+    )
+
+
+def pack_vertex2f(vx: int, vy: int) -> int:
+    """Pack signed 16-bit baked corners into the exact FT812 VERTEX2F word."""
+    if not (-0x8000 <= vx <= 0x7FFF and -0x8000 <= vy <= 0x7FFF):
+        raise ValueError(f"VERTEX2F source outside signed16: ({vx}, {vy})")
+    return 0x40000000 | ((vx & 0x7FFF) << 15) | (vy & 0x7FFF)
+
+
+def encode_track_v4_record(vx: int, vy: int, tangent: int, flags: int, spin12: int) -> bytes:
+    meta = 0
+    if vx < 0:
+        meta |= TRACK_V4_META_VX_SIGN
+    if vy < 0:
+        meta |= TRACK_V4_META_VY_SIGN
+    if track_v4_visible(vx, vy):
+        meta |= TRACK_V4_META_VISIBLE
+    return struct.pack("<IBBBB", pack_vertex2f(vx, vy), tangent, flags, spin12, meta)
+
+
+def decode_track_v4_vertex(record: bytes) -> tuple[int, int]:
+    """Recover the original signed16 Vx/Vy exactly from one Track V4 record."""
+    if len(record) != TRACK_V2_REC:
+        raise ValueError(f"Track V4 record must be {TRACK_V2_REC} bytes")
+    word = struct.unpack_from("<I", record, 0)[0]
+    meta = record[7]
+    vx = (word >> 15) & 0x7FFF
+    vy = word & 0x7FFF
+    if meta & TRACK_V4_META_VX_SIGN:
+        vx -= 0x8000
+    if meta & TRACK_V4_META_VY_SIGN:
+        vy -= 0x8000
+    return vx, vy
+
+
 def encode_track_v2_pages(blob: Optional[bytes]) -> tuple[int, list[bytes]]:
     if blob is None:
         return 0, []
     count = struct.unpack_from("<H", blob, 0)[0]
     samples = bytearray()
     off = TRACK_SRC_HDR
-    for _ in range(count):
+    for sample_index in range(count):
         x, y, tan, flags = struct.unpack_from("<hhBB", blob, off)
         vx = (x - TRACK_V2_BALL_HALF) * 16
         vy = (y - TRACK_V2_BALL_HALF) * 16
-        samples += struct.pack("<hhBBxx", vx, vy, tan, flags)
+        spin12 = ((sample_index * TRACK_SPIN12_K) >> 8) % TRACK_SPIN12_PHASES
+        samples += encode_track_v4_record(vx, vy, tan, flags, spin12)
         off += TRACK_SRC_REC
     pages: list[bytes] = []
     for page_off in range(0, len(samples), PAGE):

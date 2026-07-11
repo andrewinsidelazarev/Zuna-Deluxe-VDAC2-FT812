@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify that original two-curve boards keep both Track V2 paths in ZUMALVL.PAK."""
+"""Verify that original two-curve boards keep both Track V4 paths in ZUMALVL.PAK."""
 from __future__ import annotations
 
 import struct
@@ -11,6 +11,11 @@ from make_level_pack import (
     TRACK_V2_MAGIC,
     TRACK_V2_REC,
     TRACK_V2_SAMPLES_PER_PAGE,
+    TRACK_SPIN12_K,
+    TRACK_SPIN12_PHASES,
+    TRACK_V4_META_VISIBLE,
+    TRACK_V4_META_VX_SIGN,
+    TRACK_V4_META_VY_SIGN,
     encode_track_v2_pages,
     read_track_blob,
     scale_track_samples,
@@ -42,19 +47,34 @@ def main() -> int:
         blob = pack[off * SECTOR : (off + size) * SECTOR]
         meta = blob[:SECTOR]
         if meta[:4] != TRACK_V2_MAGIC:
-            failures.append(f"L{level:02d}: Track V2 magic mismatch")
+            failures.append(f"L{level:02d}: Track V4 magic mismatch")
         if struct.unpack_from("<H", meta, 4)[0] != count1 or meta[6] != len(pages1):
             failures.append(f"L{level:02d}: first track metadata mismatch")
         if struct.unpack_from("<H", meta, 7)[0] != count2 or meta[9] != len(pages2):
             failures.append(f"L{level:02d}: second track metadata mismatch")
         if meta[10] != TRACK_V2_REC or struct.unpack_from("<H", meta, 11)[0] != TRACK_V2_SAMPLES_PER_PAGE:
-            failures.append(f"L{level:02d}: Track V2 stride/page metadata mismatch")
+            failures.append(f"L{level:02d}: Track V4 stride/page metadata mismatch")
         first_off = SECTOR
         second_off = first_off + len(pages1) * PAGE
         if blob[first_off:second_off] != b"".join(pages1):
-            failures.append(f"L{level:02d}: first Track V2 pages mismatch")
+            failures.append(f"L{level:02d}: first Track V4 pages mismatch")
         if blob[second_off : second_off + len(pages2) * PAGE] != b"".join(pages2):
-            failures.append(f"L{level:02d}: second Track V2 pages mismatch")
+            failures.append(f"L{level:02d}: second Track V4 pages mismatch")
+        for chain_name, count, pages in (
+            ("first", count1, pages1),
+            ("second", count2, pages2),
+        ):
+            joined = b"".join(pages)
+            known_meta = TRACK_V4_META_VX_SIGN | TRACK_V4_META_VY_SIGN | TRACK_V4_META_VISIBLE
+            for sample in range(count):
+                rec = sample * TRACK_V2_REC
+                expected_phase = ((sample * TRACK_SPIN12_K) >> 8) % TRACK_SPIN12_PHASES
+                if joined[rec + 6] != expected_phase or joined[rec + 7] & ~known_meta:
+                    failures.append(
+                        f"L{level:02d} {chain_name} sample {sample}: "
+                        f"spin/meta={joined[rec + 6:rec + 8].hex()}"
+                    )
+                    break
         if blob[: len(expected)] != expected:
             failures.append(f"L{level:02d}: full track blob mismatch")
         if any(blob[len(expected) :]):

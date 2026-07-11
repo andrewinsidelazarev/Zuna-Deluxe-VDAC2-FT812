@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_IMG = Path(r"\\tsclient\D\Работа.Андрей\unreal_x64\wc.img")
 HOST_DIR = ["Games", "Zuma Deluxe VDAC2"]
 FILES = {
-    ("Games", "Zuma Deluxe VDAC2", "ZUMA_VD2.SPG"): ROOT / "Build" / "ZUMA_VD2.SPG",
+    ("Games", "Zuma Deluxe VDAC2", "zuma_vdac2.spg"): ROOT / "Build" / "zuma_vdac2.spg",
     ("Games", "Zuma Deluxe VDAC2", "ZUMAMAIN.PAK"): ROOT / "Build" / "SD" / "Games" / "Zuma Deluxe VDAC2" / "ZUMAMAIN.PAK",
     ("Games", "Zuma Deluxe VDAC2", "ZUMALVL.PAK"): ROOT / "Build" / "SD" / "Games" / "Zuma Deluxe VDAC2" / "ZUMALVL.PAK",
     ("Games", "Zuma Deluxe VDAC2", "ZUMAAUD.PAK"): ROOT / "Build" / "SD" / "Games" / "Zuma Deluxe VDAC2" / "ZUMAAUD.PAK",

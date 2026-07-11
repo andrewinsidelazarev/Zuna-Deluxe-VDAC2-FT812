@@ -5,6 +5,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from zuma_z80_simulator import ZumaZ80Sim
+from vdc_cache_sync import sync_active_vdc_caches
 
 
 STATE_ARRAYS = (
@@ -58,6 +59,7 @@ def load_dump_state(sim, dump):
     for name in STATE_BYTES:
         if name in s:
             sim.set_byte(s[name], dump[s[name]])
+    sync_active_vdc_caches(sim)
 
 
 def snapshot(sim):

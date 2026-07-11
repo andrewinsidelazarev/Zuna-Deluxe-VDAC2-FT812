@@ -55,6 +55,7 @@ def setup_chain(sim, slots, offsets, shot2_idx):
     reset_gap_state(sim)
     sim.set_byte(s["Core.VDC_MatchScanIdx"], shot2_idx)
     sim.set_byte(s["Core.VDC_Shot2"] + shot2_idx, 1)
+    sim.call(s["Core.VDC_MarkShot2Maybe"])
 
 
 def pending_shot2_survives_until_match(sim):

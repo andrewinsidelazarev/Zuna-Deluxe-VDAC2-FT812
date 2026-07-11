@@ -71,6 +71,9 @@ class InputState:
     kempston: int = 0x00
     keyboard_rows: Dict[int, int] = field(default_factory=dict)
     rtc_seconds_bcd: int = 0x17
+    mr_gluk_enabled: bool = False
+    mr_gluk_register: int = 0
+    ps2_fifo: List[int] = field(default_factory=list)
 
 
 @dataclass
@@ -364,7 +367,15 @@ class ZumaFullZ80Emulator:
         if low == 0x57:
             return self._read_ft_spi()
         if port == 0xBFF7:
-            return self.input.rtc_seconds_bcd
+            if not self.input.mr_gluk_enabled:
+                return 0
+            if self.input.mr_gluk_register == 0x00:
+                return self.input.rtc_seconds_bcd
+            if self.input.mr_gluk_register == 0xF0:
+                if self.input.ps2_fifo:
+                    return self.input.ps2_fifo.pop(0) & 0xFF
+                return 0
+            return 0
         if low == 0x1F:
             return self.input.kempston
         if port == 0xFADF:
@@ -380,7 +391,14 @@ class ZumaFullZ80Emulator:
     def out_port(self, port: int, value: int) -> None:
         low = port & 0xFF
         high = (port >> 8) & 0xFF
-        if low == 0xAF:
+        if port == 0xEFF7:
+            self.input.mr_gluk_enabled = bool(value & 0x80)
+        elif port == 0xDFF7:
+            self.input.mr_gluk_register = value & 0xFF
+        elif port == 0xBFF7:
+            if self.input.mr_gluk_register == 0x0C and value == 0x01:
+                self.input.ps2_fifo.clear()
+        elif low == 0xAF:
             self._write_tsconf_register(high, value)
         elif low in (0x57, 0x77):
             self._write_ft_spi(low, value)

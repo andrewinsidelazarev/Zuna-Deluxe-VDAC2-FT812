@@ -15,6 +15,7 @@ import os, sys
 from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from zuma_full_z80_emulator import ZumaFullZ80Emulator, PROJECT_ROOT
+from vdc_cache_sync import sync_active_vdc_caches
 
 CELL_SIZE = 32
 DELTA_THR = 4
@@ -66,6 +67,7 @@ def inject_dump_state(sim):
     for addr in range(S['Core.Bullet_Active'], S['Core.Bullet_Active'] + 16):
         if addr < len(dump):
             sim.mem.write(addr, dump[addr])
+    sync_active_vdc_caches(sim)
 
 
 def fire_bullet(sim, x, y, color):
@@ -109,6 +111,7 @@ def restore(sim, snap):
     sim.mem.write(S['Core.VDC_ChainFreezeCnt'], snap['freeze'])
     sim.mem.write(S['Core.VDC_GapStepCnt'], snap['gapcnt'])
     sim.mem.write(S['Core.VDC_MatchScanIdx'], snap['scan'])
+    sync_active_vdc_caches(sim)
 
 
 # === Main ===

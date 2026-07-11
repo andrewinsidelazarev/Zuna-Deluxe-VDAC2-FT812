@@ -62,6 +62,8 @@ class Rig:
             z.set_byte(s["Core.VDC_Shot2"] + i, 0)
             z.set_byte(s["Core.VDC_ExplodeFrame"] + i, 0)
             z.set_byte(s["Core.VDC_ExplodeMarker"] + i, 0)
+        # Fixture пишет Slots напрямую, поэтому обязан инвалидировать production-кеш топологии.
+        z.call(s["Core.VDC_MarkTopologyDirty"])
 
     def slots(self):
         n = self.gb("Core.VDC_SlotsLen")

@@ -45,7 +45,6 @@ def check_dual_frame_win_gate() -> bool:
     sim = ZumaZ80Sim()
     needed = (
         "Core.VDC_UpdateAllChains",
-        "Core.VDC_WinSnapAllChains",
         "Core.VDC_Update",
         "Core.VDC_UpdateActiveChainPlayOnly",
         "Core.SetSecondTrackPage",
@@ -62,7 +61,6 @@ def check_dual_frame_win_gate() -> bool:
     if not require_symbols(sim, needed):
         return False
 
-    install_ret(sim, sim.sym["Core.VDC_WinSnapAllChains"])
     install_ret(sim, sim.sym["Core.VDC_Update"])
     install_ret(sim, sim.sym["Core.VDC_UpdateActiveChainPlayOnly"])
     install_ret(sim, sim.sym["Core.SetSecondTrackPage"])
@@ -105,13 +103,21 @@ def check_win_visual_source() -> bool:
     if "VDC_WinPrtcl" not in body:
         print("FAIL: WIN visual must draw the explosion particle pool")
         return False
-    # head-сэмпл головы снимается в VDC_UpdateAllChains (до очистки цепочки).
+    # Head sample is folded into the mandatory cache pre-pass. It must not add
+    # another full traversal to VDC_UpdateAllChains.
     vdc = (ROOT / "Source" / "ASM" / "VDC.asm").read_text(encoding="utf-8")
     ua_start = vdc.index("VDC_UpdateAllChains:")
     ua_end = vdc.index("VDC_UpdateActiveChainPlayOnly:", ua_start)
     ua_body = vdc[ua_start:ua_end]
-    if "VDC_WinSnapAllChains" not in ua_body:
-        print("FAIL: VDC_UpdateAllChains must snapshot head sample before clear")
+    if "VDC_WinSnapAllChains" in ua_body:
+        print("FAIL: VDC_UpdateAllChains still performs the duplicate WIN snapshot pass")
+        return False
+    cache_start = src.index("ZL_BuildActiveChainCache:")
+    cache_end = src.index("ZL_DrawCachedActiveChainWithShadowMaybe:", cache_start)
+    cache_body = src[cache_start:cache_end]
+    required = ("VDC_WinHeadS1", "VDC_WinHeadS2", "VDC_GameState", "VDC_SecondActive")
+    if any(name not in cache_body for name in required):
+        print("FAIL: cache pre-pass does not maintain both WIN head samples")
         return False
     # WIN outro (бегущий эмиттер) гоняется из VDC_UpdateWin.
     main = (ROOT / "Source" / "ASM" / "main.asm").read_text(encoding="utf-8")
