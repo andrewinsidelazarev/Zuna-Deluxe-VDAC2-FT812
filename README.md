@@ -5,7 +5,7 @@
 кооператорной командой `cmd_scale`, лягушка собирается из 4-х компонент (plate / body /
 tongue / overlay) и вращается матрицей `T·R·T⁻¹`.
 
-Параллельная **VDC-ветка** (нативное 360×288 на TS-Conf без VDAC2) живёт в `(https://github.com/andrewinsidelazarev/Zuma-Deluxe-TS-Config)`
+Параллельная **VDC-ветка** (нативное 360×288 на TS-Conf без VDAC2) живёт в https://github.com/andrewinsidelazarev/Zuma-Deluxe-TS-Config в качестве демо-версии.
 и общается с этой через **append-only [Чат.txt](Чат.txt)**.
 
 ---
