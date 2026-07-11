@@ -1,6 +1,5 @@
 # ===== Build artifacts (sjasmplus / spgbld) =====
-/Build/*
-!/Build/.gitkeep
+/Build/
 /main.lst
 /zuma_new_spg.lst
 /user.l
@@ -15,7 +14,9 @@
 /222
 /333
 /555
-/Diagnostics/Dumps/
+
+# ===== Diagnostics (local-only) =====
+/Diagnostics/
 
 # ===== Python cache =====
 __pycache__/
