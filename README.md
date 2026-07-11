@@ -5,6 +5,8 @@
 
 Параллельная **VDC-ветка** (нативное 360×288 на TS-Conf без VDAC2) живёт в https://github.com/andrewinsidelazarev/Zuma-Deluxe-TS-Config в качестве демо-версии.
 
+Игра 100 % была написана с помощью AI-агентов Claude Code и OpenAI Codex.
+
 ---
 
 ## Hardware target
@@ -13,7 +15,7 @@
 |--------------------|-------------------------------------------------------|
 | CPU                | Z80 @ 14 МГц (TS-Conf), кэш через `SYSCONG.bit2`      |
 | Графика            | FT812 (Gameduino 2 / BridgeTek BT81x клон)            |
-| Разрешение         | 640×480 RGB565, FT_INT_SWAP vsync 57.25 Гц            |
+| Разрешение         | 1024x768, FT_INT_SWAP vsync 57.25 Гц                  |
 | RAM_G              | 1 МБ — bg `#010000`, atlas `#0A6000`, frog `#04C000`  |
 | SPI                | порты `#77` (CTRL), `#57` (DATA), `#AF` (VCONFIG)     |
 | Эмулятор           | Unreal x64 (`Renderer = Double size` в `Unreal.ini`)  |
