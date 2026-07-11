@@ -309,7 +309,7 @@ Cache_C000_Off:
                 LD   (HL), EN_0000 | EN_4000
                 RET
 
-ClampOffsetOrder:                                      ; не дать positive tail offsets инвертировать visual slot order
+ClampOffsetOrder:                                      ; не позволить соседним шарам поменяться местами
                 PUSH AF
                 PUSH BC
                 PUSH HL
@@ -318,20 +318,21 @@ ClampOffsetOrder:                                      ; не дать positive 
                 JR   C, .co_done
                 DEC  A
                 LD   B, A                              ; pairs len-1
-                LD   HL, Core.VDC_Offsets              ; HL = prev offset
-.co_loop:       LD   A, (HL)
+                LD   HL, (Core.VDC_pOffsets)           ; HL = предыдущее смещение активной цепочки
+.co_loop:       LD   A, (HL)                           ; signed prev в смещённой шкале 0..255
+                XOR  #80
+                ADD  A, Core.VDC_CELL_SIZE - 1         ; оставить минимум один sample между центрами
                 INC  HL                                ; HL = current offset
-                LD   C, A                              ; C = prev
-                LD   A, (HL)                           ; A = current
-                OR   A
-                JR   Z, .co_next
-                JP   M, .co_next                       ; только positive current offsets создают backward overlap
-                BIT  7, C
-                JR   NZ, .co_clamp                     ; prev negative, current positive -> inverted
+                JR   C, .co_next                       ; порог выше +127: любой current допустим
+                LD   C, A                              ; C = допустимый current в смещённой шкале
+                LD   A, (HL)
+                XOR  #80
                 CP   C
                 JR   C, .co_next
                 JR   Z, .co_next
-.co_clamp:      LD   (HL), C
+                LD   A, C
+                XOR  #80
+                LD   (HL), A
 .co_next:       DJNZ .co_loop
 .co_done:       POP  HL
                 POP  BC
@@ -2839,9 +2840,9 @@ SafeInflatePage2:
 .sip2_src_page:    DB 0
 
                 module Core
-; Slot0-реализация Track V2 readers. Slot0 всегда замаплен во время gameplay,
-; поэтому Core держит только tiny trampolines, а тяжёлое тело reader живёт
-; в page-0 headroom.
+; Часть чтения Track V4 в Slot0: преобразование исходных Vx/Vy в центр и
+; восстановление страницы трека. Основное тело распаковки живёт на игровой
+; странице #04: все штатные вызовы идут из игрового кода при PAGE3=#04.
 VDC_ReadSampleAtHL_Slot0:
                 CALL VDC_ReadRenderSampleAtHL_Slot0    ; BC=Vx, DE=Vy
                 PUSH DE                                ; raw Vy
@@ -2859,44 +2860,6 @@ VDC_ReadSampleAtHL_Slot0:
                 XOR  A
                 LD   (VDC_RenderTrackPageIdx), A
                 POP  DE : POP  BC
-                AND  A
-                RET
-
-VDC_ReadRenderSampleAtHL_Slot0:
-                LD   (VDC_LastT), HL
-                PUSH HL
-                LD   A, H
-                RRCA
-                RRCA
-                RRCA
-                AND  #03                               ; page index = t >> 11
-                LD   E, A
-                LD   A, (VDC_RenderTrackPageIdx)
-                CP   E
-                JR   Z, .page_ready
-                LD   A, E
-                LD   (VDC_RenderTrackPageIdx), A
-                LD   D, 0
-                LD   HL, (VDC_pTrackPages)
-                ADD  HL, DE
-                LD   A, (HL)
-                SetPage2_A
-.page_ready:   POP  HL
-                LD   A, H
-                AND  #07
-                LD   H, A                              ; local sample = t & #07FF
-                ADD  HL, HL
-                ADD  HL, HL
-                ADD  HL, HL                            ; local * 8
-                SET  7, H                              ; #8000 + local*8
-                LD   C, (HL) : INC HL
-                LD   B, (HL) : INC HL                  ; BC = baked Vx
-                LD   E, (HL) : INC HL
-                LD   D, (HL) : INC HL                  ; DE = baked Vy
-                LD   A, (HL)
-                LD   (VDC_LastTangent), A : INC HL
-                LD   A, (HL)
-                LD   (VDC_LastTrackFlags), A
                 AND  A
                 RET
 
@@ -4663,6 +4626,68 @@ Main1_Start:
                 include "Frog.asm"
                 include "Bullet.asm"
                 include "MainLoop.asm"
+                include "CacheBuilderFast.asm"        ; быстрый сборщик кеша стабильной цепочки L19
+
+; Чтение упакованного Track V4. Контракт: PAGE3=#04; все штатные вызовы
+; входят сюда из игровой накладки. Старое имя сохранено для постоянного ABI и тестов.
+VDC_ReadRenderSampleAtHL_Main1:
+VDC_ReadRenderSampleAtHL_Slot0:
+                PUSH HL
+                LD   A, H
+                RRCA
+                RRCA
+                RRCA
+                AND  #03                               ; индекс страницы = t >> 11
+                LD   E, A
+                LD   A, (VDC_RenderTrackPageIdx)
+                CP   E
+                JR   Z, .page_ready
+                LD   A, E
+                LD   (VDC_RenderTrackPageIdx), A
+                LD   D, 0
+                LD   HL, (VDC_pTrackPages)
+                ADD  HL, DE
+                LD   A, (HL)
+                SetPage2_A
+.page_ready:   POP  HL
+                LD   A, H
+                AND  #07
+                LD   H, A                              ; местный номер образца = t & #07FF
+                ADD  HL, HL
+                ADD  HL, HL
+                ADD  HL, HL                            ; местный номер * 8
+                SET  7, H                              ; #8000 + местный номер * 8
+                ; Track V4 +0..3 = VERTEX2F в порядке от младшего байта. Восстановить точные
+                ; 16-разрядные Vx/Vy со знаком; их биты 15 хранятся в битах 7/6 поля +7.
+                LD   E, (HL) : INC HL                  ; q0 = младший байт Vy
+                LD   D, (HL) : INC HL                  ; q1: бит 0 Vx | биты 8..14 Vy
+                LD   C, (HL) : INC HL                  ; q2 = биты 1..8 Vx
+                LD   B, (HL) : INC HL                  ; q3 = код команды | биты 9..14 Vx
+                LD   A, D
+                SLA  D                                 ; CF=бит 0 Vx
+                RL   C                                 ; C=младшая часть Vx, CF=бит 8 Vx
+                RL   B                                 ; B=сдвинутый код команды | старшая часть Vx
+                RES  7, B                              ; убрать сдвинутый бит 6 кода команды
+                LD   D, A
+                RES  7, D                              ; D=старшая часть Vy без исходного бита 15
+                LD   A, (HL)
+                INC  HL                                ; касательная уже запечена в кеше отрисовки; побочная запись больше не нужна
+                LD   A, (HL)
+                LD   (VDC_LastTrackFlags), A
+                INC  HL                                ; +6 spin12
+                INC  HL                                ; +7 метаданные
+                LD   A, (HL)
+                LD   L, A
+                AND  #80                               ; исходный бит 15 Vx
+                OR   B
+                LD   B, A
+                LD   A, L
+                ADD  A, A                              ; бит 6 метаданных Vy -> бит 7
+                AND  #80
+                OR   D
+                LD   D, A
+                AND  A
+                RET
 Main1_End:
 
                 ; ----- UI overlay (slot 3, page UI_OVL_PAGE) — menu/level-select +

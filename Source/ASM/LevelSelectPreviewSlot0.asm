@@ -153,9 +153,12 @@ LevelSelectPreviewPxTo16:
                 ADD  HL, HL
                 RET
 
-LevelSelectPreviewFrogCenterX: DEFW 0
-LevelSelectPreviewFrogCenterY: DEFW 0
-LevelSelectPreviewFrogX16:     DEFW 0
-LevelSelectPreviewFrogY16:     DEFW 0
-LevelSelectPreviewKzX16:       DEFW 0
-LevelSelectPreviewKzY16:       DEFW 0
+; Временные значения полностью записываются UpdatePreviewMarkerXY до чтения.
+; Держим их в свободной постоянно отображённой ОЗУ сразу после двух кешей шаров,
+; а не в переполненном блоке кода Slot0. Диагностический GAMELOG начинается после них.
+LevelSelectPreviewFrogCenterX EQU #4B80
+LevelSelectPreviewFrogCenterY EQU #4B82
+LevelSelectPreviewFrogX16     EQU #4B84
+LevelSelectPreviewFrogY16     EQU #4B86
+LevelSelectPreviewKzX16       EQU #4B88
+LevelSelectPreviewKzY16       EQU #4B8A

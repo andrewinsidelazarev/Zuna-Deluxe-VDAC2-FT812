@@ -32,6 +32,7 @@ sys.path.insert(0, str(HERE))
 
 # Lite backend (kosarev/z80 pip) — eager import. Used by wrong-target, tail-glitch.
 from zuma_z80_simulator import ZumaZ80Sim  # noqa: E402
+from vdc_cache_sync import sync_active_vdc_caches  # noqa: E402
 
 CELL_SIZE = 32
 TRACK_BIN = PROJECT_ROOT / "Graphics" / "levels" / "Converted" / "track_640.bin"
@@ -150,6 +151,7 @@ def lite_restore(sim: ZumaZ80Sim, snap: Dict) -> None:
     sim.set_byte(S["Core.VDC_HSub"],    snap["hsub"])
     sim.set_byte(S["Core.VDC_SlotsLen"], snap["len"])
     sim.set_byte(S["Core.VDC_BallsSpawned"], snap["balls"])
+    sync_active_vdc_caches(sim)
 
 
 def find_insert_idx(chain_before: List[int], chain_after: List[int]) -> Optional[int]:

@@ -22,10 +22,10 @@ GS_WAIT_TIMEOUT    EQU #FFFF
                                       ; UI_OVL_PAGE (#41) глобально определён в main.asm (нужен Fade*
 ; transition до module Core); здесь используется trampoline.
 
-; Runtime pages Track V2. Каждая page — чистый 16K массив 8-byte samples:
-; Vx,Vy уже запечены для FT812 VERTEX2F, tangent, flags, 2 bytes padding.
-; Одна page держит 2048 samples. Loader заполняет VDC_TrackPages1/2 из V2
-; metadata sector; render code выбирает активную table через VDC_pTrackPages.
+; Страницы исполнения Track V4. Каждая страница — чистый массив 16 Кб из 8-байтных образцов:
+; готовый VERTEX2F, затем касательная, флаги, spin12 и признаки знака/видимости.
+; Одна страница вмещает 2048 образцов. Загрузчик заполняет VDC_TrackPages1/2 из сектора
+; метаданных V4; код отрисовки выбирает активную таблицу через VDC_pTrackPages.
 TRACK_PAGE2        EQU #0F
 TRACK_PAGE3        EQU #10
 TRACK_PAGE4        EQU #12
@@ -38,9 +38,9 @@ BULLET_TRAJ_PAGES  EQU 1
 TRACK_SECTION_MAX_SECTORS EQU 1 + ((TRACK_MAX_PAGES + BULLET_TRAJ_PAGES) * 32)
 
 ; ----------------------------------------------------------------------------
-; VDC_ReadSampleAtHL — читает track sample [HL] -> BC=X, DE=Y; выставляет
-; VDC_LastT, VDC_LastTangent и VDC_LastTrackFlags; CF=0. Compatibility path для
-; физики/пуль/эффектов: читает V2 Vx/Vy и восстанавливает центр X/Y = V/16+26.
+; VDC_ReadSampleAtHL — читает образец трека [HL] -> BC=X, DE=Y;
+; выставляет VDC_LastTrackFlags, CF=0. Совместимый путь для физики, пуль и эффектов
+; распаковывает Vx/Vy из Track V4 и восстанавливает центр X/Y = V/16+26.
 ; На выходе slot 2 снова VDC_ActiveTrackPage1.
 ; Клобает AF, HL.
 ; ----------------------------------------------------------------------------
@@ -48,9 +48,9 @@ VDC_ReadSampleAtHL:
                 JP   VDC_ReadSampleAtHL_Slot0
 
 ; ----------------------------------------------------------------------------
-; VDC_ReadRenderSampleAtHL — горячий render helper. Вход: HL=t. Выход: BC=Vx, DE=Vy,
-; выставляет VDC_LastT/Tangent/Flags, CF=0. Держит tiny page-index cache, чтобы
-; последовательные balls меняли 16K page только на границах 2048-sample.
+; VDC_ReadRenderSampleAtHL — совместимая подпрограмма. Вход: HL=t. Выход: BC=Vx, DE=Vy,
+; выставляет VDC_LastTrackFlags, CF=0. Малый кеш индекса страницы позволяет менять
+; 16-Кб страницу только на границах блоков по 2048 образцов.
 ; ----------------------------------------------------------------------------
 VDC_ReadRenderSampleAtHL:
                 JP   VDC_ReadRenderSampleAtHL_Slot0

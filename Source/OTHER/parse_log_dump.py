@@ -10,7 +10,7 @@ Dump формат:
     addr == offset в файле для зон #4000..#7FFF).
 
 GameLog layout (см. MainLoop.asm EQU секцию):
-    GAMELOG_ADDR     = 0x4B80
+    GAMELOG_ADDR     = 0x4B8C
     GAMELOG_IDX_ADDR = 0x4C80
     capacity         = (GAMELOG_IDX_ADDR - GAMELOG_ADDR) / 8 entries
 
@@ -27,7 +27,7 @@ import struct
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-GAMELOG_ADDR     = 0x4B80
+GAMELOG_ADDR     = 0x4B8C
 GAMELOG_IDX_ADDR = 0x4C80
 ENTRY_SIZE       = 8
 ENTRY_COUNT      = (GAMELOG_IDX_ADDR - GAMELOG_ADDR) // ENTRY_SIZE

@@ -61,6 +61,7 @@ def main():
     sim.set_byte(s["Core.VDC_ChainFreezeCnt"], 0)
     reset_gap_state(sim)
     sim.set_byte(s["Core.VDC_Shot2"] + 1, 1)
+    sim.call(s["Core.VDC_MarkShot2Maybe"])
     sim.set_byte(s["Core.VDC_TmpInsIdx"], 6)
 
     sim.call(s["Core.VDC_CheckMatch3"])

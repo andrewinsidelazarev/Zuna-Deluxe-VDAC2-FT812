@@ -25,19 +25,20 @@ BALL_DRAW = 51
 
 
 def read_cache(h, count):
-    """[(tan, cell, x16, y16, flags)] — знаковые Vx/Vy из кэша."""
+    """[(tan, cell, x16, y16, flags)] — unpack видимого Track V4 cache."""
     out = []
     for i in range(count):
         base = BALL_CACHE + i * 7
         tan = h.e.get_byte(base)
         cell = h.e.get_byte(base + 1)
-        vx = h.e.get_word(base + 2)
-        vy = h.e.get_word(base + 4)
+        word = int.from_bytes(bytes(h.e.get_byte(base + 2 + j) for j in range(4)), "little")
+        vx = (word >> 15) & 0x7FFF
+        vy = word & 0x7FFF
         fl = h.e.get_byte(base + 6)
-        if vx >= 0x8000:
-            vx -= 0x10000
-        if vy >= 0x8000:
-            vy -= 0x10000
+        if vx & 0x4000:
+            vx -= 0x8000
+        if vy & 0x4000:
+            vy -= 0x8000
         out.append((tan, cell, vx, vy, fl))
     return out
 

@@ -24,6 +24,7 @@ from typing import Dict, List
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from zuma_full_z80_emulator import PROJECT_ROOT, ZumaFullZ80Emulator
+from vdc_cache_sync import sync_active_vdc_caches
 
 CELL_SIZE = 32
 STUCK_LIMIT = 96
@@ -109,6 +110,7 @@ def restore(sim, snap):
     sim.set_byte(S['Core.VDC_MatchScanIdx'], snap['scan'])
     sim.set_word(S['Core.ZL_FrameCounter'], snap['fc'])
     sim.set_byte(S['Core.VDC_LfsrSeed'], snap['lfsr'])
+    sync_active_vdc_caches(sim)
 
 
 def find_stuck(sim, frames, log_file=None):

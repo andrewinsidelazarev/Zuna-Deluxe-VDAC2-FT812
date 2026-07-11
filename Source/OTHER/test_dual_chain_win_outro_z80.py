@@ -150,18 +150,18 @@ def run_case(level: int, mode: str) -> tuple[bool, str]:
     tns2 = emu.get_word(sym["Core.VDC2_ChainLocal"] + tns_off)
     set_chain(emu, 1, 4, max(0, tns1 - 5))
     set_chain(emu, 2, 4, max(0, tns2 - 5))
-    emu.call(sym["Core.VDC_WinSnapAllChains"], max_steps=5_000_000)
+    emu.call(sym["Core.ZL_BuildTopMaskChainCaches"], max_steps=5_000_000)
 
     if mode == "both":
         sb(emu, "Core.VDC_SlotsLen", 0)
         sb(emu, "Core.VDC2_SlotsLen", 0)
     elif mode == "chain1_early":
         sb(emu, "Core.VDC_SlotsLen", 0)
-        emu.call(sym["Core.VDC_WinSnapAllChains"], max_steps=5_000_000)
+        emu.call(sym["Core.ZL_BuildTopMaskChainCaches"], max_steps=5_000_000)
         sb(emu, "Core.VDC2_SlotsLen", 0)
     elif mode == "chain2_early":
         sb(emu, "Core.VDC2_SlotsLen", 0)
-        emu.call(sym["Core.VDC_WinSnapAllChains"], max_steps=5_000_000)
+        emu.call(sym["Core.ZL_BuildTopMaskChainCaches"], max_steps=5_000_000)
         sb(emu, "Core.VDC_SlotsLen", 0)
     else:
         raise AssertionError(mode)

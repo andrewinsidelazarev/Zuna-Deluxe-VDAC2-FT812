@@ -7,7 +7,7 @@
 
                 ifdef DIAG_SECTION_GLOBAL_EQU
 ; --- Circular RAM event log EQU ---------------------------------------------
-GAMELOG_ADDR        EQU #4B80                          ; behind dual ball caches (#4100..#4B7F)
+GAMELOG_ADDR        EQU #4B8C                          ; после двух кешей и временных данных выбора уровня (#4B80..#4B8B)
 GAMELOG_IDX_ADDR    EQU #4C80
 GAMELOG_FROZEN_ADDR EQU #4C81
 LOG_TMP_TYPE_ADDR   EQU #4C82

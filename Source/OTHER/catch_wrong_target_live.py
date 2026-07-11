@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from zuma_full_z80_emulator import PROJECT_ROOT, ZumaFullZ80Emulator
+from vdc_cache_sync import sync_active_vdc_caches
 
 
 CELL = 32
@@ -153,6 +154,7 @@ class Catcher:
         self.sw("Core.ZL_FrameCounter", snap["frame_counter"])
         self.sw("Core.Bullet_X", snap["bullet_x"])
         self.sw("Core.Bullet_Y", snap["bullet_y"])
+        sync_active_vdc_caches(self.emu)
 
     def slot_pos(self, i: int) -> tuple[int, int] | None:
         if self.emu.get_byte(self.s["Core.VDC_Slots"] + i) >= VALID_COLORS:

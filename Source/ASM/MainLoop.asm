@@ -27,8 +27,7 @@ ZL_SPACE_LEVEL_INDEX EQU LEVEL_RUNTIME_COUNT - 1       ; Space — послед�
 ZL_SPACE_STARS_PER_LAYER EQU 24
 ZL_TRACKF_TUNNEL     EQU #01                           ; track flags bit0: bullet не попадает
 ZL_TRACKF_DRAW_ABOVE EQU #02                           ; track flags bit1: рисовать после top layer
-ZL_SPIN12_LOW_LUT    EQU #4B80                         ; 256-byte runtime LUT после dual ball caches
-ZL_SPIN12_LOW_LUT_END EQU ZL_SPIN12_LOW_LUT + 256       ; заканчивается перед service bytes #4C80
+ZL_TRACK_META_VISIBLE EQU #01                          ; Track V4 +7, бит 0: пройдено исходное экранное отсечение
 
 ; ----------------------------------------------------------------------------
 ; MainLoop — точка входа. Никогда не возвращается.
@@ -40,7 +39,6 @@ MainLoop:       ; --- Инициализация game state (одноразов�
                 ; Spin K — runtime (per-level калибровка). По умолчанию = level 1.
                 LD   A, ZL_SPIN_K_DEFAULT
                 LD   (ZL_SpinK), A
-                CALL ZL_InitSpin12LowLut
 
 .Loop           ; --- 1. Обновить input + game state (Z80-only, параллельно с FT812 render) ---
                 CALL Input_Scan                      ; единый опрос ввода: мышь + PS/2-клавиатура
@@ -581,7 +579,7 @@ ZL_DrawActiveChainsUnified:
                 CALL ZL_GetTopMaskForCurrentLevel
                 LD   A, (HL)
                 OR   A
-                JR   Z, .draw_no_mask
+                JP   Z, .draw_no_mask
                 
                 LD   A, (Core.VDC_DialogState)
                 OR   A
@@ -610,7 +608,11 @@ ZL_DrawActiveChainsUnified:
                 JR   .draw_no_mask
 .topmask_ready:
                 CALL ZL_UploadTopMasksMaybe
+                LD   A, 1
+                LD   (ZL_L19SplitBuildMode), A
                 CALL ZL_BuildTopMaskChainCaches
+                XOR  A
+                LD   (ZL_L19SplitBuildMode), A
                 
                 ; Pass 1: нижний слой
                 LD   A, 1
@@ -709,13 +711,13 @@ ZL_BuildTopMaskChainCaches:
                 LD   A, (VDC_HasSecondChain)
                 OR   A
                 RET  Z
-                CALL VDC_SwapChains
+                CALL VDC_SwapRenderChains
                 CALL SetSecondTrackPage
                 CALL ZL_SelectSecondaryBallCache
                 CALL ZL_BuildActiveChainCache
                 LD   A, (ZL_BallCount)
                 LD   (ZL_Chain2BallCount), A
-                CALL VDC_SwapChains
+                CALL VDC_SwapRenderChains
                 JP   SetCurrentTrackPage
 
 ZL_DrawPreparedChain1:
@@ -732,17 +734,31 @@ ZL_DrawPreparedChain2Maybe:
                 OR   A
                 RET  Z
                 CALL ZL_FlushCommandBufferMidFrame
-                CALL VDC_SwapChains
-                CALL SetSecondTrackPage
+
+                ; Готовый кеш уже содержит касательную, ячейку, VERTEX2F и флаги.
+                ; В обычном PLAY-кадре без затухания match-3 отрисовщик не читает
+                ; физическое состояние цепочки 2, поэтому не меняем местами 33-байтный
+                ; ChainLocal и страницу трека. Все кадры с анимацией идут по прежнему полному пути.
+                LD   A, (VDC_GameState)
+                OR   A
+                JR   NZ, .stateful
+                LD   A, (VDC_ExplodeActive)            ; по контракту на входе активна цепочка 1
+                LD   HL, VDC2_ChainLocal + (VDC_ExplodeActive - VDC_ChainLocalStart)
+                OR   (HL)                              ; защёлка хранилища цепочки 2
+                JR   NZ, .stateful
+.draw_secondary:
                 LD   C, 255 : LD D, 255 : LD E, 255
                 CALL FT.Coprocessor.ColorRGB
                 CALL ZL_SetupBallBitmapState
                 CALL ZL_SelectSecondaryBallCache
                 LD   A, (ZL_Chain2BallCount)
                 LD   (ZL_BallCount), A
-                CALL ZL_DrawCachedActiveChainWithShadowMaybe
+                JP   ZL_DrawCachedActiveChainWithShadowMaybe
+.stateful:
                 CALL VDC_SwapChains
-                JP   SetCurrentTrackPage
+                CALL .draw_secondary
+                CALL VDC_SwapChains
+                RET
 
 ZL_GetTopMaskForCurrentLevel:
                 LD   A, (CurrentLevel)
@@ -915,16 +931,66 @@ ZL_DrawActiveChainWithMode:
                 JP   ZL_DrawCachedActiveChainWithShadowMaybe
 
 ; ----------------------------------------------------------------------------
-; ZL_BuildActiveChainCache — pre-pass по Slots[].
-; Кеширует tangent/cell/Vx/Vy/track flags один раз; top-mask уровни потом рисуют
-; cached data двумя проходами (under/above), не пересчитывая VDC_SlotPos.
+; ZL_BuildActiveChainCache — предварительный проход по Slots[].
+; Один раз кеширует касательную, ячейку, Vx/Vy и флаги трека; уровни с верхней
+; маской затем рисуют кеш двумя проходами, не пересчитывая VDC_SlotPos.
 ; ----------------------------------------------------------------------------
 ZL_BuildActiveChainCache:
                 LD   A, (VDC_SlotsLen)
                 LD   (ZL_BallCount), A
                 OR   A
                 RET  Z
-                LD   B, A                             ; B = loop count
+                if BALLS_ARGB4_ENABLED
+                else
+                LD   HL, ZL_L19CacheSplit1
+                LD   A, (VDC_SecondActive)
+                OR   A
+                JR   Z, .split_flag_ready
+                LD   HL, ZL_L19CacheSplit2
+.split_flag_ready:
+                LD   (HL), 0                          ; общий путь всегда начинает с обычного формата кеша
+                CALL ZL_BuildActiveChainCacheFastL19Maybe
+                RET  C
+                LD   A, (VDC_SlotsLen)
+                endif
+ZL_BuildActiveChainCacheGenericNonEmpty:
+                LD   B, A                             ; B = счётчик цикла
+                ; Раньше голова для WIN считалась отдельным проходом обеих цепочек до обновления.
+                ; Кеш кадра N строится после обновления и точно совпадает с состоянием перед
+                ; обновлением кадра N+1. Снимаем max(t) здесь, когда t уже вычислен, но ещё не отсечён экраном.
+                ; После первого живого слота достаточно проверить его и следующие семь
+                ; внешних индексов: базовая координата теряет 32, а разница двух знаковых
+                ; смещений не превышает 255. Более дальний t поэтому строго меньше.
+                ; Вне PLAY снимок состояния отключён без дополнительного просмотра Slots[].
+                LD   A, (VDC_GameState)
+                OR   A
+                JR   Z, .PrePassWinPlay
+                LD   A, #FF                           ; отключено: порог #FF сразу гасит сравнение
+                LD   (VDC_WinTmpFound), A
+                LD   (ZL_TmpSlotIdx), A
+                JR   .PrePassWinInitDone
+.PrePassWinPlay:
+                XOR  A                                ; PLAY, образец ещё не найден
+                LD   (VDC_WinTmpFound), A
+                LD   C, B                             ; C = оставшееся число внешних индексов
+                LD   HL, (VDC_pSlots)
+.PrePassWinFindLive:
+                LD   A, (HL)
+                CP   VDC_NUM_COLORS
+                JR   C, .PrePassWinLiveFound
+                INC  HL
+                DEC  C
+                JR   NZ, .PrePassWinFindLive
+                XOR  A                                ; все слоты — разрывы; сравнивать всё равно нечего
+                JR   .PrePassWinFloorReady
+.PrePassWinLiveFound:
+                LD   A, C
+                SUB  8                                ; порог B после окна из восьми внешних индексов
+                JR   NC, .PrePassWinFloorReady
+                XOR  A                                ; до конца осталось не больше восьми индексов
+.PrePassWinFloorReady:
+                LD   (ZL_TmpSlotIdx), A
+.PrePassWinInitDone:
                 LD   A, #FF
                 LD   (VDC_RenderTrackPageIdx), A
                 
@@ -970,24 +1036,23 @@ ZL_BuildActiveChainCache:
                 ADD  HL, HL                            ; HL = HSA * VDC_CELL_SIZE
                 LD   A, (VDC_HSub)
                 LD   E, A : LD D, 0
-                ADD  HL, DE                            ; baseT = HSA*CELL_SIZE + HSub
-                LD   (ZL_PrePassBaseT), HL
-                LD   IX, (VDC_pSlots)                  ; держать hot pointers массивов в index regs
+                ADD  HL, DE                            ; базовая координата = HSA*CELL_SIZE + HSub
+                LD   IX, (VDC_pSlots)                  ; горячие указатели массивов держим в индексных регистрах
                 LD   IY, (VDC_pOffsets)
-                LD   HL, (ZL_CacheBasePtr)             ; указатель записи cache
-.PrePassLoop:   PUSH BC                               ; сохранить loop count
-                ; --- gap-проверка ---
+                LD   DE, (ZL_CacheBasePtr)             ; HL = базовая координата, DE = указатель записи кеша
+.PrePassLoop:   PUSH BC                               ; сохранить счётчик цикла
+                ; --- проверка разрыва ---
                 LD   A, (IX+0)                        ; Slots[i]
                 INC  IX
-                CP   VDC_NUM_COLORS                   ; ≥ 6 → gap
+                CP   VDC_NUM_COLORS                   ; ≥ 6 — разрыв
                 JR   C, .PrePassNotGap
                 INC  IY                               ; держать Offsets ptr синхронным со slot index
-                JP   .PrePassMark
+                JP   .PrePassGap
 .PrePassNotGap:
-                LD   (ZL_TmpFrame), A                 ; color
-                PUSH HL                               ; сохранить cache ptr
-                LD   HL, (ZL_PrePassBaseT)
-                PUSH HL                               ; baseT для add offset после чтения offsets[i]
+                LD   (ZL_TmpFrame), A                 ; цвет
+                LD   C, H                              ; знак исходной базовой координаты нужен для точного WIN-снимка
+                PUSH HL                               ; сохранить базовую координату под указателем кеша
+                PUSH DE                               ; сохранить указатель кеша
                 LD   A, (IY+0)                        ; Offsets[i]
                 INC  IY
                 LD   E, A
@@ -996,12 +1061,10 @@ ZL_BuildActiveChainCache:
                 JR   Z, .PrePassOffPos
                 DEC  D                                ; sign-extend offset
 .PrePassOffPos:
-                POP  HL                               ; HL = baseT
-                ADD  HL, DE                            ; HL = t = baseT + sext(offset[i])
+                ADD  HL, DE                            ; HL = t = базовая координата + знаковое смещение
                 BIT  7, H
                 JR   Z, .PrePassTNonNeg
-                POP  HL                               ; восстановить cache ptr
-                JP   .PrePassMark
+                JP   .PrePassCull                     ; снять указатель кеша и базовую координату, затем записать маркер
 .PrePassTNonNeg:
                 PUSH HL
                 LD   DE, (VDC_ActiveTrackSamples)      ; NumSamples
@@ -1012,10 +1075,29 @@ ZL_BuildActiveChainCache:
                 LD   HL, (VDC_ActiveTrackSamples)
                 DEC  HL
 .PrePassTIn:
-                ; Inline reader render-sample: тот же Track V2 ABI, что у VDC_ReadRenderSampleAtHL,
-                ; но без resident trampoline в per-ball cache-build loop.
-                LD   (VDC_LastT), HL
-                PUSH HL
+                LD   A, (ZL_TmpSlotIdx)
+                CP   B
+                JR   NC, .PrePassWinSampleDone        ; окно первого живого слота уже пройдено
+                BIT  7, C
+                JR   NZ, .PrePassWinSampleDone        ; i > HSA: исходный VDC_SlotT возвращал t<0
+                LD   A, (VDC_WinTmpFound)
+                INC  A
+                JR   Z, .PrePassWinSampleDone         ; #FF: снимок состояния отключён
+                DEC  A
+                JR   Z, .PrePassWinStore              ; первый видимый образец
+                EX   DE, HL                            ; DE = текущий t
+                LD   HL, (VDC_WinTmpMax)
+                AND  A
+                SBC  HL, DE                            ; сохранённый - текущий
+                EX   DE, HL                            ; HL = текущий t
+                JR   NC, .PrePassWinSampleDone        ; сохранённый >= текущего
+.PrePassWinStore:
+                LD   (VDC_WinTmpMax), HL
+                LD   A, 1
+                LD   (VDC_WinTmpFound), A
+.PrePassWinSampleDone:
+                ; Встроенное чтение Track V4: готовый VERTEX2F, касательная, флаги, фаза вращения и метаданные;
+                ; без постоянного переходника, упаковки во время игры и отсечения в цикле шаров.
                 LD   A, H
                 RRCA
                 RRCA
@@ -1025,6 +1107,7 @@ ZL_BuildActiveChainCache:
                 LD   A, (VDC_RenderTrackPageIdx)
                 CP   E
                 JR   Z, .PrePassSamplePageReady
+                PUSH HL                               ; t нужно сохранять только при редкой смене страницы
                 LD   A, E
                 LD   (VDC_RenderTrackPageIdx), A
                 LD   D, 0
@@ -1032,8 +1115,8 @@ ZL_BuildActiveChainCache:
                 ADD  HL, DE
                 LD   A, (HL)
                 SetPage2_A
-.PrePassSamplePageReady:
                 POP  HL
+.PrePassSamplePageReady:
                 LD   A, H
                 AND  #07
                 LD   H, A                              ; локальный sample = t & #07FF
@@ -1041,155 +1124,141 @@ ZL_BuildActiveChainCache:
                 ADD  HL, HL
                 ADD  HL, HL                            ; local * 8
                 SET  7, H                              ; #8000 + local*8
-                LD   C, (HL) : INC HL
-                LD   B, (HL) : INC HL                  ; BC = baked Vx
-                LD   (ZL_TmpBallX), BC
                 LD   E, (HL) : INC HL
-                LD   D, (HL) : INC HL                  ; DE = baked Vy
-                LD   (ZL_TmpBallY), DE
-                ; В cache-build VDC_LastTangent/Flags наружу не нужны:
-                ; держим их в локальных scratch, без лишнего roundtrip через VDC state.
+                LD   D, (HL) : INC HL
+                LD   (ZL_TmpVertexLo), DE              ; байты VERTEX2F +0..1
+                LD   E, (HL) : INC HL
+                LD   D, (HL) : INC HL
+                LD   (ZL_TmpVertexHi), DE              ; байты VERTEX2F +2..3
+                ; При построении кеша VDC_LastTangent/Flags наружу не нужны:
+                ; держим их в локальных временных ячейках без лишней записи в состояние VDC.
                 if BALLS_ARGB4_ENABLED
                 LD   A, (HL)
-                LD   (ZL_TmpAngleByte), A : INC HL     ; raw tangent, позже станет quantized tangent
-                else
-                LD   B, (HL) : INC HL                  ; raw tangent, позже станет quantized tangent
-                endif
+                LD   (ZL_TmpAngleByte), A : INC HL     ; исходная касательная, позже станет округлённой
                 LD   A, (HL)
                 LD   (ZL_TmpTrackFlags), A
-                ; 1024×768: V2 уже хранит corner coords VERTEX2F.
-                ; Cull прямо по Vx/Vy, чтобы vertices оставались внутри signed field.
-                LD   HL, (ZL_TmpBallX)                 ; Vx
-                BIT  7, H
-                JR   Z, .PrePassCullXRight
-                LD   DE, #FCC0                         ; -832 = (-26-26)*16
-                AND  A
-                SBC  HL, DE
-                JP   C, .PrePassCull                  ; X < -26
-                JR   .PrePassCullY
-.PrePassCullXRight:
-                LD   DE, #4000                         ; (1050-26)*16
-                AND  A
-                SBC  HL, DE
-                JP   NC, .PrePassCull                 ; X >= 1050
-.PrePassCullY:
-                LD   HL, (ZL_TmpBallY)                 ; Vy
-                BIT  7, H
-                JR   Z, .PrePassCullYBottom
-                LD   DE, #FCC0                         ; -832 = (-26-26)*16
-                AND  A
-                SBC  HL, DE
-                JP   C, .PrePassCull                  ; Y < -26
-                JR   .PrePassCullOk
-.PrePassCullYBottom:
-                LD   DE, #3000                         ; (794-26)*16
-                AND  A
-                SBC  HL, DE
-                JP   NC, .PrePassCull                 ; Y >= 794
-.PrePassCullOk:
-                ; cache ptr остаётся на стеке до записи cache entry: так не делаем
-                ; лишний POP/PUSH вокруг cull и spin.
-                ; --- spin --- (1024×768: полная анимация на ВСЕХ уровнях,
+                INC  HL                                ; +6 запечённая spin12
+                LD   C, (HL)
+                else
+                LD   B, (HL) : INC HL                  ; исходная касательная, позже станет округлённой
+                LD   C, (HL)                           ; флаги трека живут в C до записи кеша
+                INC  HL                                ; +6 запечённая spin12
+                LD   D, (HL)                           ; точная фаза сразу остаётся в D
+                endif
+                INC  HL                                ; +7 метаданные Track V4
+                LD   A, (HL)
+                AND  ZL_TRACK_META_VISIBLE
+                JP   Z, .PrePassCull
+                ; Указатель кеша остаётся на стеке до записи элемента: так не нужны
+                ; лишние POP/PUSH вокруг отсечения и расчёта фазы вращения.
+                ; --- вращение --- (1024×768: полная анимация на ВСЕХ уровнях,
                 ; гейты tunnel/top-mask и heavy-dual≥70 сняты по решению юзера)
-                LD   HL, (VDC_LastT)
                 if BALLS_ARGB4_ENABLED
                 LD   A, (ZL_BallsPalettedActive)
                 OR   A
                 JR   NZ, .PrePassSpin12
                 CALL ZL_SpinPhase                     ; A = spin 0..15
                 JR   .PrePassSpinReady
-                endif
-.PrePassSpin12: CALL ZL_SpinPhase12                   ; A = spin 0..11
+.PrePassSpin12: LD   A, C                              ; точная фаза заранее вычислена упаковщиком
 .PrePassSpinReady:
                 LD   D, A
+                endif
 .PrePassSpinDone:
                 if BALLS_ARGB4_ENABLED
                 LD   A, (ZL_TmpAngleByte)
                 else
-                LD   A, B                              ; raw tangent из Track V2
+                LD   A, B                              ; исходная касательная из Track V4
                 endif
                 LD   E, A
                 LD   A, (ZL_TangentQuantAdd)
                 ADD  A, E
                 LD   E, A
                 LD   A, (ZL_TangentQuantMask)
-                AND  E                                ; quantized tangent (round-to-nearest)
+                AND  E                                ; касательная, округлённая до ближайшего сектора
                 if BALLS_ARGB4_ENABLED
                 LD   (ZL_TmpAngleByte), A
                 else
-                LD   B, A                              ; quantized tangent до записи cache entry
+                LD   B, A                              ; округлённая касательная до записи элемента кеша
                 endif
                 if BALLS_ARGB4_ENABLED
                 LD   A, (ZL_BallsPalettedActive)
                 OR   A
                 JR   NZ, .PrePassL19Paletted
-                LD   A, (ZL_TmpFrame)                 ; color
+                LD   A, (ZL_TmpFrame)                 ; цвет
                 ADD  A, A : ADD A, A : ADD A, A : ADD A, A               ; x16
-                ADD  A, D                             ; cell = color*16 + spin
+                ADD  A, D                             ; ячейка = цвет*16 + фаза
                 JR   .PrePassCellReady
                 endif
 .PrePassL19Paletted:
-                LD   A, (ZL_TmpFrame)                 ; color
+                LD   A, (ZL_TmpFrame)                 ; цвет
                 ADD  A, A                             ; x2
                 ADD  A, A                             ; x4
                 LD   E, A
                 ADD  A, A                             ; x8
                 ADD  A, E                             ; x12
-                ADD  A, D                             ; cell = color*12 + spin12
+                ADD  A, D                             ; ячейка = цвет*12 + фаза из 12 положений
 .PrePassCellReady:
-                LD   D, A                              ; cell до записи cache entry
-                POP  HL                               ; восстановить cache ptr
+                LD   D, A                              ; ячейка до записи элемента кеша
+                POP  HL                               ; восстановить указатель кеша
                 if BALLS_ARGB4_ENABLED
                 LD   A, (ZL_TmpAngleByte)
                 else
                 LD   A, B
                 endif
-                LD   (HL), A : INC HL                 ; +0 quantized tangent
+                LD   (HL), A : INC HL                 ; +0 округлённая касательная
                 LD   A, D
-                LD   (HL), A : INC HL                 ; +1 global cell (0..191, или 0xFF=gap)
-                LD   DE, (ZL_TmpBallX)                 ; Vx уже запечён
-                LD   (HL), E : INC HL                 ; +2 Vx lo
-                LD   (HL), D : INC HL                 ; +3 Vx hi
-                LD   DE, (ZL_TmpBallY)                 ; Vy уже запечён
-                LD   (HL), E : INC HL                 ; +4 Vy lo
-                LD   (HL), D : INC HL                 ; +5 Vy hi
+                LD   (HL), A : INC HL                 ; +1 общая ячейка (0..191 либо 0xFF=разрыв)
+                LD   DE, (ZL_TmpVertexLo)
+                LD   (HL), E : INC HL                 ; +2, байт 0 VERTEX2F
+                LD   (HL), D : INC HL                 ; +3, байт 1 VERTEX2F
+                LD   DE, (ZL_TmpVertexHi)
+                LD   (HL), E : INC HL                 ; +4, байт 2 VERTEX2F
+                LD   (HL), D : INC HL                 ; +5, байт 3 VERTEX2F/код команды
+                if BALLS_ARGB4_ENABLED
                 LD   A, (ZL_TmpTrackFlags)
-                LD   (HL), A : INC HL                 ; +6 track flags
-                LD   A, (ZL_PrePassBaseT)
+                else
+                LD   A, C                              ; флаги трека не проходили через память
+                endif
+                LD   (HL), A : INC HL                 ; +6 флаги трека
+                POP  DE                               ; восстановить базовую координату
+.PrePassAdvanceBase:
+                LD   A, E
                 SUB  VDC_CELL_SIZE
-                LD   (ZL_PrePassBaseT), A
+                LD   E, A
                 JR   NC, .PrePassBaseDone
-                PUSH HL
-                LD   HL, ZL_PrePassBaseT + 1
-                DEC  (HL)
-                POP  HL
+                DEC  D
 .PrePassBaseDone:
-                POP  BC
-                DEC  B
-                JP   NZ, .PrePassLoop
-                RET
+                EX   DE, HL                            ; HL = следующая базовая координата, DE = следующий указатель кеша
+                JR   .PrePassNext
 
-.PrePassCull:   POP  HL                               ; cache ptr → как gap
-                JP   .PrePassMark
-
-.PrePassMark:   ; gap / off-track: cell (+1) = 0xFF (per-ball loop тест на gap по cell).
-                LD   (HL), 0                          ; +0 tangent (ignored для gap)
+.PrePassGap:    EX   DE, HL                            ; разрыв не создаёт сохранённого состояния на стеке
+.PrePassMark:   ; Разрыв либо точка вне трека: ячейка (+1) = 0xFF.
+                LD   (HL), 0                          ; +0 касательная не используется для разрыва
                 INC  HL
-                LD   (HL), #FF                        ; +1 cell = маркер gap
+                LD   (HL), #FF                        ; +1 ячейка = маркер разрыва
                 LD   BC, 6
                 ADD  HL, BC
-                LD   A, (ZL_PrePassBaseT)
-                SUB  VDC_CELL_SIZE
-                LD   (ZL_PrePassBaseT), A
-                JR   NC, .PrePassMarkBaseDone
-                PUSH HL
-                LD   HL, ZL_PrePassBaseT + 1
-                DEC  (HL)
-                POP  HL
-.PrePassMarkBaseDone:
+                JR   .PrePassAdvanceBase
+
+.PrePassCull:   POP  HL                               ; восстановить указатель кеша
+                POP  DE                               ; восстановить базовую координату
+                JP   .PrePassMark
+
+.PrePassNext:
                 POP  BC
                 DEC  B
                 JP   NZ, .PrePassLoop
+                LD   A, (VDC_WinTmpFound)
+                DEC  A
+                RET  NZ                                ; нет образца или снимок состояния отключён
+                LD   HL, (VDC_WinTmpMax)
+                LD   A, (VDC_SecondActive)
+                OR   A
+                JR   NZ, .PrePassWinStore2
+                LD   (VDC_WinHeadS1), HL
+                RET
+.PrePassWinStore2:
+                LD   (VDC_WinHeadS2), HL
                 RET
 
 ; ----------------------------------------------------------------------------
@@ -1202,7 +1271,7 @@ ZL_BuildActiveChainCache:
 ; top-cover/две цепи/дорогой фон дают лишние конфликтующие shadow-pass слои.
 ; Pass=3 (pause/dialog skip-tunnel) также остаётся normal-only.
 ; Для match-3 explosion тень строится без ColorA fade, а нормальный слой остаётся
-; slow path.
+; медленный путь.
 ; ----------------------------------------------------------------------------
 ZL_DrawCachedActiveChainWithShadowMaybe:
                 LD   A, (ZL_BallCount)
@@ -1290,6 +1359,46 @@ ZL_AppendShadowPayload:
                 LD   BC, 0
                 JP   FT.Coprocessor.Command_BCDE
 
+; IX -> 7-байтная запись кеша шара. Байты +2..+5 уже образуют точную команду
+; VERTEX2F из Track V4 в порядке от младшего байта; Command_BCDE пишет их без повторной упаковки.
+ZL_EmitCachedVertex2f:
+                LD   E, (IX+2)
+                LD   D, (IX+3)
+                LD   C, (IX+4)
+                LD   B, (IX+5)
+                JP   FT.Coprocessor.Command_BCDE
+
+; В быстрых путях CELL и готовый VERTEX2F всегда идут подряд.
+; Записать те же 8 байт за один проход, с одной парой чтения/записи BufferPtr.
+; Изменяет A, HL; IX и остальные регистры сохраняет.
+ZL_EmitCachedCellVertex:
+                LD   HL, (FT.Coprocessor.BufferPtr)
+                LD   A, (IX+1)
+                AND  #7F
+                LD   (HL), A                           ; CELL, младший байт
+                INC  HL
+                XOR  A
+                LD   (HL), A
+                INC  HL
+                LD   (HL), A
+                INC  HL
+                LD   (HL), #06                         ; код BITMAP_CELL
+                INC  HL
+                LD   A, (IX+2)
+                LD   (HL), A
+                INC  HL
+                LD   A, (IX+3)
+                LD   (HL), A
+                INC  HL
+                LD   A, (IX+4)
+                LD   (HL), A
+                INC  HL
+                LD   A, (IX+5)
+                LD   (HL), A
+                INC  HL
+                LD   (FT.Coprocessor.BufferPtr), HL
+                RET
+
 ZL_DrawCachedActiveChainShadowPayload:
                 LD   A, (ZL_BallCount)
                 OR   A
@@ -1337,11 +1446,7 @@ ZL_DrawCachedActiveChainShadowPayload:
                 CALL ZL_EmitBallMatrixFromBRAD
                 POP  IX
 .shadow_no_matrix:
-                LD   A, (IX+1)
-                CALL FT.Coprocessor.Cell
-                LD   C, (IX+2) : LD B, (IX+3)
-                LD   E, (IX+4) : LD D, (IX+5)
-                CALL FT.Coprocessor.Vertex2f
+                CALL ZL_EmitCachedCellVertex
                 POP  BC
 .shadow_skip:
                 LD   DE, 7
@@ -1502,9 +1607,7 @@ ZL_DrawCachedActiveChainSlow:
                 SUB  E
                 LD   E, A
                 CALL FT.Coprocessor.ColorA
-                LD   C, (IX+2) : LD B, (IX+3)
-                LD   E, (IX+4) : LD D, (IX+5)
-                CALL FT.Coprocessor.Vertex2f
+                CALL ZL_EmitCachedVertex2f
                 LD   E, 255
                 CALL FT.Coprocessor.ColorA
                 JR   .PBDrawDone
@@ -1527,15 +1630,11 @@ ZL_DrawCachedActiveChainSlow:
                 LD   A, (VDC_HeadAbsorbAlpha)
                 LD   E, A
                 CALL FT.Coprocessor.ColorA
-                LD   C, (IX+2) : LD B, (IX+3)
-                LD   E, (IX+4) : LD D, (IX+5)
-                CALL FT.Coprocessor.Vertex2f
+                CALL ZL_EmitCachedVertex2f
                 LD   E, 255
                 CALL FT.Coprocessor.ColorA
                 JR   .PBDrawDone
-.PBNormalDraw:  LD   C, (IX+2) : LD B, (IX+3)         ; BC = Vx
-                LD   E, (IX+4) : LD D, (IX+5)         ; DE = Vy
-                CALL FT.Coprocessor.Vertex2f
+.PBNormalDraw:  CALL ZL_EmitCachedVertex2f
 .PBDrawDone:    POP  BC
 .PBSkip:        INC  C
                 LD   DE, 7
@@ -1551,19 +1650,28 @@ ZL_DrawCachedActiveChainSlow:
                 RET
 
 ; ----------------------------------------------------------------------------
-; ZL_DrawCachedActiveChainFastMaybe — быстрый path для простого игрового кадра.
-; Условия: один общий pass, нет match-3 fade, нет активного head absorb fade.
-; Убирает dispatch по pass/fade/absorb из per-ball loop. Сложные случаи уходят
-; в slow path выше; ручной emit CELL/VERTEX2F пока не включён из-за лимита Main1.
-; Выход: CF=1 если кадр обработан здесь, CF=0 если нужен fallback.
+; ZL_DrawCachedActiveChainFastMaybe — быстрый путь для простого игрового кадра.
+; Условия: PLAY, нет затухания match-3 и активного затухания головы при всасывании. Общий проход 0 и
+; тоннельные проходы 1/2 выбирают специализированный цикл один раз до обхода кеша.
+; Убирает выбор прохода/затухания/всасывания из цикла каждого шара. Сложные случаи уходят
+; в медленный путь; CELL/VERTEX2F остаются штатными, поэтому поток CMD совпадает.
+; Выход: CF=1, если кадр обработан здесь; CF=0, если нужен запасной путь.
 ; ----------------------------------------------------------------------------
 ZL_DrawCachedActiveChainFastMaybe:
                 LD   A, (ZL_BallCount)
                 OR   A
                 RET  Z
+                LD   HL, ZL_DrawCachedActiveChainFastBody
                 LD   A, (ZL_ChainDrawPass)
                 OR   A
-                RET  NZ                                ; top-mask/dialog pass: fallback
+                JR   Z, .fast_target_ready
+                LD   HL, ZL_DrawCachedActiveChainTopMaskFastUnder
+                CP   1
+                JR   Z, .fast_target_ready
+                LD   HL, ZL_DrawCachedActiveChainTopMaskFastOver
+                CP   2
+                RET  NZ                                ; диалоговый проход 3: запасной путь
+.fast_target_ready:
                 LD   A, (VDC_ExplodeActive)
                 OR   A
                 RET  NZ                                ; ColorA fade/explosions: fallback
@@ -1573,6 +1681,7 @@ ZL_DrawCachedActiveChainFastMaybe:
                 LD   A, (VDC_GameState)
                 OR   A
                 RET  NZ                                ; ABSORB/WIN/GAMEOVER оставляем slow path
+                JP   (HL)
 ZL_DrawCachedActiveChainFastBody:
                 LD   A, #01
                 LD   (ZL_TmpLastTangent), A
@@ -1602,11 +1711,7 @@ ZL_DrawCachedActiveChainFastBody:
                 CALL ZL_EmitBallMatrixFromBRAD
                 POP  IX
 .fast_no_matrix:
-                LD   A, (IX+1)
-                CALL FT.Coprocessor.Cell
-                LD   C, (IX+2) : LD B, (IX+3)
-                LD   E, (IX+4) : LD D, (IX+5)
-                CALL FT.Coprocessor.Vertex2f
+                CALL ZL_EmitCachedCellVertex
                 POP  BC
 .fast_skip:
                 LD   DE, 7
@@ -1614,6 +1719,197 @@ ZL_DrawCachedActiveChainFastBody:
                 DJNZ .fast_loop
                 SCF
                 RET
+
+; В PLAY-кадре с тоннелем и верхней маской flags&3 == DRAW_ABOVE рисуется в верхнем проходе,
+; остальные комбинации — в нижнем. Значение 3 остаётся снизу: TUNNEL имеет приоритет над
+; DRAW_ABOVE, как и в универсальном отрисовщике.
+ZL_GetActiveL19SplitCounts:
+                LD   HL, (ZL_CacheBasePtr)
+                LD   A, H
+                CP   HIGH ZL_BALL_CACHE2_ADDR
+                JR   Z, .split2
+                LD   A, (ZL_L19CacheSplit1)
+                OR   A
+                RET  Z
+                LD   A, (ZL_L19CacheUnder1)
+                LD   D, A
+                LD   A, (ZL_L19CacheOver1)
+                LD   E, A
+                SCF
+                RET
+.split2:       LD   A, (ZL_L19CacheSplit2)
+                OR   A
+                RET  Z
+                LD   A, (ZL_L19CacheUnder2)
+                LD   D, A
+                LD   A, (ZL_L19CacheOver2)
+                LD   E, A
+                SCF
+                RET
+
+; Компактная полоса уже содержит только видимые записи нужного слоя и сохраняет
+; их исходный порядок. Поэтому фильтр flags/gap внутри цикла не требуется.
+ZL_DrawCachedActiveChainL19SplitFast:
+                OR   A
+                JR   NZ, .split_nonempty
+                SCF
+                RET
+.split_nonempty:
+                LD   B, A
+                LD   A, #01
+                LD   (ZL_TmpLastTangent), A
+                LD   (.split_last_tangent + 1), A
+                LD   DE, ZL_L19_SPLIT_RECORD_BYTES
+.split_loop_start:
+                LD   HL, (FT.Coprocessor.BufferPtr)
+.split_loop:   LD   A, H
+                CP   #58
+                JR   C, .split_room
+                LD   (FT.Coprocessor.BufferPtr), HL
+                PUSH BC
+                PUSH IX
+                CALL ZL_FlushCommandBufferMidFrame
+                POP  IX
+                POP  BC
+                LD   HL, (FT.Coprocessor.BufferPtr)
+                LD   DE, ZL_L19_SPLIT_RECORD_BYTES
+.split_room:   LD   A, (IX+0)
+.split_last_tangent:
+                CP   #01                              ; операнд обновляется при смене сектора
+                JR   Z, .split_no_matrix
+                LD   (.split_last_tangent + 1), A
+                LD   (ZL_TmpLastTangent), A
+                LD   (FT.Coprocessor.BufferPtr), HL
+                PUSH BC
+                PUSH IX
+                CALL ZL_EmitBallMatrixFromBRAD
+                POP  IX
+                POP  BC
+                LD   HL, (FT.Coprocessor.BufferPtr)
+                LD   DE, ZL_L19_SPLIT_RECORD_BYTES
+.split_no_matrix:
+                LD   A, (IX+1)
+                AND  #7F
+                LD   (HL), A
+                INC  HL
+                XOR  A
+                LD   (HL), A
+                INC  HL
+                LD   (HL), A
+                INC  HL
+                LD   (HL), #06
+                INC  HL
+                LD   A, (IX+2)
+                LD   (HL), A
+                INC  HL
+                LD   A, (IX+3)
+                LD   (HL), A
+                INC  HL
+                LD   A, (IX+4)
+                LD   (HL), A
+                INC  HL
+                LD   A, (IX+5)
+                LD   (HL), A
+                INC  HL
+                ADD  IX, DE
+                DJNZ .split_loop
+                LD   (FT.Coprocessor.BufferPtr), HL
+                SCF
+                RET
+
+ZL_DrawCachedActiveChainTopMaskFastUnder:
+                CALL ZL_GetActiveL19SplitCounts
+                JR   NC, .generic_under
+                LD   A, D
+                LD   IX, (ZL_CacheBasePtr)
+                JP   ZL_DrawCachedActiveChainL19SplitFast
+.generic_under:
+                LD   A, #01
+                LD   (ZL_TmpLastTangent), A
+                LD   A, (ZL_BallCount)
+                LD   B, A
+                LD   IX, (ZL_CacheBasePtr)
+.fast_under_loop:
+                LD   A, (IX+1)
+                CP   #FF
+                JR   Z, .fast_under_skip
+                LD   A, (IX+6)
+                AND  ZL_TRACKF_TUNNEL | ZL_TRACKF_DRAW_ABOVE
+                CP   ZL_TRACKF_DRAW_ABOVE
+                JR   Z, .fast_under_skip
+                ; Проверка давления нужна только перед шаром, который этот проход рисует.
+                LD   A, (FT.Coprocessor.BufferPtr + 1)
+                CP   #58
+                JR   C, .fast_under_room
+                PUSH BC
+                PUSH IX
+                CALL ZL_FlushCommandBufferMidFrame
+                POP  IX
+                POP  BC
+.fast_under_room:
+                CALL ZL_DrawCachedActiveChainFastBall
+.fast_under_skip:
+                LD   DE, 7
+                ADD  IX, DE
+                DJNZ .fast_under_loop
+                SCF
+                RET
+
+ZL_DrawCachedActiveChainTopMaskFastOver:
+                CALL ZL_GetActiveL19SplitCounts
+                JR   NC, .generic_over
+                LD   A, E
+                LD   HL, (ZL_CacheBasePtr)
+                LD   DE, ZL_L19_SPLIT_LANE_BYTES
+                ADD  HL, DE
+                PUSH HL
+                POP  IX
+                JP   ZL_DrawCachedActiveChainL19SplitFast
+.generic_over:
+                LD   A, #01
+                LD   (ZL_TmpLastTangent), A
+                LD   A, (ZL_BallCount)
+                LD   B, A
+                LD   IX, (ZL_CacheBasePtr)
+.fast_over_loop:
+                LD   A, (IX+1)
+                CP   #FF
+                JR   Z, .fast_over_skip
+                LD   A, (IX+6)
+                AND  ZL_TRACKF_TUNNEL | ZL_TRACKF_DRAW_ABOVE
+                CP   ZL_TRACKF_DRAW_ABOVE
+                JR   NZ, .fast_over_skip
+                ; Отфильтрованные записи не меняют BufferPtr, поэтому проверка здесь точно та же.
+                LD   A, (FT.Coprocessor.BufferPtr + 1)
+                CP   #58
+                JR   C, .fast_over_room
+                PUSH BC
+                PUSH IX
+                CALL ZL_FlushCommandBufferMidFrame
+                POP  IX
+                POP  BC
+.fast_over_room:
+                CALL ZL_DrawCachedActiveChainFastBall
+.fast_over_skip:
+                LD   DE, 7
+                ADD  IX, DE
+                DJNZ .fast_over_loop
+                SCF
+                RET
+
+ZL_DrawCachedActiveChainFastBall:
+                PUSH BC
+                LD   A, (IX+0)
+                LD   HL, ZL_TmpLastTangent
+                CP   (HL)
+                JR   Z, .fast_ball_no_matrix
+                LD   (HL), A
+                PUSH IX
+                CALL ZL_EmitBallMatrixFromBRAD
+                POP  IX
+.fast_ball_no_matrix:
+                POP  BC
+                JP   ZL_EmitCachedCellVertex
 
 ; [ZL_DrawActiveChainSimple удалён 2026-06-09: мёртвый код (ни одного вызова во
 ;  всём дереве), освобождает ~120 байт Main1 под 1024×768 scale-код.]
@@ -1930,6 +2226,41 @@ ZL_EmitBallStaticMatrixCurrent:
                 CALL ZL_EmitLoadId
                 JP   ZL_EmitSetMatrix
 
+; Распаковать VERTEX2F из видимой 7-байтной записи кеша обратно в BC=Vx, DE=Vy со знаком.
+; Для видимого диапазона бит 14 является точным знаком 15-разрядного поля:
+; положительные X<16384/Y<12288, отрицательные лежат в #7xxx.
+ZL_DecodeCachedVertex2f:
+                LD   E, (IX+2)                        ; младший байт Vy
+                LD   A, (IX+3)
+                AND  #7F
+                LD   D, A                             ; старшая часть Vy, пока без расширения знака
+                BIT  6, D
+                JR   Z, .dcv_y_ready
+                SET  7, D
+.dcv_y_ready:
+                LD   A, (IX+3)                        ; бит 0 Vx лежит в бите 7 q1
+                RLCA
+                AND  #01
+                LD   C, A
+                LD   A, (IX+4)                        ; q2 = биты 1..8 Vx
+                LD   L, A
+                ADD  A, A
+                OR   C
+                LD   C, A                             ; младшая часть Vx
+                LD   A, L
+                RLCA
+                AND  #01
+                LD   B, A                             ; бит 0 старшей части Vx = исходный бит 8
+                LD   A, (IX+5)
+                AND  #3F                              ; младшие 6 битов q3 = биты 9..14 Vx
+                ADD  A, A
+                OR   B
+                LD   B, A
+                BIT  6, B
+                RET  Z
+                SET  7, B
+                RET
+
 ZL_DrawExplosions:
                 CALL ZL_EmitScale16Matrix             ; 1024×768: destroy 48→77
                 FT_BitmapHandle ZL_DESTROY_HANDLE
@@ -1945,6 +2276,11 @@ ZL_DrawExplosions:
 .de_loop:       LD   A, (HL)
                 OR   A
                 JR   Z, .de_next
+                LD   C, A                             ; кадр; кеш может содержать маркер вне экрана
+                LD   A, (IX+1)
+                CP   #FF
+                JR   Z, .de_next
+                LD   A, C
                 PUSH BC
                 PUSH HL
                 DEC  A
@@ -1971,12 +2307,14 @@ ZL_DrawExplosions:
 .de_pal_done:   LD   A, C
 .de_color_ready:
                 CALL ZL_ExplosionColorRGB
-                LD   L, (IX+2) : LD H, (IX+3)
+                CALL ZL_DecodeCachedVertex2f           ; BC=Vx, DE=Vy
+                PUSH DE
+                LD   H, B : LD L, C
                 LD   DE, ZL_DESTROY_HALF_DELTA
                 AND  A
                 SBC  HL, DE
                 LD   B, H : LD C, L
-                LD   L, (IX+4) : LD H, (IX+5)
+                POP  HL                                ; HL=Vy
                 LD   DE, ZL_DESTROY_HALF_DELTA
                 AND  A
                 SBC  HL, DE
@@ -2127,46 +2465,6 @@ ZL_SpinPhase:
                 RET
                 endif
 
-ZL_SpinPhase12:
-                ; q = floor(t*61/256) mod 12.
-                ; Так как 61 mod 12 = 1:
-                ;   (H*61 + floor(L*61/256)) mod 12 = (H + floor(L*61/256)) mod 12.
-                LD   C, H                              ; C = high(t)
-                LD   A, L
-                ADD  A, LOW ZL_SPIN12_LOW_LUT
-                LD   E, A
-                LD   D, HIGH ZL_SPIN12_LOW_LUT
-                JR   NC, .sp12_lut_addr_ok
-                INC  D
-.sp12_lut_addr_ok:
-                LD   A, (DE)                           ; floor(low(t)*61/256)
-                ADD  A, C                              ; high(t) contribution modulo 12
-                CP   48
-                JR   C, .sp12_lt48
-                SUB  48
-.sp12_lt48:     CP   24
-                JR   C, .sp12_lt24
-                SUB  24
-.sp12_lt24:     CP   ZL_BALL_L19_PHASES
-                RET  C
-                SUB  ZL_BALL_L19_PHASES
-                RET
-
-ZL_InitSpin12LowLut:
-                LD   DE, ZL_SPIN12_LOW_LUT
-                LD   HL, 0                             ; HL = n*61
-                LD   B, 0                              ; 256 entries
-.lut_loop:      LD   A, H
-                LD   (DE), A                           ; floor(n*61/256)
-                INC  DE
-                LD   A, L
-                ADD  A, ZL_BALL_L19_SPIN_K
-                LD   L, A
-                JR   NC, .lut_no_carry
-                INC  H
-.lut_no_carry:  DJNZ .lut_loop
-                RET
-
 ; [ZL_FT_CMD_Write_DMA перенесён в shared_render.asm (Main0-резидент) 2026-06-11:
 ;  теперь его зовут И MainLoop (#04), И меню/level-select (#41) — единый быстрый
 ;  DMA-путь отправки кадра вместо медленного OTIR в сценах меню.]
@@ -2214,7 +2512,6 @@ ZL_ExplodeCheckPtr: DEFW 0                            ; gate горячего dr
 ZL_ChainDrawPass: DEFB 0                              ; 0=all, 1=under top layer, 2=above top layer
 ZL_TangentQuantMask: DEFB #F0                         ; cache-build mask: #F0 normal, #E0 для полных цепей
 ZL_TangentQuantAdd:  DEFB #08                         ; addend для round-to-nearest quantization
-ZL_PrePassBaseT: DEFW 0                               ; running (HSA-i)*CELL_SIZE+HSub во время build cache цепи
 ZL_TopMaskUploadedLevel: DEFB #FF                     ; текущий уровень, чьи tunnel top masks лежат в RAM_G
 ZL_TopMaskCount: DEFB 0
 ZL_TopMaskTablePtr: DEFW 0
@@ -2223,8 +2520,8 @@ ZL_TopMaskSrcLo: DEFW 0
 ZL_TopMaskRamLo: DEFW 0
 ZL_TopMaskRamHi: DEFB 0
 ZL_DialogFrameUploadDeferred: DEFB 0
-ZL_TmpBallX:    DEFW 0                                ; chain render: текущий шар X (px)
-ZL_TmpBallY:    DEFW 0                                ; chain render: текущий шар Y (px)
+ZL_TmpVertexLo: DEFW 0                                ; байты +0..1 VERTEX2F из Track V4
+ZL_TmpVertexHi: DEFW 0                                ; байты +2..3 VERTEX2F из Track V4
 ZL_TmpAngleByte:DEFB 0                                ; chain render: combined rotation byte
 ZL_SpinK:       DEFB ZL_SPIN_K_DEFAULT                ; runtime spin multiplier (per-level)
 ; [ZL_CmdDmaWordsHi/Lo переехали в shared_render.asm вместе с DMA-функцией]
@@ -2255,15 +2552,29 @@ ZL_BALL_CACHE_BYTES EQU VDC_MAX_SLOTS * 7
 ZL_BALL_CACHE_END EQU ZL_BALL_CACHE_ADDR + ZL_BALL_CACHE_BYTES
 ZL_BALL_CACHE2_ADDR EQU ZL_BALL_CACHE_END
 ZL_BALL_CACHE2_END EQU ZL_BALL_CACHE2_ADDR + ZL_BALL_CACHE_BYTES
+ZL_L19_SPLIT_CAPACITY EQU 96
+ZL_L19_SPLIT_RECORD_BYTES EQU 6
+ZL_L19_SPLIT_LANE_BYTES EQU ZL_L19_SPLIT_CAPACITY * ZL_L19_SPLIT_RECORD_BYTES
+                ASSERT ZL_L19_SPLIT_LANE_BYTES * 2 <= ZL_BALL_CACHE_BYTES
+
+; Во время gameplay байты #4B80..#4B8B свободны; level-select использует их
+; только в другой накладке. Здесь лежат признаки и размеры компактных полос L19.
+ZL_L19CacheSplit1 EQU ZL_BALL_CACHE2_END + 0
+ZL_L19CacheUnder1 EQU ZL_BALL_CACHE2_END + 1
+ZL_L19CacheOver1  EQU ZL_BALL_CACHE2_END + 2
+ZL_L19CacheSplit2 EQU ZL_BALL_CACHE2_END + 3
+ZL_L19CacheUnder2 EQU ZL_BALL_CACHE2_END + 4
+ZL_L19CacheOver2  EQU ZL_BALL_CACHE2_END + 5
+ZL_L19SplitBuildMode EQU ZL_BALL_CACHE2_END + 6
+ZL_L19CacheMetaEnd EQU ZL_BALL_CACHE2_END + 7
                 if RUNTIME_DIAGNOSTICS_ENABLED
-                ASSERT ZL_BALL_CACHE2_END <= GAMELOG_ADDR
+                ASSERT ZL_L19CacheMetaEnd <= GAMELOG_ADDR
                 else
-                ASSERT ZL_BALL_CACHE2_END <= ZL_SPIN12_LOW_LUT
-                ASSERT ZL_SPIN12_LOW_LUT_END <= #4C80
+                ASSERT ZL_L19CacheMetaEnd <= #4C80
                 endif
 
-; В обычной сборке после cache2 лежит runtime Spin12 LUT.
-; В диагностической сборке сразу после cache2 начинается circular RAM event log.
+; В обычной сборке область после второго кеша до служебных байтов #4C80 свободна.
+; В диагностической сборке сразу после второго кеша начинается кольцевой журнал событий в ОЗУ.
 
 ; ----------------------------------------------------------------------------
 ; ZL_ChainMatrixLUT — заранее запечённые rotation matrices.
@@ -2326,8 +2637,32 @@ ZL_EmitBallMatrixFromBRAD:
                 LD   DE, ZL_ChainMatrixL19LUT
                 ADD  HL, DE
                 LD   DE, (FT.Coprocessor.BufferPtr)
-                LD   BC, ZL_CHAIN_MATRIX_LUT_STRIDE
-                LDIR
+                ; Размер всегда равен 24 байтам; развёртка убирает повторную
+                ; проверку BC внутри LDIR, сохраняя точный порядок команд FT812.
+                LDI
+                LDI
+                LDI
+                LDI
+                LDI
+                LDI
+                LDI
+                LDI
+                LDI
+                LDI
+                LDI
+                LDI
+                LDI
+                LDI
+                LDI
+                LDI
+                LDI
+                LDI
+                LDI
+                LDI
+                LDI
+                LDI
+                LDI
+                LDI
                 LD   (FT.Coprocessor.BufferPtr), DE
                 RET
 

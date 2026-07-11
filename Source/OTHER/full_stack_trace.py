@@ -153,7 +153,15 @@ class FakeZiFiDevice:
 
 
 class FullStackTrace:
-    def __init__(self, root: Path, *, irq_mode: str = "none", shadow_ft812: bool = False, real_inflate: bool = False) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        irq_mode: str = "none",
+        shadow_ft812: bool = False,
+        real_inflate: bool = False,
+        capture_step_trace: bool = True,
+    ) -> None:
         self.root = root
         self.emu = ZumaFullZ80Emulator(root)
         self.shadow_regs = None
@@ -167,6 +175,7 @@ class FullStackTrace:
         self.raw_img = root / "Build" / "test_wc.img"
         self.irq_mode = irq_mode
         self.real_inflate = real_inflate
+        self.capture_step_trace = capture_step_trace
         self.step_no = 0
         self.events: collections.deque[str] = collections.deque(maxlen=512)
         self.pcs: collections.deque[tuple[int, int, tuple[int, int, int, int]]] = collections.deque(maxlen=4096)
@@ -184,17 +193,20 @@ class FullStackTrace:
 
         def hooked_step() -> int:
             pc = self.emu.reg.PC
-            self.pcs.append((self.step_no, pc, tuple(self.emu.mem.pages)))
+            if self.capture_step_trace:
+                self.pcs.append((self.step_no, pc, tuple(self.emu.mem.pages)))
             if self._hook_pc(pc):
                 self.step_no += 1
-                self._after_step_pages()
+                if self.capture_step_trace or self.irq_mode != "none" or self.real_inflate:
+                    self._after_step_pages()
                 return 0
             op = self.emu.mem.read(pc)
             if op == 0x76:
                 raise RuntimeError(f"HALT opcode about to execute at {hx(pc)}")
             t = self.orig_step()
             self.step_no += 1
-            self._after_step_pages()
+            if self.capture_step_trace or self.irq_mode != "none" or self.real_inflate:
+                self._after_step_pages()
             return t
 
         self.emu.step = hooked_step

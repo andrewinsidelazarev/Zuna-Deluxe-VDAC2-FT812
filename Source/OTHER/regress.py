@@ -71,6 +71,26 @@ FULL_EXTRA_STEPS: tuple[Step, ...] = (
 )
 
 
+OPTIMIZATION_GATE_STEPS: tuple[Step, ...] = (
+    py("test_track_v4_packed_vertex.py", 120, "render"),
+    py("test_track_baked_spin_z80.py", 120, "render"),
+    py("test_level_pack_second_tracks.py", 120, "render"),
+    py("test_track_v4_runtime_z80.py", 120, "render"),
+    py("test_cache_builder_l19_fast_z80.py", 120, "render"),
+    py("test_draw_cached_chain_fast_path_z80.py", 120, "render"),
+    py("test_prepared_chain2_no_swap_z80.py", 120, "chain"),
+    py("test_shadow_tunnel_pass_z80.py", 120, "render"),
+    py("test_topology_cache_mutators_z80.py", 120, "chain"),
+    py("test_offsets_maybe_latch_z80.py", 120, "chain"),
+    py("test_insert_animation_continuity_z80.py", 120, "bullet"),
+    py("test_bullet_insert_animation_full_z80.py", 120, "bullet"),
+    py("test_gap_scan_selection_z80.py", 120, "chain"),
+    py("test_gap_boundary_no_kz_drift_z80.py", 120, "chain"),
+    py("test_dual_chain_clamp_offsets_z80.py", 120, "chain"),
+    py("test_explode_active_guard_z80.py", 120, "chain"),
+)
+
+
 QUARANTINE_STEPS: tuple[Step, ...] = (
     py("test_win_next_level_full_load_z80.py", 240, "quarantine"),
     py("test_gap_pull_z80.py", 240, "quarantine"),
@@ -125,7 +145,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def steps_for(mode: str, skip_build: bool, include_quarantine: bool) -> list[Step]:
-    steps = list(SMOKE_STEPS if mode == "smoke" else SMOKE_STEPS + FULL_EXTRA_STEPS)
+    steps = list(
+        SMOKE_STEPS
+        if mode == "smoke"
+        else SMOKE_STEPS + FULL_EXTRA_STEPS + OPTIMIZATION_GATE_STEPS
+    )
     if include_quarantine:
         steps.extend(QUARANTINE_STEPS)
     if skip_build:
