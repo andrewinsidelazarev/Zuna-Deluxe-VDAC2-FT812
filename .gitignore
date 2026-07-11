@@ -101,6 +101,7 @@ main1_play.bin
 
 # ===== Local-only heavy artifacts (never push) =====
 /Buildmain.lst
+/Sounds/Original/
 /_work_backup_before_overlay_split_2026-05-27/
 /Sounds/Converted/tools/
 releases/**/*.img
@@ -120,12 +121,11 @@ releases/*/Source/
 /Diagnostics/Archive/
 
 # Generated L19/top-mask experiment assets
-/Graphics/Converted/balls_l19_pal4444*
-/Graphics/Converted/balls_l19_palette_argb4.bin
+/Graphics/Converted/balls_l19_pal4444.bin
+/Graphics/Converted/balls_l19_pal4444_p??.bin
 /Graphics/levels/Converted/pack/bg_l*_paletted_p0[8-9].bin
 /Graphics/levels/Converted/pack/bg_l*_paletted_p1[0-8].bin
 /Graphics/levels/Converted/pack/bg_l19_baked_frame_source.png
-/Graphics/levels/Converted/top_masks/top_mask_page_f[1-3].bin
 
 # Local session notes and one-off scratch files
 /Docs/session_memory_2026-*.md
