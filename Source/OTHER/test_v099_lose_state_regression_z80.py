@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
-"""v099 lose-state contract.
+"""Контракт состояния поражения v099 с текущей безопасной парковкой у килл-зоны.
 
-Эти проверки зафиксированы по release v099 / commit 2696dfb:
-- VDC_LoseStartReady не блокируется летящей Bullet_Active.
-- VDC_CheckKillzone при прямом входе в ABSORB гасит active shot/frog fire.
-- rem=65 у готовой цепи остаётся закрытым PLAY-кадром; v099 не имел armed latch.
-- busy для lose: ExplodeActive, GapJunction, GapPosLeft, gap markers, ExplodeFrame.
-- ChainFreezeCnt и Shot2 сами по себе в v099 не блокировали вход в lose.
+Эти проверки зафиксированы по выпуску v099, коммит 2696dfb:
+- Летящая пуля Bullet_Active не блокирует VDC_LoseStartReady.
+- При прямом входе в ABSORB процедура VDC_CheckKillzone гасит активный выстрел
+  и стрельбу лягушки.
+- При rem=65 готовая цепь остаётся в закрытом кадре PLAY; в v099 не было
+  защёлки готовности.
+- Занятость перед поражением задают ExplodeActive, GapJunction, GapPosLeft,
+  маркеры разрыва и ExplodeFrame.
+- ChainFreezeCnt и Shot2 сами по себе в v099 не блокировали вход в поражение.
+
+Текущая реализация уточняет только геометрию ожидания занятой цепи: вместо
+исторического отката к rem=65 она паркует голову на rem=1, непосредственно
+перед килл-зоной (для TNS=10, KzEndSub=31 это HSA=10, HSub=30, KzFrame=9).
 """
 from __future__ import annotations
 
@@ -115,9 +122,9 @@ def run_gap_and_explode_busy_cases() -> bool:
         hsub = gb(sim, "Core.VDC_HSub")
         hold = gb(sim, "Core.VDC_LoseHoldCnt")
         kz = gb(sim, "Core.VDC_KzFrame")
-        ok = state == 0 and hsa == 8 and hsub == 30 and hold == 24 and kz == 1
+        ok = state == 0 and hsa == 10 and hsub == 30 and hold == 24 and kz == 9
         all_ok = expect(
-            f"v099 busy case blocks lose: {name}",
+            f"v099 busy case blocks lose and parks at rem=1: {name}",
             ok,
             f"state={state} hsa={hsa} hsub={hsub} hold={hold} kz={kz}",
         ) and all_ok

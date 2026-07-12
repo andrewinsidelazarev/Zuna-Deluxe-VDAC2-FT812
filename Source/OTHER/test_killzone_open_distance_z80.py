@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
-"""Check the kill-zone skull opening window.
+"""Проверка окна раскрытия черепа килл-зоны и эффективной позиции головы.
 
-VDC_CheckKillzone should keep the skull closed while rem >= 65, start opening
-at rem == 64, keep opening through rem == 1, and trigger absorb at rem <= 0.
-The scan covers all legal KzEndSub values so cell/sub-cell wrapping is tested.
+VDC_CheckKillzone должна держать череп закрытым при rem >= 65, начинать
+раскрытие при rem == 64, продолжать его до rem == 1 включительно и запускать
+всасывание при rem <= 0. Расстояние измеряется от отображаемой головы с учётом
+знакового Offsets[0]. Проверяются все допустимые значения KzEndSub, включая
+переходы между ячейками и подячейками. При незавершённой анимации смещений
+голова паркуется в безопасной исходной позиции: положительные смещения
+компенсируются до эффективного rem == 1, а отрицательные остаются позади
+границы исходного rem == 1, чтобы их последующее затухание не пересекло
+килл-зону.
 """
 from __future__ import annotations
 
@@ -18,6 +24,9 @@ from zuma_z80_simulator import ZumaZ80Sim  # noqa: E402
 
 CELL_SIZE = 32
 TRACK_NUM_SLOTS = 20
+HEAD_OFFSETS = (-128, -64, -32, -1, 0, 1, 31, 32, 64, 127)
+EFFECTIVE_REMS = (65, 64, 3, 2, 1, 0, -1)
+EDGE_KZ_END_SUBS = (0, 1, 31)
 
 
 def max_slots(sim: ZumaZ80Sim) -> int:
@@ -55,6 +64,43 @@ def set_position_for_rem(sim: ZumaZ80Sim, kz_end_sub: int, rem: int) -> None:
     sb(sim, "Core.VDC_HSub", hsub)
 
 
+def set_position_for_effective_rem(
+    sim: ZumaZ80Sim,
+    kz_end_sub: int,
+    rem: int,
+    head_offset: int,
+) -> None:
+    """Задать HSA/HSub так, чтобы голова со знаковым Offsets[0] имела данный rem."""
+    effective_head = TRACK_NUM_SLOTS * CELL_SIZE + kz_end_sub - rem
+    raw_head = effective_head - head_offset
+    hsa, hsub = divmod(raw_head, CELL_SIZE)
+    sb(sim, "Core.VDC_HSA", hsa)
+    sb(sim, "Core.VDC_HSub", hsub)
+
+
+def signed_byte(value: int) -> int:
+    return value - 256 if value & 0x80 else value
+
+
+def effective_rem(sim: ZumaZ80Sim, kz_end_sub: int) -> int:
+    hsa = sim.get_byte(sim.sym["Core.VDC_HSA"])
+    hsub = sim.get_byte(sim.sym["Core.VDC_HSub"])
+    offset0 = signed_byte(sim.get_byte(sim.sym["Core.VDC_Offsets"]))
+    effective_head = hsa * CELL_SIZE + hsub + offset0
+    return TRACK_NUM_SLOTS * CELL_SIZE + kz_end_sub - effective_head
+
+
+def raw_head(sim: ZumaZ80Sim) -> int:
+    hsa = sim.get_byte(sim.sym["Core.VDC_HSA"])
+    hsub = sim.get_byte(sim.sym["Core.VDC_HSub"])
+    return hsa * CELL_SIZE + hsub
+
+
+def set_offsets_topology_busy(sim: ZumaZ80Sim) -> None:
+    sim.call(sim.sym["Core.VDC_MarkTopologyDirty"])
+    sim.call(sim.sym["Core.VDC_MarkOffsetsMaybe"])
+
+
 def reset_case(sim: ZumaZ80Sim, kz_end_sub: int, rem: int) -> None:
     sb(sim, "Core.VDC_GameState", 0)
     sb(sim, "Core.VDC_DialogState", 0)
@@ -79,7 +125,140 @@ def reset_case(sim: ZumaZ80Sim, kz_end_sub: int, rem: int) -> None:
         sim.set_byte(sim.sym["Core.VDC_Offsets"] + i, 0)
         sim.set_byte(sim.sym["Core.VDC_Shot2"] + i, 0)
         sim.set_byte(sim.sym["Core.VDC_ExplodeFrame"] + i, 0)
+    topology = sim.sym["Core.VDC_Slots"] - 1
+    offsets_mask = sim.sym["Core.VDC_TOPO_OFFSETS_MAYBE"]
+    sim.set_byte(topology, sim.get_byte(topology) & ~offsets_mask)
     set_position_for_rem(sim, kz_end_sub, rem)
+
+
+def run_effective_head_cases(
+    sim: ZumaZ80Sim,
+    check_addr: int,
+    failures: list[str],
+) -> None:
+    """Расстояние до килл-зоны должно учитывать знаковое смещение головы."""
+    for kz_end_sub in EDGE_KZ_END_SUBS:
+        for head_offset in HEAD_OFFSETS:
+            for rem in EFFECTIVE_REMS:
+                reset_case(sim, kz_end_sub, rem)
+                sim.set_byte(sim.sym["Core.VDC_Offsets"], head_offset & 0xFF)
+                set_position_for_effective_rem(sim, kz_end_sub, rem, head_offset)
+
+                # Оставляем флаг топологии сброшенным, чтобы отдельно проверить
+                # арифметику расстояния и барьер завершения анимаций ниже.
+                fixture_rem = effective_rem(sim, kz_end_sub)
+                if fixture_rem != rem:
+                    raise AssertionError(
+                        f"ошибка подготовки: kz={kz_end_sub} off={head_offset:+d} "
+                        f"rem={fixture_rem}, ожидалось {rem}"
+                    )
+
+                sim.call(check_addr, max_steps=5_000_000)
+                state = sim.get_byte(sim.sym["Core.VDC_GameState"])
+                frame = sim.get_byte(sim.sym["Core.VDC_KzFrame"])
+                exp_state, exp_frame = expected(rem)
+                if (state, frame) != (exp_state, exp_frame):
+                    failures.append(
+                        f"эффективная_голова kz={kz_end_sub:02d} "
+                        f"off={head_offset:+3d} rem={rem:3d}: "
+                        f"состояние/кадр=({state},{frame}) "
+                        f"ожидалось=({exp_state},{exp_frame})"
+                    )
+
+
+def run_busy_offsets_park_cases(
+    sim: ZumaZ80Sim,
+    check_addr: int,
+    failures: list[str],
+) -> None:
+    """Незавершённая анимация смещений безопасно паркуется и остаётся там."""
+    offsets_mask = sim.sym["Core.VDC_TOPO_OFFSETS_MAYBE"]
+    topology_addr = sim.sym["Core.VDC_Slots"] - 1
+
+    for kz_end_sub in EDGE_KZ_END_SUBS:
+        for head_offset in HEAD_OFFSETS:
+            for rem in EFFECTIVE_REMS:
+                reset_case(sim, kz_end_sub, rem)
+                sim.set_byte(sim.sym["Core.VDC_Offsets"], head_offset & 0xFF)
+                set_position_for_effective_rem(sim, kz_end_sub, rem, head_offset)
+                set_offsets_topology_busy(sim)
+
+                sim.call(check_addr, max_steps=5_000_000)
+                if rem <= 2:
+                    # Нельзя компенсировать отрицательное смещение продвижением
+                    # исходных HSA/HSub: при затухании смещения к нулю отображаемая
+                    # голова иначе пересечёт килл-зону. Положительные смещения
+                    # компенсируются назад, сохраняя видимую голову на rem=1.
+                    parked_rem = 1 - min(head_offset, 0)
+                    exp_raw_head = (
+                        TRACK_NUM_SLOTS * CELL_SIZE
+                        + kz_end_sub
+                        - 1
+                        - max(head_offset, 0)
+                    )
+                else:
+                    parked_rem = rem
+                    exp_raw_head = (
+                        TRACK_NUM_SLOTS * CELL_SIZE
+                        + kz_end_sub
+                        - rem
+                        - head_offset
+                    )
+                first = (
+                    raw_head(sim),
+                    effective_rem(sim, kz_end_sub),
+                    sim.get_byte(sim.sym["Core.VDC_GameState"]),
+                    sim.get_byte(sim.sym["Core.VDC_KzFrame"]),
+                    sim.get_byte(sim.sym["Core.VDC_LoseHoldCnt"]),
+                    sim.get_byte(sim.sym["Core.VDC_Offsets"]),
+                    sim.get_byte(topology_addr) & offsets_mask,
+                )
+                exp_frame = 9 if rem <= 2 else expected(rem)[1]
+                hold_ok = first[4] != 0 if rem <= 2 else first[4] == 0
+                if not (
+                    first[0] == exp_raw_head
+                    and first[1] == parked_rem
+                    and first[2] == 0
+                    and first[3] == exp_frame
+                    and hold_ok
+                    and first[5] == (head_offset & 0xFF)
+                    and first[6] == offsets_mask
+                ):
+                    failures.append(
+                        f"смещения_заняты kz={kz_end_sub:02d} "
+                        f"off={head_offset:+3d} исходный_rem={rem:3d}: "
+                        f"исходная/эффективная/состояние/кадр/удержание/off/"
+                        f"топология={first}, ожидалось исходная={exp_raw_head} "
+                        f"эффективная={parked_rem} состояние=0 кадр={exp_frame}"
+                    )
+                    continue
+
+                # Для отрицательного смещения безопасный эффективный rem может
+                # быть больше 2 (здесь до 129). Флаг удержания всё равно должен
+                # сохранять последующие проверки побайтно стабильными, не
+                # возвращаясь к логике вычисления расстояния.
+                stable = True
+                for _ in range(3):
+                    sim.call(check_addr, max_steps=5_000_000)
+                    again = (
+                        raw_head(sim),
+                        effective_rem(sim, kz_end_sub),
+                        sim.get_byte(sim.sym["Core.VDC_GameState"]),
+                        sim.get_byte(sim.sym["Core.VDC_KzFrame"]),
+                        sim.get_byte(sim.sym["Core.VDC_LoseHoldCnt"]),
+                        sim.get_byte(sim.sym["Core.VDC_Offsets"]),
+                        sim.get_byte(topology_addr) & offsets_mask,
+                    )
+                    if again != first:
+                        stable = False
+                        failures.append(
+                            f"дрейф при занятости kz={kz_end_sub:02d} "
+                            f"off={head_offset:+3d} исходный_rem={rem:3d}: "
+                            f"сначала={first}, повторно={again}"
+                        )
+                        break
+                if not stable:
+                    continue
 
 
 def main() -> int:
@@ -112,7 +291,8 @@ def main() -> int:
                 failures.append(
                     f"kz_end_sub={kz_end_sub:02d} rem={rem:3d} "
                     f"hsa={hsa:02d} hsub={hsub:02d}: "
-                    f"state/frame=({state},{frame}) expected=({exp_state},{exp_frame})"
+                    f"состояние/кадр=({state},{frame}) "
+                    f"ожидалось=({exp_state},{exp_frame})"
                 )
             if kz_end_sub in (0, 1, 31) and rem in (65, 64, 63, 11, 10, 9, 8, 2, 1, 0):
                 interesting.append(
@@ -123,17 +303,21 @@ def main() -> int:
     for line in interesting:
         print(line)
 
+    run_effective_head_cases(sim, check_addr, failures)
+    run_busy_offsets_park_cases(sim, check_addr, failures)
+
     if failures:
-        print("\nFAILURES:")
+        print("\nОШИБКИ:")
         for item in failures[:40]:
             print(item)
         if len(failures) > 40:
-            print(f"... {len(failures) - 40} more")
+            print(f"... ещё {len(failures) - 40}")
         return 1
 
     print(
-        "\nPASS: kill-zone skull opens exactly at rem<=64, "
-        "stays closed at rem>=65, and triggers at rem<=0"
+        "\nУСПЕХ: килл-зона использует эффективную позицию головы "
+        "(HSA/HSub + знаковый Offsets[0]), раскрывается при rem<=64, а при "
+        "незавершённых смещениях голова безопасно паркуется без дрейфа"
     )
     return 0
 

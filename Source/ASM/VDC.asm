@@ -157,6 +157,10 @@ VDC_Init:
                 LD   (VDC_GameOverTick),       A
                 LD   (VDC_AbsorbPopNote),      A
                 LD   (VDC_DualLoseMenuDelay),  A
+                LD   A, 255
+                LD   (VDC_HeadAbsorbAlpha),    A
+                LD   (VDC2_HeadAbsorbAlpha),   A
+                XOR  A
                 LD   (VDC_HudMenuState),       A
                 LD   (VDC_HudPointerBlock),    A
                 ; WIN head-сэмплы = нет данных на старте уровня; аутро выключено
@@ -414,6 +418,9 @@ VDC_SwapChains:
                 CALL VDC_SwapByte
                 LD   HL, VDC_KzFrame
                 LD   DE, VDC2_KzFrame
+                CALL VDC_SwapByte
+                LD   HL, VDC_HeadAbsorbAlpha
+                LD   DE, VDC2_HeadAbsorbAlpha
                 CALL VDC_SwapByte
 
                 LD   HL, VDC_ChainLocalStart
@@ -737,9 +744,9 @@ VDC_UpdateSecondAbsorbMaybe:
                 JP   SetCurrentTrackPage
 
 VDC_UpdateAbsorbOrRush:
-                CALL VDC_LoseStartReady                ; ABSORB may have started before match/gap settle
+                CALL VDC_LoseStartReady                ; защитный путь: ABSORB мог начаться до завершения дырки
                 JR   NC, .uar_settled
-                CALL VDC_LoseHoldBeforeKillzone
+                CALL VDC_LoseHoldAtMouth
                 CALL VDC_AnimateChain
                 RET
 .uar_settled:
@@ -772,8 +779,8 @@ VDC_UpdateAbsorbOrRush:
                 INC  E
 .uar_arm_done:  LD   A, (VDC_HSub)
                 LD   C, A
-                PUSH DE                                ; E = armed flag across clobbering calls
-                PUSH BC                                ; C = old HSub across clobbering calls
+                PUSH DE                                ; E = признак открытой пасти на время вызовов
+                PUSH BC                                ; C = прежний HSub на время вызовов
                 CALL VDC_MoveChain
                 CALL VDC_CheckKillzone
                 POP  BC
@@ -783,7 +790,7 @@ VDC_UpdateAbsorbOrRush:
                 JR   Z, .uar_no_hit
                 LD   A, (VDC_HSub)
                 CP   C
-                JR   C, .uar_hit                      ; armed skull; HSub wrapped через kill-zone
+                JR   C, .uar_hit                       ; пасть открыта, HSub перешёл через зону уничтожения
 .uar_no_hit:
                 POP  BC
                 DJNZ .uar_loop
@@ -870,73 +877,87 @@ VDC_DualLoseDelayMaybe:
                 RET
 
 ; ----------------------------------------------------------------------------
-; VDC_LoseStartReady — CF=0, когда Lose/ABSORB можно запускать.
-; Lose не должен обрывать pending match-3/cascade work: все chain elements должны
-; быть connected, а каждая destroy animation — committed. На dual levels inactive
-; chain проверяется временным swap через normal chain API.
+; VDC_LoseStartReady — локальная проверка активной цепочки для раннего удержания
+; у KZ и защитного обновления уже начатого ABSORB. Она намеренно не смотрит
+; вторую цепочку: чужая дырка или анимация взрыва не должна останавливать чистую цепь
+; до фактического достижения пасти.
 ; ----------------------------------------------------------------------------
 VDC_LoseStartReady:
-                CALL VDC_LoseChainBusy
-                RET  C
+                JP   VDC_LoseChainBusy
+
+; CF=1, если в неактивной цепочке ещё есть дырка или незавершённая анимация взрыва.
+; Вызывается только после локальной проверки активной цепи в
+; VDC_CheckKillzone/.ck_trigger: вместе эти проверки образуют глобальный барьер
+; перехода PLAY -> ABSORB. Временное переключение всегда откатывается, а исходный CF
+; сохраняется через AF.
+VDC_LoseOtherChainBusy:
                 LD   A, (VDC_HasSecondChain)
                 OR   A
                 RET  Z
                 CALL VDC_SwapChains
                 CALL VDC_LoseChainBusy
-                LD   A, 0
-                JR   NC, .lsr_other_ready
-                INC  A
-.lsr_other_ready:
                 PUSH AF
                 CALL VDC_SwapChains
                 POP  AF
-                OR   A
-                RET  Z
-                SCF
                 RET
 
-; Удержать активную цепь перед окном kill-zone: rem=65, т.е. на один sample
-; до открытия черепа (rem<=64). Этот hold только не даёт визуально въехать
-; в KZ раньше pending gap/explode settle.
-VDC_LoseHoldBeforeKillzone:
-                LD   HL, (VDC_TrackNumSlots)
-                LD   A, (VDC_KzEndSub)
-                OR   A
-                JR   Z, .lh_sub_zero
-                LD   A, L
-                CP   2
-                JR   C, .lh_zero_track
-                SUB  2
-                LD   (VDC_HSA), A
+; CF=1, пока хотя бы одна цепочка не закрыла дырку, не завершила взрыв либо
+; анимацию смещений. Активный выбор и указатели после проверки не меняются.
+VDC_LoseAllChainsBusy:
+                CALL VDC_LoseChainBusy
+                RET  C
+                JP   VDC_LoseOtherChainBusy
+
+; При незавершённой работе держать нарисованную голову перед зоной уничтожения.
+; Положительный offsets[0] компенсируется назад до видимого rem=1. Отрицательный
+; не подтягиваем вперёд: его затухание само доведёт голову к rem=1 без пересечения.
+VDC_LoseHoldAtMouth:
                 LD   A, (VDC_KzEndSub)
                 DEC  A
-                JR   .lh_save_hsub
-.lh_sub_zero:   LD   A, L
-                CP   3
-                JR   C, .lh_zero_track
-                SUB  3
+                LD   L, A
+                RLCA
+                SBC  A, A                              ; знаковое расширение KzEndSub-1
+                LD   H, A                              ; HL = знаковое значение KzEndSub-1
+                LD   BC, (VDC_pOffsets)
+                LD   A, (BC)
+                BIT  7, A
+                JR   Z, .lh_offset_ok
+                XOR  A                                 ; при отрицательном смещении логический rem остаётся 1
+.lh_offset_ok:  LD   E, A
+                LD   D, 0
+                AND  A
+                SBC  HL, DE                            ; поправка = KzEndSub-1-max(offset0,0)
+                LD   A, L
+                AND  VDC_CELL_SIZE - 1
+                LD   (VDC_HSub), A
+                LD   B, 5
+.lh_div32:      SRA  H
+                RR   L
+                DJNZ .lh_div32
+                LD   A, (VDC_TrackNumSlots)
+                ADD  A, L
                 LD   (VDC_HSA), A
-                LD   A, VDC_CELL_SIZE - 1
-                JR   .lh_save_hsub
-.lh_zero_track: XOR  A
-                LD   (VDC_HSA), A
-.lh_save_hsub:  LD   (VDC_HSub), A
-                LD   A, 1                              ; busy settle: keep skull closed
+                LD   A, 9                              ; rem=1: последний кадр открытия пасти
                 LD   (VDC_KzFrame), A
                 LD   A, VDC_FAST_ADVANCE * VDC_GLOBAL_SPEED_FACTOR
                 LD   (VDC_LoseHoldCnt), A
                 SCF
                 RET
 
-; CF=1, пока current active chain ещё имеет gaps или pending explode frames.
-; Offset settling и freeze (включая pShot2) больше не обрывают проезд в KZ.
+; CF=1, пока в активной цепочке есть дырка, незавершённый взрыв или ненулевые
+; смещения. ChainFreezeCnt/Shot2 сами по себе не блокируют Lose: геометрия уже
+; непрерывна, когда точная защёлка OFFSETS_MAYBE снята полным проходом затухания.
 VDC_LoseChainBusy:
                 LD   A, (VDC_ExplodeActive)
                 OR   A
-                JR   NZ, .lcb_busy                    ; match-3 fade is still visible
+                JR   NZ, .lcb_busy                    ; затухание взрыва match-3 ещё видно
                 LD   A, (VDC_SlotsLen)
                 OR   A
                 JR   Z, .lcb_ready
+                LD   HL, (VDC_pSlots)
+                DEC  HL
+                BIT  VDC_TOPO_OFFSETS_BIT, (HL)
+                JR   NZ, .lcb_busy
                 LD   A, (VDC_GapJunction)
                 OR   A
                 JR   NZ, .lcb_busy
@@ -3553,7 +3574,7 @@ VDC_ChainLocalStart:
 VDC_HSA:           DEFB 0
 ; VDC_HSub, VDC_SlotsLen -> hoisted to loader_resident.asm (resident Core)
 VDC_ChainFreezeCnt:DEFB 0
-VDC_LoseHoldCnt:   DEFB 0                  ; per-chain pause за два samples до KZ, пока settle завершается
+VDC_LoseHoldCnt:   DEFB 0                  ; отдельное ожидание цепочки перед KZ до завершения анимаций
 VDC_GapPullVp:     DEFB VDC_PULL_BASE_X10  ; скорость подтяжки ×10 (per-chain, в swap-блоке)
 VDC_GapAccum:      DEFW 0                  ; аккумулятор подтяжки ×10 (порог VDC_GAP_ACCUM_STEP)
 VDC_GapJunction:   DEFB 0                  ; 0=нет гэпов / 1=PULL / 2=CATCH-UP
@@ -3637,6 +3658,7 @@ VDC2_KzFrame:      DEFB 0
 VDC2_KzDrawX16:    DEFW 0
 VDC2_KzDrawY16:    DEFW 0
 VDC2_ChainLocal:   DS VDC_ChainLocalEnd - VDC_ChainLocalStart
+VDC2_HeadAbsorbAlpha: DEFB 255
 VDC2_LoseHoldCnt   EQU VDC2_ChainLocal + (VDC_LoseHoldCnt - VDC_ChainLocalStart)
 VDC_DualLoseMenuDelay: DEFB 0
 VDC_SwapTmp:       DEFB 0

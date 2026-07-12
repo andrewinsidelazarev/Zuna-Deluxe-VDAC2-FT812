@@ -2262,68 +2262,71 @@ VDC_UpdateAbsorb:
 
 ; ============================================================================
 ; VDC_CheckKillzone — анимация черепа по близости.
-; Каждый кадр вычисляет remaining_samples = (TrackNumSlots-HSA)*CS + KzEndSub-HSub.
-;   rem > 2*CS (=64)  → KzFrame=1 (closed skull, idle)
-;   rem в [1..64]     → KzFrame = 2 + ((64-rem) >> 3) ∈ [2..9] (opening)
-;   rem <= 0          → trigger absorb (state=1, KzFrame=11)
-; Rollback (match-3 cascade двигает HSA назад) → rem растёт → frame уменьшается
-; обратно к 1 автоматически. Никаких отдельных rollback hook'ов.
+; Каждый кадр вычисляет остаток пути от реально нарисованной головы:
+; (TrackNumSlots*CS + KzEndSub) - VDC_SlotT(0), включая знаковый offsets[0].
+;   rem > 2*CS (=64)  → KzFrame=1, пасть закрыта;
+;   rem в [1..64]     → KzFrame = 2 + ((64-rem) >> 3) ∈ [2..9], пасть открывается;
+;   rem <= 0          → запуск всасывания, state=1 и KzFrame=11.
+; При откате каскада HSA двигается назад, rem растёт, а кадр сам уменьшается к 1.
+; Отдельные обработчики отката не нужны.
 ; ============================================================================
 VDC_CheckKillzone:
                 LD   A, (Core.VDC_SlotsLen)
                 OR   A
                 RET  Z
-                ; --- cells_to_go = TrackNumSlots - HSA ---
-                LD   HL, (Core.VDC_TrackNumSlots)      ; L = TNS low (TNS≈86 fits)
-                LD   A, L
-                LD   HL, Core.VDC_HSA
-                SUB  (HL)                              ; A = TNS - HSA (signed-ish)
-                JR   Z, .ck_eqcell                     ; equal cells
-                JP   C, .ck_trigger                    ; HSA > TNS → past
-                ; --- HSA < TNS: rem = A*CS + KzEndSub - HSub ---
-                LD   H, 0
-                LD   L, A
+                XOR  A                                 ; слот 0 — голова цепочки
+                CALL Core.VDC_SlotT                    ; HL = реальная координата головы с offsets[0]
+                EX   DE, HL                            ; DE = реальная координата головы
+                LD   HL, (Core.VDC_TrackNumSlots)
                 ADD  HL, HL : ADD HL, HL : ADD HL, HL
-                ADD  HL, HL : ADD HL, HL               ; HL = A * 32 (CELL_SIZE)
+                ADD  HL, HL : ADD HL, HL               ; HL = TrackNumSlots * 32
                 LD   A, (Core.VDC_KzEndSub)
-                LD   D, A
-                LD   A, (Core.VDC_HSub)
-                LD   E, A
-                LD   A, D
-                SUB  E                                 ; A = KzEndSub - HSub (signed)
-                LD   E, A
-                LD   D, 0
-                BIT  7, A
-                JR   Z, .ck_add_delta
-                DEC  D                                 ; sign-extend negative
-.ck_add_delta:  ADD  HL, DE                            ; HL = remaining samples
-                JR   .ck_set_frame
-.ck_eqcell:     ; HSA == TNS: rem = KzEndSub - HSub ∈ [1..CS-1], всегда opening range
-                LD   A, (Core.VDC_KzEndSub)
-                LD   D, A
-                LD   A, (Core.VDC_HSub)
-                CP   D
-                JP   NC, .ck_trigger                   ; HSub >= KzEndSub → past
-                LD   E, A                              ; HSub
-                LD   A, D
-                SUB  E                                 ; A = KzEndSub - HSub (1..CS-1)
-                LD   H, 0
+                ADD  A, L                              ; младшие 5 бит конца пути нулевые, переноса нет
                 LD   L, A
-.ck_set_frame:  ; HL = remaining samples (positive)
+                AND  A
+                SBC  HL, DE                            ; знаковый остаток пути в сэмплах
+                LD   A, H
+                OR   L
+                JP   Z, .ck_trigger
+                BIT  7, H
+                JP   NZ, .ck_trigger                   ; rem < 0
+.ck_set_frame:  ; HL = положительный остаток пути в сэмплах
+                ; Уже поставленное ожидание проверяется независимо от rem:
+                ; отрицательный offsets[0] может отнести видимую голову далеко назад,
+                ; но до полного затухания смещений движение возобновлять нельзя.
+                LD   A, (Core.VDC_GameState)
+                OR   A
+                JR   NZ, .ck_frame_range
+                LD   A, (Core.VDC_LoseHoldCnt)
+                OR   A
+                JR   Z, .ck_frame_range
+                PUSH HL
+                CALL Core.VDC_LoseAllChainsBusy
+                POP  HL
+                JP   C, Core.VDC_LoseHoldAtMouth
+                XOR  A
+                LD   (Core.VDC_LoseHoldCnt), A
+.ck_frame_range:
                 LD   A, H
                 OR   A
                 JR   NZ, .ck_closed                    ; rem > 255 → > 64 → closed
                 LD   A, L
                 CP   67
                 JR   NC, .ck_closed                    ; rem >= 67: до окна KZ ещё есть запас
-                ; При VDC_GLOBAL_SPEED_FACTOR=2 проверка в rem==1 уже поздняя:
-                ; обычный кадр может войти в окно открытия/trigger до следующего
-                ; VDC_CheckKillzone. Если gap/explode ещё активны, держим голову
-                ; на rem=65, т.е. до kill-zone, как в HD-логике.
+                ; В PLAY проверяем завершение анимаций обеих цепочек только у пасти.
+                ; Порог rem<=2 учитывает два штатных MoveChain за кадр: при ожидании голова
+                ; паркуется строго на rem=1, а не откатывается на две клетки.
+                LD   A, (Core.VDC_GameState)
+                OR   A
+                JR   NZ, .ck_terminal_ready
+                LD   A, L
+                CP   Core.VDC_GLOBAL_SPEED_FACTOR + 1
+                JR   NC, .ck_terminal_ready
                 PUSH HL
-                CALL Core.VDC_LoseStartReady
+                CALL Core.VDC_LoseAllChainsBusy
                 POP  HL
-                JP   C, Core.VDC_LoseHoldBeforeKillzone
+                JP   C, Core.VDC_LoseHoldAtMouth
+.ck_terminal_ready:
                 XOR  A
                 LD   (Core.VDC_LoseHoldCnt), A
                 LD   A, L
@@ -2335,17 +2338,18 @@ VDC_CheckKillzone:
                 SRL  A : SRL A : SRL A
                 ADD  A, 2
                 LD   (Core.VDC_KzFrame), A
-                DEC  L
-                RET  NZ
-                XOR  A
-                LD   (Core.VDC_LoseHoldCnt), A
                 RET
 .ck_closed:     LD   A, 1
                 LD   (Core.VDC_KzFrame), A
                 RET
-.ck_trigger:    CALL Core.VDC_LoseStartReady
-                JP   C, Core.VDC_LoseHoldBeforeKillzone
-                XOR  A
+.ck_trigger:    ; Фактический переход PLAY -> ABSORB — общий барьер обеих цепочек.
+                LD   A, (Core.VDC_GameState)
+                OR   A
+                JR   NZ, .ck_begin_lose                ; уже начатый ABSORB обновляется независимо
+                CALL Core.VDC_LoseAllChainsBusy
+                JP   C, Core.VDC_LoseHoldAtMouth
+.ck_begin_lose: XOR  A
+                LD   (Core.VDC_LoseHoldCnt), A         ; снять ожидание перед ускорением/всасыванием
                 LD   (Core.Bullet_Active), A
                 LD   (Core.Frog_IsFire), A
                 LD   (Core.Frog_RecoilTick), A
@@ -2355,13 +2359,13 @@ VDC_CheckKillzone:
                 LD   (Core.Frog_TongueExpand), A
                 LD   A, 1
                 LD   (Core.VDC_GameState), A
-                LD   A, 11                             ; wide-open mouth absorb при старте всасывания
+                LD   A, 11                             ; полностью открытая пасть при старте всасывания
                 LD   (Core.VDC_KzFrame), A
                 XOR  A
                 LD   (Core.VDC_GameOverTick), A
                 LD   (Core.VDC_AbsorbPopNote), A        ; питч всасывания стартует с базы
                 LD   A, 255
-                LD   (Core.VDC_HeadAbsorbAlpha), A      ; head fade начинается с 255
+                LD   (Core.VDC_HeadAbsorbAlpha), A      ; затухание головы начинается с 255
                 LD   A, Core.SND_EARTHQUAKE             ; тряска при достижении черепа (оригинал; HD выпилил)
                 CALL Core.GS_PlaySfx
                 RET

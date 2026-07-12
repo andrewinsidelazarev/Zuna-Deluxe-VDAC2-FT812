@@ -366,7 +366,9 @@ def check_light_render_swap_and_topmask_cache() -> None:
     if full_chain_state_snapshot(reference) != full_before:
         raise AssertionError("full swap timing probe changed chain state")
     light_pair = to_second + to_first
-    if full_pair - light_pair != 4612:
+    # Полный игровой swap теперь переносит также alpha головы обеих цепочек;
+    # лёгкий swap рендера его намеренно не трогает.
+    if full_pair - light_pair != 4814:
         raise AssertionError(
             f"render swap delta changed: full={full_pair} light={light_pair}"
         )

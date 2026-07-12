@@ -34,7 +34,9 @@ from typing import Dict, Iterable, List, Optional, Tuple
 HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parent.parent
 Z80_LIB = HERE / "_z80_lib_cburbridge" / "src"
-RETURN_MARKER = 0xFFFE
+# Сторожевой адрес лежит в незагруженном окне перед TSLib (#1000), поэтому
+# заполненная до #FFFF игровая страница не может имитировать возврат из call().
+RETURN_MARKER = 0x0FFE
 PAGE_SIZE = 0x4000
 NUM_PAGES = 256
 RAM_G_SIZE = 1024 * 1024

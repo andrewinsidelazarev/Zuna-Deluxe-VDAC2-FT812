@@ -53,7 +53,7 @@ def parse_sym(path):
     return syms
 
 
-RETURN_MARKER = 0xFFFE  # PC sentinel для распознавания возврата из call()
+RETURN_MARKER = 0x0FFE  # сторож возврата в незагруженном окне перед TSLib (#1000)
 
 
 class ZumaZ80Sim:
