@@ -11,9 +11,9 @@
   маркеры разрыва и ExplodeFrame.
 - ChainFreezeCnt и Shot2 сами по себе в v099 не блокировали вход в поражение.
 
-Текущая реализация уточняет только геометрию ожидания занятой цепи: вместо
-исторического отката к rem=65 она паркует голову на rem=1, непосредственно
-перед килл-зоной (для TNS=10, KzEndSub=31 это HSA=10, HSub=30, KzFrame=9).
+Текущая реализация сохраняет историческую безопасную геометрию: занятая цепь
+паркуется на rem=65 до окна килл-зоны. Для TNS=10, KzEndSub=31 это
+HSA=8, HSub=30 и закрытая пасть KzFrame=1.
 """
 from __future__ import annotations
 
@@ -122,9 +122,9 @@ def run_gap_and_explode_busy_cases() -> bool:
         hsub = gb(sim, "Core.VDC_HSub")
         hold = gb(sim, "Core.VDC_LoseHoldCnt")
         kz = gb(sim, "Core.VDC_KzFrame")
-        ok = state == 0 and hsa == 10 and hsub == 30 and hold == 24 and kz == 9
+        ok = state == 0 and hsa == 8 and hsub == 30 and hold == 25 and kz == 1
         all_ok = expect(
-            f"v099 busy case blocks lose and parks at rem=1: {name}",
+            f"v099 busy case blocks lose and parks at rem=65: {name}",
             ok,
             f"state={state} hsa={hsa} hsub={hsub} hold={hold} kz={kz}",
         ) and all_ok

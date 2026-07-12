@@ -908,25 +908,24 @@ VDC_LoseAllChainsBusy:
                 RET  C
                 JP   VDC_LoseOtherChainBusy
 
-; При незавершённой работе держать нарисованную голову перед зоной уничтожения.
-; Положительный offsets[0] компенсируется назад до видимого rem=1. Отрицательный
-; не подтягиваем вперёд: его затухание само доведёт голову к rem=1 без пересечения.
+; При незавершённой работе держать нарисованную голову ДО окна kill-zone:
+; effective rem=65, KzFrame=1. Положительный offsets[0] компенсируется назад.
+; Отрицательный не подтягиваем вперёд: его затухание само доведёт голову к
+; rem=65, не открывая пасть и не пересекая границу.
 VDC_LoseHoldAtMouth:
                 LD   A, (VDC_KzEndSub)
-                DEC  A
+                SUB  65
                 LD   L, A
-                RLCA
-                SBC  A, A                              ; знаковое расширение KzEndSub-1
-                LD   H, A                              ; HL = знаковое значение KzEndSub-1
+                LD   H, #FF                            ; KzEndSub-65 всегда отрицательно
                 LD   BC, (VDC_pOffsets)
                 LD   A, (BC)
                 BIT  7, A
                 JR   Z, .lh_offset_ok
-                XOR  A                                 ; при отрицательном смещении логический rem остаётся 1
+                XOR  A                                 ; при отрицательном смещении логический rem остаётся 65
 .lh_offset_ok:  LD   E, A
                 LD   D, 0
                 AND  A
-                SBC  HL, DE                            ; поправка = KzEndSub-1-max(offset0,0)
+                SBC  HL, DE                            ; поправка = KzEndSub-65-max(offset0,0)
                 LD   A, L
                 AND  VDC_CELL_SIZE - 1
                 LD   (VDC_HSub), A
@@ -937,9 +936,10 @@ VDC_LoseHoldAtMouth:
                 LD   A, (VDC_TrackNumSlots)
                 ADD  A, L
                 LD   (VDC_HSA), A
-                LD   A, 9                              ; rem=1: последний кадр открытия пасти
+                LD   A, 1                              ; rem=65: пасть ещё полностью закрыта
                 LD   (VDC_KzFrame), A
-                LD   A, VDC_FAST_ADVANCE * VDC_GLOBAL_SPEED_FACTOR
+                LD   A, VDC_FAST_ADVANCE * VDC_GLOBAL_SPEED_FACTOR + 1
+                                                        ; после полного fast-кадра останется защёлка 1
                 LD   (VDC_LoseHoldCnt), A
                 SCF
                 RET
