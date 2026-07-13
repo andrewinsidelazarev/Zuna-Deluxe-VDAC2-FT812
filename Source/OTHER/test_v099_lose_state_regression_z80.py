@@ -127,7 +127,7 @@ def run_gap_and_explode_busy_cases() -> bool:
         hsub = gb(sim, "Core.VDC_HSub")
         hold = gb(sim, "Core.VDC_LoseHoldCnt")
         kz = gb(sim, "Core.VDC_KzFrame")
-        ok = state == 0 and hsa == 10 and hsub == 30 and hold == 24 and kz == 9
+        ok = state == 0 and hsa == 10 and hsub == 30 and hold == 255 and kz == 9
         all_ok = expect(
             f"v099 busy case blocks lose and parks at rem=1: {name}",
             ok,

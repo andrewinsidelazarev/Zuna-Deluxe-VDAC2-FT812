@@ -672,6 +672,9 @@ VDC_Update:
                 INC  HL
                 LD   (VDC_StatTimeFrames), HL
                 CALL VDC_CheckKillzone
+                LD   A, (VDC_GameState)
+                OR   A
+                RET  NZ                                 ; после входа в Lose PLAY-физику больше не выполнять
                 LD   A, (VDC_BallsSpawned)
                 LD   HL, VDC_LevelStart                 ; lead-in count текущего уровня
                 CP   (HL)
@@ -746,7 +749,7 @@ VDC_UpdateSecondAbsorbMaybe:
 VDC_UpdateAbsorbOrRush:
                 CALL VDC_LoseStartReady                ; защитный путь: ABSORB мог начаться до завершения дырки
                 JR   NC, .uar_settled
-                CALL VDC_LoseHoldAtMouth
+                CALL VDC_LoseHoldBeforeKillzone
                 CALL VDC_AnimateChain
                 RET
 .uar_settled:
@@ -877,19 +880,13 @@ VDC_DualLoseDelayMaybe:
                 RET
 
 ; ----------------------------------------------------------------------------
-; VDC_LoseStartReady — локальная проверка активной цепочки для раннего удержания
-; у KZ и защитного обновления уже начатого ABSORB. Она намеренно не смотрит
-; вторую цепочку: чужая дырка или анимация взрыва не должна останавливать чистую цепь
-; до фактического достижения пасти.
+; VDC_LoseStartReady — локальная проверка активной цепочки. Чужая дырка или
+; анимация взрыва не должна заранее останавливать эту цепочку у kill-zone.
 ; ----------------------------------------------------------------------------
-VDC_LoseStartReady:
-                JP   VDC_LoseChainBusy
+VDC_LoseStartReady EQU VDC_LoseChainBusy
 
-; CF=1, если в неактивной цепочке ещё есть дырка или незавершённая анимация взрыва.
-; Вызывается только после локальной проверки активной цепи в
-; VDC_CheckKillzone/.ck_trigger: вместе эти проверки образуют глобальный барьер
-; перехода PLAY -> ABSORB. Временное переключение всегда откатывается, а исходный CF
-; сохраняется через AF.
+; CF=1, если в неактивной цепочке осталась дырка или незавершённый взрыв.
+; Временное переключение цепочки всегда откатывается.
 VDC_LoseOtherChainBusy:
                 LD   A, (VDC_HasSecondChain)
                 OR   A
@@ -901,32 +898,37 @@ VDC_LoseOtherChainBusy:
                 POP  AF
                 RET
 
-; CF=1, пока хотя бы одна цепочка не закрыла дырку, не завершила взрыв либо
-; анимацию смещений. Активный выбор и указатели после проверки не меняются.
+; CF=1, пока хотя бы одна цепочка не закрыла дырку или не завершила взрыв.
+; Активная цепочка и указатели после проверки не меняются.
 VDC_LoseAllChainsBusy:
                 CALL VDC_LoseChainBusy
                 RET  C
                 JP   VDC_LoseOtherChainBusy
 
-; При незавершённой работе держать нарисованную голову перед зоной уничтожения.
-; Положительный offsets[0] компенсируется назад до видимого rem=1. Отрицательный
-; не подтягиваем вперёд: его затухание само доведёт голову к rem=1 без пересечения.
-VDC_LoseHoldAtMouth:
+; Локально удержать видимую голову на rem=1, непосредственно перед kill-zone.
+; Положительный offset компенсируется общей базой цепочки; отрицательный
+; оставляет голову ещё дальше от границы и безопасно затухает к rem=1.
+VDC_LoseHoldBeforeKillzone:
+                LD   A, VDC_FAST_ADVANCE * VDC_GLOBAL_SPEED_FACTOR
+; Глобальный вход получает A=255 из VDC_LoseChainBusy. Поэтому только цепочка,
+; первой дошедшая до границы, хранит старший бит и ждёт другую цепочку.
+VDC_LoseHoldBeforeKillzoneGlobal:
+                LD   (VDC_LoseHoldCnt), A
                 LD   A, (VDC_KzEndSub)
                 DEC  A
                 LD   L, A
                 RLCA
                 SBC  A, A                              ; знаковое расширение KzEndSub-1
-                LD   H, A                              ; HL = знаковое значение KzEndSub-1
+                LD   H, A
                 LD   BC, (VDC_pOffsets)
                 LD   A, (BC)
                 BIT  7, A
                 JR   Z, .lh_offset_ok
-                XOR  A                                 ; при отрицательном смещении логический rem остаётся 1
+                XOR  A                                 ; отрицательный offset не подтягивать вперёд
 .lh_offset_ok:  LD   E, A
                 LD   D, 0
                 AND  A
-                SBC  HL, DE                            ; поправка = KzEndSub-1-max(offset0,0)
+                SBC  HL, DE
                 LD   A, L
                 AND  VDC_CELL_SIZE - 1
                 LD   (VDC_HSub), A
@@ -937,10 +939,8 @@ VDC_LoseHoldAtMouth:
                 LD   A, (VDC_TrackNumSlots)
                 ADD  A, L
                 LD   (VDC_HSA), A
-                LD   A, 9                              ; rem=1: последний кадр открытия пасти
+                LD   A, 9                              ; последний кадр открытия перед входом
                 LD   (VDC_KzFrame), A
-                LD   A, VDC_FAST_ADVANCE * VDC_GLOBAL_SPEED_FACTOR
-                LD   (VDC_LoseHoldCnt), A
                 SCF
                 RET
 
@@ -981,10 +981,14 @@ VDC_LoseChainBusy:
                 RET
 .lcb_busy:
                 SCF
+                SBC  A, A                              ; A=255 для глобального hold, CF остаётся установлен
                 RET
 
 VDC_UpdateActiveChainPlayOnly:
                 CALL VDC_CheckKillzone
+                LD   A, (VDC_GameState)
+                OR   A
+                RET  NZ                                 ; не продолжать PLAY после общего входа в Lose
                 LD   A, (VDC_BallsSpawned)
                 LD   HL, VDC_LevelStart
                 CP   (HL)

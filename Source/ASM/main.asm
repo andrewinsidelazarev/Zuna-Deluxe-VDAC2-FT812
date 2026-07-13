@@ -2261,49 +2261,59 @@ VDC_UpdateAbsorb:
                 RET
 
 ; ============================================================================
-; VDC_CheckKillzone — анимация черепа по близости.
-; Каждый кадр вычисляет остаток пути от реально нарисованной головы:
-; (TrackNumSlots*CS + KzEndSub) - VDC_SlotT(0), включая знаковый offsets[0].
-;   rem > 2*CS (=64)  → KzFrame=1, пасть закрыта;
-;   rem в [1..64]     → KzFrame = 2 + ((64-rem) >> 3) ∈ [2..9], пасть открывается;
-;   rem <= 0          → запуск всасывания, state=1 и KzFrame=11.
-; При откате каскада HSA двигается назад, rem растёт, а кадр сам уменьшается к 1.
-; Отдельные обработчики отката не нужны.
+; VDC_CheckKillzone — штатная механика рабочей версии.
+; Остаток пути считается только по базовой координате цепочки:
+; (TrackNumSlots-HSA)*CS + KzEndSub-HSub. Обычные offsets не управляют Lose.
+; Раннее ожидание проверяет только активную цепочку. Общий барьер обеих цепочек
+; проверяется лишь при фактическом переходе PLAY -> ABSORB.
 ; ============================================================================
 VDC_CheckKillzone:
                 LD   A, (Core.VDC_SlotsLen)
                 OR   A
                 RET  Z
-                XOR  A                                 ; слот 0 — голова цепочки
-                CALL Core.VDC_SlotT                    ; HL = реальная координата головы с offsets[0]
-                EX   DE, HL                            ; DE = реальная координата головы
-                LD   HL, (Core.VDC_TrackNumSlots)
-                ADD  HL, HL : ADD HL, HL : ADD HL, HL
-                ADD  HL, HL : ADD HL, HL               ; HL = TrackNumSlots * 32
+                ; DE = знаковая дробная часть KzEndSub-HSub.
                 LD   A, (Core.VDC_KzEndSub)
-                ADD  A, L                              ; младшие 5 бит конца пути нулевые, переноса нет
+                LD   HL, Core.VDC_HSub
+                SUB  (HL)
+                LD   E, A
+                RLCA
+                SBC  A, A
+                LD   D, A
+                ; HL = знаковое (TrackNumSlots-HSA)*32. На дробном переходе
+                ; HSA уже может быть на один слот за целой границей трека.
+                LD   A, (Core.VDC_TrackNumSlots)
+                LD   HL, Core.VDC_HSA
+                SUB  (HL)
                 LD   L, A
-                AND  A
-                SBC  HL, DE                            ; знаковый остаток пути в сэмплах
+                SBC  A, A
+                LD   H, A
+                ADD  HL, HL : ADD HL, HL : ADD HL, HL
+                ADD  HL, HL : ADD HL, HL
+                ADD  HL, DE
                 LD   A, H
+                OR   A
+                JP   M, .ck_trigger
                 OR   L
                 JP   Z, .ck_trigger
-                BIT  7, H
-                JP   NZ, .ck_trigger                   ; rem < 0
-.ck_set_frame:  ; HL = положительный остаток пути в сэмплах
-                ; Уже поставленное ожидание проверяется независимо от rem:
-                ; отрицательный offsets[0] может отнести видимую голову далеко назад,
-                ; но до полного затухания смещений движение возобновлять нельзя.
-                LD   A, (Core.VDC_GameState)
-                OR   A
-                JR   NZ, .ck_frame_range
+.ck_set_frame:  ; HL = положительный остаток пути.
+                ; Уже поставленный hold проверяется отдельно. Глобальный hold
+                ; имеет старший бит и принадлежит только цепочке, первой дошедшей
+                ; до границы. Локальный hold зависит только от своей цепочки.
                 LD   A, (Core.VDC_LoseHoldCnt)
                 OR   A
                 JR   Z, .ck_frame_range
+                ADD  A, A
+                JR   NC, .ck_local_hold
                 PUSH HL
                 CALL Core.VDC_LoseAllChainsBusy
                 POP  HL
-                JP   C, Core.VDC_LoseHoldAtMouth
+                JP   C, Core.VDC_LoseHoldBeforeKillzoneGlobal
+                JR   .ck_release_hold
+.ck_local_hold: PUSH HL
+                CALL Core.VDC_LoseStartReady
+                POP  HL
+                JP   C, Core.VDC_LoseHoldBeforeKillzone
+.ck_release_hold:
                 XOR  A
                 LD   (Core.VDC_LoseHoldCnt), A
 .ck_frame_range:
@@ -2313,9 +2323,8 @@ VDC_CheckKillzone:
                 LD   A, L
                 CP   67
                 JR   NC, .ck_closed                    ; rem >= 67: до окна KZ ещё есть запас
-                ; В PLAY проверяем завершение анимаций обеих цепочек только у пасти.
-                ; Порог rem<=2 учитывает два штатных MoveChain за кадр: при ожидании голова
-                ; паркуется строго на rem=1, а не откатывается на две клетки.
+                ; Локальную незавершённую дырку/взрыв проверять только у самой
+                ; границы. Другая цепочка здесь движение не останавливает.
                 LD   A, (Core.VDC_GameState)
                 OR   A
                 JR   NZ, .ck_terminal_ready
@@ -2323,12 +2332,10 @@ VDC_CheckKillzone:
                 CP   Core.VDC_GLOBAL_SPEED_FACTOR + 1
                 JR   NC, .ck_terminal_ready
                 PUSH HL
-                CALL Core.VDC_LoseAllChainsBusy
+                CALL Core.VDC_LoseStartReady
                 POP  HL
-                JP   C, Core.VDC_LoseHoldAtMouth
+                JP   C, Core.VDC_LoseHoldBeforeKillzone
 .ck_terminal_ready:
-                XOR  A
-                LD   (Core.VDC_LoseHoldCnt), A
                 LD   A, L
                 CP   65
                 JR   NC, .ck_closed
@@ -2338,6 +2345,10 @@ VDC_CheckKillzone:
                 SRL  A : SRL A : SRL A
                 ADD  A, 2
                 LD   (Core.VDC_KzFrame), A
+                DEC  L
+                RET  NZ
+                XOR  A
+                LD   (Core.VDC_LoseHoldCnt), A
                 RET
 .ck_closed:     LD   A, 1
                 LD   (Core.VDC_KzFrame), A
@@ -2347,7 +2358,7 @@ VDC_CheckKillzone:
                 OR   A
                 JR   NZ, .ck_begin_lose                ; уже начатый ABSORB обновляется независимо
                 CALL Core.VDC_LoseAllChainsBusy
-                JP   C, Core.VDC_LoseHoldAtMouth
+                JP   C, Core.VDC_LoseHoldBeforeKillzoneGlobal
 .ck_begin_lose: XOR  A
                 LD   (Core.VDC_LoseHoldCnt), A         ; снять ожидание перед ускорением/всасыванием
                 LD   (Core.Bullet_Active), A

@@ -426,22 +426,33 @@ def run_dual_absorb_gap_isolation_case(gap_in_second: bool) -> bool:
 
 
 def run_dual_play_barrier_lifecycle_case(trigger_second: bool, blocker: str) -> bool:
-    """PLAY обязан дождаться завершения всех анимаций и перейти в ABSORB один раз."""
+    """Готовая цепь ждёт у KZ, а занятая локально доигрывает GAP/взрыв.
+
+    Чужой global hold не должен попадать в занятую цепь. Lose
+    начинается только после settle и доходит до диалога.
+    """
     sim = make_sim()
     s = sim.sym
     setup_dual_play_barrier(sim, trigger_second=trigger_second, blocker=blocker)
     sb(sim, "Core.Bullet_Active", 1)
     sb(sim, "Core.Frog_IsFire", 1)
     sb(sim, "Core.Frog_RecoilTick", 7)
+    sb(sim, "Core.VDC_Lives", 1)
+    sb(sim, "Core.VDC_DualLoseMenuDelay", 0)
 
     blocker_second = not trigger_second
+    start = s["Core.VDC_ChainLocalStart"]
+    blocker_hold = (
+        s["Core.VDC2_ChainLocal"] + (s["Core.VDC_LoseHoldCnt"] - start)
+        if blocker_second
+        else s["Core.VDC_LoseHoldCnt"]
+    )
     if blocker == "explode":
         blocker_probe = (
             s["Core.VDC2_ExplodeFrame"] if blocker_second else s["Core.VDC_ExplodeFrame"]
         ) + 1
         blocker_probe_initial = 1
     else:
-        start = s["Core.VDC_ChainLocalStart"]
         blocker_probe = (
             s["Core.VDC2_ChainLocal"] + (s["Core.VDC_GapJunction"] - start)
             if blocker_second
@@ -452,32 +463,42 @@ def run_dual_play_barrier_lifecycle_case(trigger_second: bool, blocker: str) -> 
     saw_ready_play_frame = False
     first_parked = False
     first_progress = False
+    parked_pose: tuple[int, int, int] | None = None
+    blocker_never_held = True
     transition_frame: int | None = None
+    finish_frame: int | None = None
     failure = ""
 
     for frame in range(600):
         busy1_before, busy2_before, restored_before = both_chains_busy(sim)
         if not restored_before:
-            failure = f"frame {frame}: pointers not restored before update"
+            failure = f"кадр {frame}: указатели цепи не восстановлены до update"
             break
         if sim.get_byte(s["Core.VDC_GameState"]) != 0:
-            failure = f"frame {frame}: state left PLAY before update"
+            failure = f"кадр {frame}: state покинул PLAY до update"
             break
 
         sim.call(s["Core.VDC_UpdateAllChains"], max_steps=5_000_000)
         state = sim.get_byte(s["Core.VDC_GameState"])
         busy1_after, busy2_after, restored_after = both_chains_busy(sim)
         if not restored_after:
-            failure = f"frame {frame}: UpdateAllChains leaked active-chain swap"
+            failure = f"кадр {frame}: UpdateAllChains не восстановил выбор цепи"
+            break
+
+        blocker_busy_before = busy2_before if blocker_second else busy1_before
+        if state == 0 and blocker_busy_before and sim.get_byte(blocker_hold) != 0:
+            blocker_never_held = False
+            failure = (
+                f"кадр {frame}: занятая цепь получила чужой global hold; "
+                f"LoseHoldCnt={sim.get_byte(blocker_hold)}"
+            )
             break
 
         hsa, hsub, kz, hold = trigger_chain_state(sim, trigger_second)
         if frame == 0:
+            parked_pose = (hsa, hsub, kz)
             first_parked = (
                 state == 0
-                and hsa == 10
-                and hsub == 30
-                and kz == 9
                 and hold > 0
                 and sim.get_byte(s["Core.Bullet_Active"]) == 1
                 and sim.get_byte(s["Core.Frog_IsFire"]) == 1
@@ -489,8 +510,8 @@ def run_dual_play_barrier_lifecycle_case(trigger_second: bool, blocker: str) -> 
             transition_frame = frame
             if busy1_after or busy2_after:
                 failure = (
-                    f"frame {frame}: ABSORB started while busy remains "
-                    f"chain1={busy1_after} chain2={busy2_after}"
+                    f"кадр {frame}: ABSORB начат до settle; "
+                    f"цепь1={busy1_after} цепь2={busy2_after}"
                 )
             elif not (
                 kz == 11
@@ -499,7 +520,7 @@ def run_dual_play_barrier_lifecycle_case(trigger_second: bool, blocker: str) -> 
                 and sim.get_byte(s["Core.Frog_IsFire"]) == 0
             ):
                 failure = (
-                    f"frame {frame}: begin-Lose side effects wrong: "
+                    f"кадр {frame}: неверное начало Lose: "
                     f"kz={kz} hold={hold} bullet={sim.get_byte(s['Core.Bullet_Active'])} "
                     f"fire={sim.get_byte(s['Core.Frog_IsFire'])}"
                 )
@@ -507,30 +528,62 @@ def run_dual_play_barrier_lifecycle_case(trigger_second: bool, blocker: str) -> 
 
         if not busy1_after and not busy2_after:
             saw_ready_play_frame = True
-            # Завершение могло произойти уже после обновления цепочки у порога.
-            # Тогда один штатный кадр PLAY до следующего вызова CheckKillzone
-            # стоит ровно в точке срабатывания; ABSORB должен начаться следующим.
-            if hsa == 10 and hsub == 31 and kz == 9 and hold == 0:
-                continue
+            # После settle global hold снимается, и цепь штатно
+            # доезжает до точки запуска Lose.
+            continue
 
-        if not (hsa == 10 and hsub == 30 and kz == 9 and hold > 0):
+        if (hsa, hsub, kz) != parked_pose or hold == 0:
             failure = (
-                f"frame {frame}: terminal wait drifted: "
+                f"кадр {frame}: ожидающая цепь сдвинулась: "
                 f"hsa={hsa} hsub={hsub} kz={kz} hold={hold}"
             )
             break
 
-    side = "chain2" if trigger_second else "chain1"
+    # Перехода в ABSORB недостаточно: обе цепи обязаны опустеть,
+    # а state machine — дойти до GAMEOVER и Lose-диалога без цикла.
+    if not failure and transition_frame is not None:
+        for absorb_frame in range(1200):
+            sim.call(s["Core.VDC_UpdateAllChains"], max_steps=5_000_000)
+            if not pointers_restored(sim):
+                failure = f"ABSORB кадр {absorb_frame}: не восстановлен выбор цепи"
+                break
+            state = sim.get_byte(s["Core.VDC_GameState"])
+            len1 = sim.get_byte(s["Core.VDC_SlotsLen"])
+            len2 = sim.get_byte(s["Core.VDC2_SlotsLen"])
+            dialog = sim.get_byte(s["Core.VDC_DialogState"])
+            if dialog != 0 and (len1 != 0 or len2 != 0):
+                failure = (
+                    f"ABSORB кадр {absorb_frame}: диалог до опустошения; "
+                    f"len1={len1} len2={len2}"
+                )
+                break
+            if state == 2:
+                if len1 == 0 and len2 == 0 and dialog in (1, 2):
+                    finish_frame = absorb_frame
+                else:
+                    failure = (
+                        f"ABSORB кадр {absorb_frame}: неполный GAMEOVER; "
+                        f"len1={len1} len2={len2} dialog={dialog}"
+                    )
+                break
+        if finish_frame is None and not failure:
+            failure = "ABSORB lifecycle не завершился за 1200 кадров"
+
+    side = "цепь2" if trigger_second else "цепь1"
     ok = (
         not failure
         and first_parked
         and first_progress
+        and blocker_never_held
         and transition_frame is not None
+        and finish_frame is not None
     )
     print(
-        f"{'PASS' if ok else 'FAIL'}: dual PLAY barrier {blocker}, trigger={side}: "
-        f"first_parked={first_parked}, blocker_progress={first_progress}, "
-        f"ready_play_frame={saw_ready_play_frame}, transition_frame={transition_frame}"
+        f"{'PASS' if ok else 'FAIL'}: dual PLAY-барьер {blocker}, триггер={side}: "
+        f"парковка={first_parked}, локальный_прогресс={first_progress}, "
+        f"чужого_hold_не_было={blocker_never_held}, "
+        f"готовый_PLAY_кадр={saw_ready_play_frame}, "
+        f"кадр_ABSORB={transition_frame}, кадр_финала={finish_frame}"
         + (f"; {failure}" if failure else "")
     )
     return ok
@@ -569,7 +622,7 @@ def run_terminal_park_exhaustive_case() -> bool:
                 sim.get_byte(s["Core.VDC_LoseHoldCnt"]),
                 sim.get_byte(s["Core.VDC_GameState"]),
             )
-            expected = (expected_hsa, expected_hsub, 9, 24, 0)
+            expected = (expected_hsa, expected_hsub, 9, 255, 0)
             expected_active = 1 if trigger_second else 0
             expected_slots = s["Core.VDC2_Slots"] if trigger_second else s["Core.VDC_Slots"]
             selection_ok = (
@@ -657,6 +710,80 @@ def run_dual_absorb_alpha_independence_case() -> bool:
     return ok
 
 
+def run_transition_frame_stops_play_case() -> bool:
+    """После PLAY -> ABSORB запрещены движение, анимация и spawn того же кадра."""
+    sim = make_sim()
+    s = sim.sym
+    sb(sim, "Core.VDC_BallsSpawned", 0)
+    sb(sim, "Core.VDC_LevelStart", 35)
+    sb(sim, "Core.VDC_GaugeFull", 0)
+    before = (
+        sim.get_byte(s["Core.VDC_SlotsLen"]),
+        sim.get_byte(s["Core.VDC_HSA"]),
+        sim.get_byte(s["Core.VDC_HSub"]),
+    )
+
+    sim.call(s["Core.VDC_Update"], max_steps=5_000_000)
+
+    after = (
+        sim.get_byte(s["Core.VDC_SlotsLen"]),
+        sim.get_byte(s["Core.VDC_HSA"]),
+        sim.get_byte(s["Core.VDC_HSub"]),
+    )
+    state = sim.get_byte(s["Core.VDC_GameState"])
+    gaps = any(
+        sim.get_byte(s["Core.VDC_Slots"] + index) >= s["Core.VDC_NUM_COLORS"]
+        for index in range(sim.get_byte(s["Core.VDC_SlotsLen"]))
+    )
+    exploding = any(
+        sim.get_byte(s["Core.VDC_ExplodeFrame"] + index) != 0
+        for index in range(sim.get_byte(s["Core.VDC_SlotsLen"]))
+    )
+    ok = state == 1 and after == before and not gaps and not exploding
+    print(
+        f"{'PASS' if ok else 'FAIL'}: кадр входа в Lose не продолжает PLAY: "
+        f"state={state}, до={before}, после={after}, gap={gaps}, explode={exploding}"
+    )
+    return ok
+
+
+def run_dual_absorb_negative_head_offset_finishes_case() -> bool:
+    """Отрицательный offset головы второй цепи не должен зациклить Lose."""
+    sim = make_sim()
+    s = sim.sym
+    sb(sim, "Core.VDC_HasSecondChain", 1)
+    sb(sim, "Core.VDC_GameState", 1)
+    sb(sim, "Core.VDC_DialogState", 0)
+    sb(sim, "Core.VDC_Lives", 1)
+    sb(sim, "Core.VDC_DualLoseMenuDelay", 0)
+    sb(sim, "Core.VDC_SlotsLen", 0)
+    sb(sim, "Core.VDC_KzFrame", 0)
+    sb(sim, "Core.VDC_LoseHoldCnt", 0)
+
+    sim.call(s["Core.VDC_SwapChains"])
+    configure_active_chain(sim, (0,), hsa=10, hsub=30, offsets=(-32,))
+    sb(sim, "Core.VDC_KzFrame", 1)
+    sb(sim, "Core.VDC_LoseHoldCnt", 0)
+    sim.call(s["Core.VDC_SwapChains"])
+
+    finish_frame: int | None = None
+    for frame in range(300):
+        sim.call(s["Core.VDC_UpdateAllChains"], max_steps=5_000_000)
+        if sim.get_byte(s["Core.VDC_GameState"]) == 2:
+            finish_frame = frame
+            break
+
+    len1 = sim.get_byte(s["Core.VDC_SlotsLen"])
+    len2 = sim.get_byte(s["Core.VDC2_SlotsLen"])
+    dialog = sim.get_byte(s["Core.VDC_DialogState"])
+    ok = finish_frame is not None and len1 == 0 and len2 == 0 and dialog in (1, 2)
+    print(
+        f"{'PASS' if ok else 'FAIL'}: dual Lose с offset головы -32 завершается: "
+        f"кадр={finish_frame}, len1={len1}, len2={len2}, dialog={dialog}"
+    )
+    return ok
+
+
 def main() -> int:
     cases = [
         ("single ready starts absorb", lambda sim: None, 1),
@@ -697,7 +824,7 @@ def main() -> int:
             10,
             False,
             None,
-            24,
+            255,
             9,
         ),
         (
@@ -708,7 +835,7 @@ def main() -> int:
             10,
             False,
             None,
-            24,
+            255,
             9,
         ),
         (
@@ -719,7 +846,7 @@ def main() -> int:
             10,
             False,
             None,
-            24,
+            255,
             9,
         ),
         (
@@ -819,7 +946,7 @@ def main() -> int:
             10,
             False,
             None,
-            24,
+            255,
             9,
         ),
         (
@@ -850,7 +977,7 @@ def main() -> int:
             9,
             False,
             None,
-            24,
+            255,
             9,
         ),
         (
@@ -864,7 +991,7 @@ def main() -> int:
             10,
             False,
             None,
-            24,
+            255,
             9,
         ),
         (
@@ -878,7 +1005,7 @@ def main() -> int:
             10,
             False,
             None,
-            24,
+            255,
             9,
         ),
         (
@@ -892,7 +1019,7 @@ def main() -> int:
             10,
             False,
             None,
-            24,
+            255,
             9,
         ),
         (
@@ -923,7 +1050,7 @@ def main() -> int:
             10,
             False,
             None,
-            24,
+            255,
             9,
         ),
         (
@@ -940,7 +1067,7 @@ def main() -> int:
             9,
             False,
             None,
-            24,
+            255,
             9,
         ),
         (
@@ -1016,6 +1143,10 @@ def main() -> int:
     if not run_terminal_park_exhaustive_case():
         failures += 1
     if not run_dual_absorb_alpha_independence_case():
+        failures += 1
+    if not run_transition_frame_stops_play_case():
+        failures += 1
+    if not run_dual_absorb_negative_head_offset_finishes_case():
         failures += 1
     return 1 if failures else 0
 

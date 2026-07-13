@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-"""Проверка окна раскрытия черепа килл-зоны и эффективной позиции головы.
+"""Проверка окна раскрытия черепа по базовой координате цепочки.
 
 VDC_CheckKillzone должна держать череп закрытым при rem >= 65, начинать
 раскрытие при rem == 64, продолжать его до rem == 1 включительно и запускать
-всасывание при rem <= 0. Расстояние измеряется от отображаемой головы с учётом
-знакового Offsets[0]. Проверяются все допустимые значения KzEndSub, включая
-переходы между ячейками и подячейками. При незавершённой анимации смещений
-обычный флаг offsets не должен блокировать Lose: это не дырка и не взрыв.
-Знаковое смещение головы участвует только в точном расчёте rem.
+всасывание при rem <= 0. Граница Lose определяется только HSA/HSub; знаковый
+Offsets[0] остаётся визуальной анимацией и не сдвигает границу состояния.
+Проверяются все допустимые KzEndSub и полный диапазон смещений головы.
 """
 from __future__ import annotations
 
@@ -134,33 +132,26 @@ def run_effective_head_cases(
     check_addr: int,
     failures: list[str],
 ) -> None:
-    """Расстояние до килл-зоны должно учитывать знаковое смещение головы."""
+    """Знаковое смещение головы не должно менять логическую границу Lose."""
     for kz_end_sub in EDGE_KZ_END_SUBS:
         for head_offset in HEAD_OFFSETS:
             for rem in EFFECTIVE_REMS:
                 reset_case(sim, kz_end_sub, rem)
                 sim.set_byte(sim.sym["Core.VDC_Offsets"], head_offset & 0xFF)
-                set_position_for_effective_rem(sim, kz_end_sub, rem, head_offset)
-
-                # Оставляем флаг топологии сброшенным, чтобы отдельно проверить
-                # арифметику расстояния и барьер завершения анимаций ниже.
-                fixture_rem = effective_rem(sim, kz_end_sub)
-                if fixture_rem != rem:
-                    raise AssertionError(
-                        f"ошибка подготовки: kz={kz_end_sub} off={head_offset:+d} "
-                        f"rem={fixture_rem}, ожидалось {rem}"
-                    )
+                before_head = raw_head(sim)
 
                 sim.call(check_addr, max_steps=5_000_000)
                 state = sim.get_byte(sim.sym["Core.VDC_GameState"])
                 frame = sim.get_byte(sim.sym["Core.VDC_KzFrame"])
+                hold = sim.get_byte(sim.sym["Core.VDC_LoseHoldCnt"])
                 exp_state, exp_frame = expected(rem)
-                if (state, frame) != (exp_state, exp_frame):
+                actual = (state, frame, raw_head(sim), hold)
+                expected_actual = (exp_state, exp_frame, before_head, 0)
+                if actual != expected_actual:
                     failures.append(
-                        f"эффективная_голова kz={kz_end_sub:02d} "
+                        f"смещение_не_двигает_границу kz={kz_end_sub:02d} "
                         f"off={head_offset:+3d} rem={rem:3d}: "
-                        f"состояние/кадр=({state},{frame}) "
-                        f"ожидалось=({exp_state},{exp_frame})"
+                        f"фактически={actual}, ожидалось={expected_actual}"
                     )
 
 
@@ -178,13 +169,11 @@ def run_unrelated_offsets_do_not_block(
             for rem in EFFECTIVE_REMS:
                 reset_case(sim, kz_end_sub, rem)
                 sim.set_byte(sim.sym["Core.VDC_Offsets"], head_offset & 0xFF)
-                set_position_for_effective_rem(sim, kz_end_sub, rem, head_offset)
                 set_offsets_topology_busy(sim)
 
                 sim.call(check_addr, max_steps=5_000_000)
                 actual = (
                     raw_head(sim),
-                    effective_rem(sim, kz_end_sub),
                     sim.get_byte(sim.sym["Core.VDC_GameState"]),
                     sim.get_byte(sim.sym["Core.VDC_KzFrame"]),
                     sim.get_byte(sim.sym["Core.VDC_LoseHoldCnt"]),
@@ -192,15 +181,9 @@ def run_unrelated_offsets_do_not_block(
                     sim.get_byte(topology_addr) & offsets_mask,
                 )
                 exp_state, exp_frame = expected(rem)
-                exp_raw_head = (
-                    TRACK_NUM_SLOTS * CELL_SIZE
-                    + kz_end_sub
-                    - rem
-                    - head_offset
-                )
+                exp_raw_head = TRACK_NUM_SLOTS * CELL_SIZE + kz_end_sub - rem
                 expected_actual = (
                     exp_raw_head,
-                    rem,
                     exp_state,
                     exp_frame,
                     0,
@@ -269,9 +252,8 @@ def main() -> int:
         return 1
 
     print(
-        "\nУСПЕХ: килл-зона использует эффективную позицию головы "
-        "(HSA/HSub + знаковый Offsets[0]), раскрывается при rem<=64, а обычные "
-        "смещения не блокируют Lose как постороннее событие"
+        "\nУСПЕХ: килл-зона использует базовые HSA/HSub, раскрывается при "
+        "rem<=64, а обычные offsets не двигают границу и не блокируют Lose"
     )
     return 0
 
