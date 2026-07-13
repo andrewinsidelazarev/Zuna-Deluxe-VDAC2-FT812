@@ -2313,12 +2313,15 @@ VDC_CheckKillzone:
                 LD   A, L
                 CP   67
                 JR   NC, .ck_closed                    ; rem >= 67: до окна KZ ещё есть запас
-                ; В PLAY проверяем завершение анимаций обеих цепочек до входа в
-                ; окно kill-zone. Сюда попадают rem<=66; при ожидании голова
-                ; паркуется на rem=65, где пасть ещё закрыта.
+                ; В PLAY проверяем завершение анимаций обеих цепочек только у пасти.
+                ; Порог rem<=2 учитывает два штатных MoveChain за кадр: при ожидании голова
+                ; паркуется строго на rem=1, а не откатывается на две клетки.
                 LD   A, (Core.VDC_GameState)
                 OR   A
                 JR   NZ, .ck_terminal_ready
+                LD   A, L
+                CP   Core.VDC_GLOBAL_SPEED_FACTOR + 1
+                JR   NC, .ck_terminal_ready
                 PUSH HL
                 CALL Core.VDC_LoseAllChainsBusy
                 POP  HL
