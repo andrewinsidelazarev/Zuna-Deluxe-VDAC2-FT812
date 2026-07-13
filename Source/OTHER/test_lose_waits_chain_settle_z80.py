@@ -4,8 +4,9 @@
 До фактического достижения зоны уничтожения чужая дырка или анимация взрыва
 не должна тормозить чистую цепь. Но общий переход PLAY -> ABSORB разрешён только
 после полного завершения работы обеих цепочек: все дырки закрыты, все кадры
-разрушения и смещения завершены. Уже начатый защитный ABSORB по-прежнему
-доигрывает анимацию каждой цепочки независимо.
+разрушения завершены. Обычные смещения и другие события цепочки Lose не
+блокируют. Уже начатый защитный ABSORB по-прежнему доигрывает анимацию каждой
+цепочки независимо.
 """
 from __future__ import annotations
 
@@ -43,10 +44,18 @@ def set_chain2_explode_active(sim: ZumaZ80Sim, value: int) -> None:
 
 
 def set_active_offset_blocker(sim: ZumaZ80Sim, index: int, value: int) -> None:
-    """Создать незавершённое смещение и установить его быстрый флаг топологии."""
+    """Создать обычное смещение и установить его быстрый флаг топологии."""
     sim.set_byte(sim.sym["Core.VDC_Offsets"] + index, value & 0xFF)
     sim.call(sim.sym["Core.VDC_MarkTopologyDirty"])
     sim.call(sim.sym["Core.VDC_MarkOffsetsMaybe"])
+
+
+def set_chain2_unrelated_offset(sim: ZumaZ80Sim, index: int, value: int) -> None:
+    """Создать обычное смещение во второй цепочке без переключения указателей."""
+    sim.set_byte(sim.sym["Core.VDC2_Offsets"] + index, value & 0xFF)
+    topology_addr = sim.sym["Core.VDC2_Slots"] - 1
+    offsets_mask = sim.sym["Core.VDC_TOPO_OFFSETS_MAYBE"]
+    sim.set_byte(topology_addr, sim.get_byte(topology_addr) | offsets_mask)
 
 
 def make_sim() -> ZumaZ80Sim:
@@ -165,7 +174,6 @@ def setup_dual_play_barrier(
     clean = (0, 1, 2)
     busy_slots = (0, 0xFE, 1) if blocker == "gap" else clean
     busy_explode = 1 if blocker == "explode" else None
-    busy_offsets = (0, 0, -16) if blocker == "offset" else None
 
     sb(sim, "Core.VDC_HasSecondChain", 1)
     sb(sim, "Core.VDC_GameState", 0)
@@ -178,7 +186,6 @@ def setup_dual_play_barrier(
             hsa=0,
             hsub=0,
             explode_index=busy_explode,
-            offsets=busy_offsets,
         )
     else:
         configure_active_chain(sim, clean, hsa=10, hsub=31)
@@ -193,7 +200,6 @@ def setup_dual_play_barrier(
             hsa=0,
             hsub=0,
             explode_index=busy_explode,
-            offsets=busy_offsets,
         )
     sim.call(s["Core.VDC_SwapChains"])
 
@@ -434,11 +440,6 @@ def run_dual_play_barrier_lifecycle_case(trigger_second: bool, blocker: str) -> 
             s["Core.VDC2_ExplodeFrame"] if blocker_second else s["Core.VDC_ExplodeFrame"]
         ) + 1
         blocker_probe_initial = 1
-    elif blocker == "offset":
-        blocker_probe = (
-            s["Core.VDC2_Offsets"] if blocker_second else s["Core.VDC_Offsets"]
-        ) + 2
-        blocker_probe_initial = 0xF0
     else:
         start = s["Core.VDC_ChainLocalStart"]
         blocker_probe = (
@@ -722,15 +723,15 @@ def main() -> int:
             9,
         ),
         (
-            "active nonzero offset blocks absorb",
+            "active nonzero offset does not block absorb",
             lambda sim: set_active_offset_blocker(sim, 1, -16),
-            0,
-            30,
+            1,
+            31,
             10,
             False,
             None,
-            24,
-            9,
+            0,
+            11,
         ),
         (
             "active destroy frame holds current rem=32 inside KZ window",
@@ -895,6 +896,20 @@ def main() -> int:
             9,
         ),
         (
+            "dual inactive ordinary offset does not block global absorb",
+            lambda sim: (
+                sb(sim, "Core.VDC_HasSecondChain", 1),
+                set_chain2_unrelated_offset(sim, 1, -16),
+            ),
+            1,
+            31,
+            10,
+            False,
+            None,
+            0,
+            11,
+        ),
+        (
             "dual global gap barrier at KzEndSub=1",
             lambda sim: (
                 sb(sim, "Core.VDC_HasSecondChain", 1),
@@ -994,7 +1009,7 @@ def main() -> int:
         failures += 1
     if not run_dual_absorb_gap_isolation_case(True):
         failures += 1
-    for blocker in ("gap", "explode", "offset"):
+    for blocker in ("gap", "explode"):
         for trigger_second in (False, True):
             if not run_dual_play_barrier_lifecycle_case(trigger_second, blocker):
                 failures += 1

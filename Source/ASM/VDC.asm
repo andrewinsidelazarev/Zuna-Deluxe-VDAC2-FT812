@@ -944,9 +944,9 @@ VDC_LoseHoldAtMouth:
                 SCF
                 RET
 
-; CF=1, пока в активной цепочке есть дырка, незавершённый взрыв или ненулевые
-; смещения. ChainFreezeCnt/Shot2 сами по себе не блокируют Lose: геометрия уже
-; непрерывна, когда точная защёлка OFFSETS_MAYBE снята полным проходом затухания.
+; CF=1 только пока в активной цепочке есть незакрытая дырка или незавершённый
+; взрыв. Обычные смещения, Shot2 и ChainFreezeCnt не блокируют Lose: они
+; возникают и при посторонних событиях, не относящихся к условию поражения.
 VDC_LoseChainBusy:
                 LD   A, (VDC_ExplodeActive)
                 OR   A
@@ -954,10 +954,6 @@ VDC_LoseChainBusy:
                 LD   A, (VDC_SlotsLen)
                 OR   A
                 JR   Z, .lcb_ready
-                LD   HL, (VDC_pSlots)
-                DEC  HL
-                BIT  VDC_TOPO_OFFSETS_BIT, (HL)
-                JR   NZ, .lcb_busy
                 LD   A, (VDC_GapJunction)
                 OR   A
                 JR   NZ, .lcb_busy

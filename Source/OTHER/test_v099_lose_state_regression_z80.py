@@ -9,7 +9,8 @@
   защёлки готовности.
 - Занятость перед поражением задают ExplodeActive, GapJunction, GapPosLeft,
   маркеры разрыва и ExplodeFrame.
-- ChainFreezeCnt и Shot2 сами по себе в v099 не блокировали вход в поражение.
+- ChainFreezeCnt, Shot2 и обычные offsets сами по себе не блокировали вход в
+  поражение: это не дырка и не анимация взрыва.
 
 Текущая реализация уточняет только геометрию ожидания занятой цепи: вместо
 исторического отката к rem=65 она паркует голову на rem=1, непосредственно
@@ -23,7 +24,11 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from test_lose_waits_chain_settle_z80 import make_sim, sb  # noqa: E402
+from test_lose_waits_chain_settle_z80 import (  # noqa: E402
+    make_sim,
+    sb,
+    set_active_offset_blocker,
+)
 
 
 def check_killzone(sim) -> None:
@@ -131,10 +136,11 @@ def run_gap_and_explode_busy_cases() -> bool:
     return all_ok
 
 
-def run_freeze_and_shot2_do_not_block_v099() -> bool:
+def run_unrelated_events_do_not_block_v099() -> bool:
     cases = [
         ("ChainFreezeCnt", lambda sim: sb(sim, "Core.VDC_ChainFreezeCnt", 7)),
         ("Shot2", lambda sim: sim.set_byte(sim.sym["Core.VDC_Shot2"] + 1, 1)),
+        ("ordinary offset", lambda sim: set_active_offset_blocker(sim, 1, -16)),
     ]
     all_ok = True
     for name, setup in cases:
@@ -158,7 +164,7 @@ def main() -> int:
         run_direct_absorb_clears_active_shot(),
         run_rem65_ready_ignores_non_v099_armed_latch(),
         run_gap_and_explode_busy_cases(),
-        run_freeze_and_shot2_do_not_block_v099(),
+        run_unrelated_events_do_not_block_v099(),
     ]
     return 0 if all(checks) else 1
 
