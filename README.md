@@ -95,6 +95,7 @@ python make_misc_sprites.py
 python make_cursor.py
 python make_track_640.py
 ```
+---
 
 В сосздании игры помогали:
 
