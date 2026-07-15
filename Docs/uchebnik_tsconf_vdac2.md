@@ -3699,7 +3699,7 @@ Unreal x64 эмулирует FT812 как «один глобальный bitma
 
 ### Ссылки
 
-- v028 baseline: `releases/v028-2026-05-20-game-over-dialog.spg`
+- v028 baseline: `pre-releases/v028-2026-05-20-game-over-dialog/v028-2026-05-20-game-over-dialog.spg`
 - Memory: `reference_ft812_bitmap_handle_binding`
 - [`Чат.txt`](https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/%D0%A7%D0%B0%D1%82.txt): `[2026-05-20 02:40]` bug section
 - FT81x Programmers Guide §4.30 BITMAP_HANDLE — описание slot binding (но не явно про порядок emit'а — нашли через эмулятор debugging).
@@ -3797,7 +3797,7 @@ Frog был **PALETTED4444 + BILINEAR** = 8 reads/px × 122×122 × 4 layers ≈
 
 Fix: `FROG_ARGB4_ENABLED EQU 1` — переключение в **ARGB4 + NEAREST** = 1 read/px × 122×122 × 4 = 59.5K reads/кадр (**8× меньше**).
 
-Tearing устранён. v031 опорная (`releases/v031-2026-05-20-argb4-frog-no-tearing.spg`).
+Tearing устранён. v031 опорная (`pre-releases/v031-2026-05-20-argb4-frog-no-tearing/v031-2026-05-20-argb4-frog-no-tearing.spg`).
 
 Урок: мой analyzer использовал упрощённую модель (NEAREST=16 px/clk, BILINEAR=2 px/clk) и **не учитывал palette lookup overhead** PALETTED формата. Если tearing на реале — сначала проверить crucial sprites на BILINEAR/PALETTED и пробовать ARGB4+NEAREST.
 

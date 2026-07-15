@@ -69,7 +69,7 @@
 │   ├── _*.txt                           -- текстовые дампы тех же PDF/DOCX
 │   └── TSLib/                           -- готовая asm-обвязка от автора VDAC2
 │
-├── releases/             -- baseline-снэпшоты по эпохам (см. releases/README.md)
+├── pre-releases/         -- baseline-снэпшоты предварительных сборок
 ├── _hd_refs/             -- Frog.c/.h / ResourceStore.c/.h из Zuma-Deluxe-HD
 └── Чат.txt               -- cross-project канал общения с VDC-веткой (append-only)
 ```

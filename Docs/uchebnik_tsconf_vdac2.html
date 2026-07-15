@@ -5133,7 +5133,7 @@ HANDLE emit чтобы можно было запушить вычисленны
 нужен Bridgetek emulator или реальное железо.</p>
 <h3 id="_22">Ссылки</h3>
 <ul>
-<li>v028 baseline: <code>releases/v028-2026-05-20-game-over-dialog.spg</code></li>
+<li>v028 baseline: <code>pre-releases/v028-2026-05-20-game-over-dialog/v028-2026-05-20-game-over-dialog.spg</code></li>
 <li>Memory: <code>reference_ft812_bitmap_handle_binding</code></li>
 <li><a href="https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/blob/main/%D0%A7%D0%B0%D1%82.txt"><code>Чат.txt</code></a>: <code>[2026-05-20 02:40]</code> bug section</li>
 <li>FT81x Programmers Guide §4.30 BITMAP_HANDLE — описание slot binding (но не явно про порядок emit'а — нашли через эмулятор debugging).</li>
@@ -5208,7 +5208,7 @@ HANDLE emit чтобы можно было запушить вычисленны
 </table>
 <p>Frog был <strong>PALETTED4444 + BILINEAR</strong> = 8 reads/px × 122×122 × 4 layers ≈ 476K reads/кадр.</p>
 <p>Fix: <code>FROG_ARGB4_ENABLED EQU 1</code> — переключение в <strong>ARGB4 + NEAREST</strong> = 1 read/px × 122×122 × 4 = 59.5K reads/кадр (<strong>8× меньше</strong>).</p>
-<p>Tearing устранён. v031 опорная (<code>releases/v031-2026-05-20-argb4-frog-no-tearing.spg</code>).</p>
+<p>Tearing устранён. v031 опорная (<code>pre-releases/v031-2026-05-20-argb4-frog-no-tearing/v031-2026-05-20-argb4-frog-no-tearing.spg</code>).</p>
 <p>Урок: мой analyzer использовал упрощённую модель (NEAREST=16 px/clk, BILINEAR=2 px/clk) и <strong>не учитывал palette lookup overhead</strong> PALETTED формата. Если tearing на реале — сначала проверить crucial sprites на BILINEAR/PALETTED и пробовать ARGB4+NEAREST.</p>
 <h3 id="2710-outcome">27.10 Outcome дня</h3>
 <p>После Codex v028 baseline:</p>

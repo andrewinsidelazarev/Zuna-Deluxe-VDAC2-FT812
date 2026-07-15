@@ -1,7 +1,7 @@
 v091-2026-07-02-lose-kz-gap-hold-reference
 
 Это единый релиз v091 относительно GitHub-релиза v074
-releases/v074-2026-06-16-more-games-mouse-reference.
+pre-releases/v074-2026-06-16-more-games-mouse-reference.
 
 Исходники этой версии находятся в корневом дереве репозитория:
 - Source/ASM/
@@ -9,7 +9,7 @@ releases/v074-2026-06-16-more-games-mouse-reference.
 - Graphics/
 - Docs/
 
-Папка releases/v091-2026-07-02-lose-kz-gap-hold-reference содержит только
+Папка pre-releases/v091-2026-07-02-lose-kz-gap-hold-reference содержит только
 опорные бинарные артефакты сборки и этот файл описания. Исходники не
 дублируются внутри release-папки, потому что формат старых GitHub-релизов
 в этом репозитории такой же: release-папка хранит артефакты, а исходники

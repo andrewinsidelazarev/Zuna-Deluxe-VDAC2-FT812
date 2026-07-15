@@ -92,6 +92,7 @@ _pre_split_v0*/
 _fonts/
 /Backups/
 /releases/
+/pre-releases/
 
 # More build artifacts
 main1_play.bin
@@ -110,6 +111,12 @@ releases/**/dosbox-x-portable.zip
 releases/**/Sounds/Converted/tools/
 releases/**/_z80_lib_cburbridge/
 releases/*/Source/
+pre-releases/**/*.img
+pre-releases/**/ffmpeg-release-essentials.zip
+pre-releases/**/dosbox-x-portable.zip
+pre-releases/**/Sounds/Converted/tools/
+pre-releases/**/_z80_lib_cburbridge/
+pre-releases/*/Source/
 
 # Local diagnostic run directories and scratch archives
 /Diagnostics/Unreal*/
