@@ -2175,11 +2175,14 @@ ZL_BallNeutralCellFromColor:
 ;   Вход: A = color index (0..5). Выход: нет. Клобает AF, BC, DE, HL.
 ZL_EmitBallColorRGB:
                 AND  #07                              ; ограничить 0..7
+                LD   HL, ZL_BallColorRGB
+; Общее тело для ball/destroy tint экономит место в page #04.
+; Вход: A=color index, HL=RGB table (3 bytes per color).
+ZL_EmitColorRGBFromTable:
                 LD   E, A
                 ADD  A, A                             ; *2
                 ADD  A, E                             ; *3
                 LD   E, A : LD D, 0
-                LD   HL, ZL_BallColorRGB
                 ADD  HL, DE                            ; HL → entry
                 LD   C, (HL) : INC HL                 ; R
                 LD   D, (HL) : INC HL                 ; G — wait, ColorRGB ждёт C=R, D=G, E=B.
@@ -2262,6 +2265,12 @@ ZL_DecodeCachedVertex2f:
                 RET
 
 ZL_DrawExplosions:
+                ; Ball pass мог закончиться прямо перед pressure threshold.
+                ; До 40-байтного destroy bitmap/matrix setup при необходимости
+                ; слить предыдущий chunk. Регистры здесь ещё не инициализированы.
+                LD   A, (FT.Coprocessor.BufferPtr + 1)
+                CP   #58
+                CALL NC, ZL_ExplosionFlushPreserve
                 CALL ZL_EmitScale16Matrix             ; 1024×768: destroy 48→77
                 FT_BitmapHandle ZL_DESTROY_HANDLE
                 FT_BitmapSource DESTROY_RAMG_ADDR
@@ -2280,6 +2289,13 @@ ZL_DrawExplosions:
                 LD   A, (IX+1)
                 CP   #FF
                 JR   Z, .de_next
+                ; Отдельный explosion pass не проходит через ball-loop guard.
+                ; Проверять давление перед КАЖДЫМ видимым active sprite;
+                ; helper сохраняет B/C, HL и IX. EVE graphics context переживает
+                ; mid-frame FIFO flush, поэтому bitmap setup повторять не нужно.
+                LD   A, (FT.Coprocessor.BufferPtr + 1)
+                CP   #58
+                CALL NC, ZL_ExplosionFlushPreserve
                 LD   A, C
                 PUSH BC
                 PUSH HL
@@ -2328,20 +2344,12 @@ ZL_DrawExplosions:
                 DJNZ .de_loop
                 RET
 
+; Destroy и обычные balls имеют разные tint tables, но одинаковую
+; индексацию/эмит COLOR_RGB. Общее тело выше освобождает
+; байты, потраченные на два pressure-check без изменения цветов.
 ZL_ExplosionColorRGB:
-                LD   E, A
-                ADD  A, A
-                ADD  A, E                              ; A = color * 3
-                LD   E, A
-                LD   D, 0
                 LD   HL, ZL_ExplosionRGBTable
-                ADD  HL, DE
-                LD   C, (HL)                           ; R
-                INC  HL
-                LD   D, (HL)                           ; G
-                INC  HL
-                LD   E, (HL)                           ; B
-                JP   FT.Coprocessor.ColorRGB
+                JP   ZL_EmitColorRGBFromTable
 
 ZL_ExplosionRGBTable:
                 DEFB 48,120,255, 64,255,80, 255,72,48
@@ -2502,9 +2510,6 @@ ZL_PrevRawX:    DEFW 512                              ; raw mouse prev — дл�
 ZL_PrevRawY:    DEFW 384
 ZL_MouseMoved:  DEFB 0                                ; 0=stationary, 1=moved (≥THR по axis)
 ZL_MotionGrace: DEFB 0                                ; осталось frames для догоняющего Smooth после mouse motion
-ZL_ChainHSA:    DEFW 0                                ; head sample на треке
-ZL_ChainTick:   DEFB 0                                ; subdivider 4 для медленного движения
-ZL_ColorIdx:    DEFB 0                                ; текущий cell для CELL()-эмита в цепи
 ZL_TmpFrame:    DEFB 0                                ; cell/spin frame scratch (chain rendering)
 ZL_TmpSlotIdx:  DEFB 0                                ; текущий VDC slot index в prepass
 ZL_TmpTrackFlags: DEFB 0                              ; track flags, снятые из VDC_LastTrackFlags
@@ -2526,18 +2531,14 @@ ZL_TmpAngleByte:DEFB 0                                ; chain render: combined r
 ZL_SpinK:       DEFB ZL_SPIN_K_DEFAULT                ; runtime spin multiplier (per-level)
 ; [ZL_CmdDmaWordsHi/Lo переехали в shared_render.asm вместе с DMA-функцией]
 ZL_BallCount:   DEFB 0                                ; кэш VDC_SlotsLen для bucket prepass
-ZL_TmpBucket:   DEFB 0                                ; текущий bucket во внешнем loop
 ZL_TmpLastTangent: DEFB 0                             ; per-ball loop: последний emitted quantized tangent
 ZL_TmpLastHandle:  DEFB 0xFF                          ; lazy BITMAP_HANDLE — последний emitted ball handle (0/9, #FF=reset)
 ZL_BallRotationDisabled: DEFB 0                       ; pause/dialog guard: пропустить per-ball matrix state
 ZL_BallsPalettedActive: DEFB 0                        ; 1: использовать global native 51px PALETTED4444 balls atlas
-ZL_HeavyTunnelDual: DEFB 0                            ; heavy level: есть second chain или текущий level имеет top mask
 ZL_HasTopMaskLevel: DEFB 0                            ; текущий level имеет tunnel top-mask: отключить ball anim/rotation
-ZL_HeavyBallCount: DEFB 0                             ; dual heavy levels используют chain1+chain2 count для threshold
 ZL_Chain1BallCount: DEFB 0                            ; подготовленный top-mask chain1 cache count
 ZL_Chain2BallCount: DEFB 0                            ; подготовленный top-mask chain2 cache count
 ZL_CacheBasePtr: DEFW 0                               ; active per-ball cache base
-ZL_CacheWPtr:   DEFW 0                                ; write ptr в prepass
 ZL_PassFilterPtr: DEFW 0                              ; цель draw-pass filter для loop cached chain
 ZL_ShadowLenPatchPtr: DEFW 0                          ; CMD_MEMWRITE num field in host CMD buffer
 ZL_ShadowPayloadStart: DEFW 0                         ; raw DL payload start in host CMD buffer

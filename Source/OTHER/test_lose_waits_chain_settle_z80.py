@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Глобальный барьер состояния Lose и локальная независимость двух цепочек.
 
-До фактического достижения зоны уничтожения чужая дырка или анимация взрыва
-не должна тормозить чистую цепь. Но общий переход PLAY -> ABSORB разрешён только
-после полного завершения работы обеих цепочек: все дырки закрыты, все кадры
-разрушения завершены. Обычные смещения и другие события цепочки Lose не
-блокируют. Уже начатый защитный ABSORB по-прежнему доигрывает анимацию каждой
-цепочки независимо.
+До защитной границы rem=49 чужая дырка или анимация взрыва не должна
+тормозить чистую цепь. На rem=49 она продвигается до rem=48; уже находящаяся
+на rem<=48 цепь удерживается без обратного скачка. Общий переход
+PLAY -> ABSORB разрешён только
+после полного завершения работы обеих цепочек: нет GAP-marker, pending ExplodeFrame
+и descending signed offset-щели. Производные флаги GapJunction, GapPosLeft и
+ExplodeActive сами по себе Lose не блокируют. В уже начатом ABSORB любая
+занятая цепь ставит общий барьер: обе цепи не двигаются и не поглощаются,
+но их локальные GAP/explode-анимации продолжают тикать.
 """
 from __future__ import annotations
 
@@ -16,7 +19,13 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from zuma_z80_simulator import ZumaZ80Sim  # noqa: E402
+from zuma_z80_simulator import RETURN_MARKER, ZumaZ80Sim  # noqa: E402
+
+
+CELL_SIZE = 32
+HOLD_REM = 48
+HOLD_CHECK_REM = HOLD_REM + 1
+HEAD_OFFSETS = (-128, -32, -1, 0, 1, 31, 127)
 
 
 def max_slots(sim: ZumaZ80Sim) -> int:
@@ -32,6 +41,43 @@ def sw(sim: ZumaZ80Sim, name: str, value: int) -> None:
     sim.set_byte(sim.sym[name] + 1, (value >> 8) & 0xFF)
 
 
+def set_position_for_rem(sim: ZumaZ80Sim, rem: int) -> tuple[int, int]:
+    """Поставить base-head на заданный остаток пути до exact endpoint."""
+    endpoint = sim.get_word(sim.sym["Core.VDC_TrackNumSlots"]) * CELL_SIZE
+    endpoint += sim.get_byte(sim.sym["Core.VDC_KzEndSub"])
+    hsa, hsub = divmod(endpoint - rem, CELL_SIZE)
+    sb(sim, "Core.VDC_HSA", hsa)
+    sb(sim, "Core.VDC_HSub", hsub)
+    return hsa, hsub
+
+
+def base_rem(sim: ZumaZ80Sim) -> int:
+    """Вернуть signed base-rem; offsets не входят в геометрию Lose/hold."""
+    endpoint = sim.get_word(sim.sym["Core.VDC_TrackNumSlots"]) * CELL_SIZE
+    endpoint += sim.get_byte(sim.sym["Core.VDC_KzEndSub"])
+    head = sim.get_byte(sim.sym["Core.VDC_HSA"]) * CELL_SIZE
+    head += sim.get_byte(sim.sym["Core.VDC_HSub"])
+    return endpoint - head
+
+
+def expected_kz_frame(rem: int) -> int:
+    if rem <= 0:
+        return 11
+    if rem <= 128:
+        return 2 + ((128 - rem) >> 4)
+    return 1
+
+
+def set_uniform_active_offsets(sim: ZumaZ80Sim, value: int) -> None:
+    """Задать выбранной цепи uniform offset без изменения её base-rem."""
+    base = sim.get_word(sim.sym["Core.VDC_pOffsets"])
+    for index in range(sim.get_byte(sim.sym["Core.VDC_SlotsLen"])):
+        sim.set_byte(base + index, value & 0xFF)
+    sim.call(sim.sym["Core.VDC_MarkTopologyDirty"])
+    if value:
+        sim.call(sim.sym["Core.VDC_MarkOffsetsMaybe"])
+
+
 def clear_array(sim: ZumaZ80Sim, name: str) -> None:
     base = sim.sym[name]
     for i in range(max_slots(sim)):
@@ -43,19 +89,26 @@ def set_chain2_explode_active(sim: ZumaZ80Sim, value: int) -> None:
     sim.set_byte(sim.sym["Core.VDC2_ChainLocal"] + off, value)
 
 
-def set_active_offset_blocker(sim: ZumaZ80Sim, index: int, value: int) -> None:
-    """Создать обычное смещение и установить его быстрый флаг топологии."""
-    sim.set_byte(sim.sym["Core.VDC_Offsets"] + index, value & 0xFF)
+def set_active_ordinary_offset(sim: ZumaZ80Sim) -> None:
+    """Вставочный overlap: signed offsets -16, 0, 0 не создают щель."""
+    sim.set_byte(sim.sym["Core.VDC_Offsets"], (-16) & 0xFF)
     sim.call(sim.sym["Core.VDC_MarkTopologyDirty"])
     sim.call(sim.sym["Core.VDC_MarkOffsetsMaybe"])
 
 
-def set_chain2_unrelated_offset(sim: ZumaZ80Sim, index: int, value: int) -> None:
-    """Создать обычное смещение во второй цепочке без переключения указателей."""
-    sim.set_byte(sim.sym["Core.VDC2_Offsets"] + index, value & 0xFF)
+def set_chain2_ordinary_offset(sim: ZumaZ80Sim) -> None:
+    """Тот же неубывающий overlap-профиль во второй цепочке."""
+    sim.set_byte(sim.sym["Core.VDC2_Offsets"], (-16) & 0xFF)
     topology_addr = sim.sym["Core.VDC2_Slots"] - 1
     offsets_mask = sim.sym["Core.VDC_TOPO_OFFSETS_MAYBE"]
     sim.set_byte(topology_addr, sim.get_byte(topology_addr) | offsets_mask)
+
+
+def set_active_real_offset_gap(sim: ZumaZ80Sim) -> None:
+    """Реальная signed щель: left=0 > right=-16."""
+    sim.set_byte(sim.sym["Core.VDC_Offsets"] + 1, (-16) & 0xFF)
+    sim.call(sim.sym["Core.VDC_MarkTopologyDirty"])
+    sim.call(sim.sym["Core.VDC_MarkOffsetsMaybe"])
 
 
 def make_sim() -> ZumaZ80Sim:
@@ -188,11 +241,11 @@ def setup_dual_play_barrier(
             explode_index=busy_explode,
         )
     else:
-        configure_active_chain(sim, clean, hsa=10, hsub=31)
+        configure_active_chain(sim, clean, hsa=9, hsub=14)  # rem=49
 
     sim.call(s["Core.VDC_SwapChains"])
     if trigger_second:
-        configure_active_chain(sim, clean, hsa=10, hsub=31)
+        configure_active_chain(sim, clean, hsa=9, hsub=14)  # rem=49
     else:
         configure_active_chain(
             sim,
@@ -252,6 +305,144 @@ def check_killzone(sim: ZumaZ80Sim) -> int:
     return sim.get_byte(sim.sym["Core.VDC_GameState"])
 
 
+def call_observing_remove_slot(sim: ZumaZ80Sim, addr: int) -> tuple[bool, tuple[int, int] | None]:
+    """Вызвать routine и снять base прямо перед входом в RemoveSlotAt."""
+    cpu = sim.cpu
+    remove_addr = sim.sym["Core.VDC_RemoveSlotAt"]
+    sp = cpu.sp
+    sim.set_byte(sp - 1, (RETURN_MARKER >> 8) & 0xFF)
+    sim.set_byte(sp - 2, RETURN_MARKER & 0xFF)
+    cpu.sp = (sp - 2) & 0xFFFF
+    cpu.pc = addr
+    cpu.set_breakpoint(remove_addr)
+    cpu.set_breakpoint(RETURN_MARKER)
+    steps = 0
+    try:
+        while cpu.pc not in (remove_addr, RETURN_MARKER):
+            cpu.run()
+            steps += 1
+            if steps > 2_000_000:
+                raise RuntimeError(f"routine #{addr:04X} не дошла до RemoveSlotAt/RET")
+
+        hit = cpu.pc == remove_addr
+        at_remove = None
+        if hit:
+            at_remove = (
+                sim.get_byte(sim.sym["Core.VDC_HSA"]),
+                sim.get_byte(sim.sym["Core.VDC_HSub"]),
+            )
+            cpu.clear_breakpoint(remove_addr)
+            while cpu.pc != RETURN_MARKER:
+                cpu.run()
+                steps += 1
+                if steps > 2_000_000:
+                    raise RuntimeError(f"routine #{addr:04X} не вернулась после RemoveSlotAt")
+        return hit, at_remove
+    finally:
+        cpu.clear_breakpoint(remove_addr)
+        cpu.clear_breakpoint(RETURN_MARKER)
+
+
+def run_signed_offset_predicate_boundary_case() -> bool:
+    """Два live-slot: signed-сравнение корректно на границах всех диапазонов."""
+    sim = make_sim()
+    s = sim.sym
+    configure_active_chain(sim, (0, 1), hsa=8, hsub=0)
+    sb(sim, "Core.VDC_GapJunction", 2)
+    sb(sim, "Core.VDC_GapPosLeft", 1)
+    sb(sim, "Core.VDC_ExplodeActive", 1)
+    sw(sim, "Core.VDC_GapAccum", 0xFFFF)
+    failures: list[str] = []
+    probes = (-128, -127, -65, -64, -33, -32, -1, 0, 1, 31, 32, 63, 64, 126, 127)
+    for left in probes:
+        sim.set_byte(s["Core.VDC_Offsets"], left & 0xFF)
+        for right in probes:
+            sim.set_byte(s["Core.VDC_Offsets"] + 1, right & 0xFF)
+            sim.call(s["Core.VDC_LoseChainBusy"])
+            actual = bool(sim.cpu.f & 1)
+            expected = left > right
+            if actual != expected:
+                failures.append(
+                    f"left={left} right={right}: "
+                    f"busy={actual}, expected={expected}"
+                )
+                if len(failures) >= 8:
+                    break
+        if len(failures) >= 8:
+            break
+    ok = not failures
+    print(
+        f"{'PASS' if ok else 'FAIL'}: signed offset-gap boundary matrix "
+        f"({len(probes)}x{len(probes)}, derived flags ignored)"
+    )
+    for failure in failures:
+        print(f"  {failure}")
+    return ok
+
+
+def run_absorb_remove_exact_endpoint_exhaustive_case() -> bool:
+    """RemoveSlotAt не вызывается на rem=1 и входит точно на base rem=0."""
+    failures: list[str] = []
+    for second in (False, True):
+        sim = make_sim()
+        s = sim.sym
+        sb(sim, "Core.VDC_GameState", 1)
+        if second:
+            sb(sim, "Core.VDC_HasSecondChain", 1)
+            sim.call(s["Core.VDC_SwapChains"])
+        move_once = s["VDC_UpdateAbsorb.ua_move_once"]
+        for kz_end_sub in range(32):
+            endpoint = 10 * 32 + kz_end_sub
+            hsa, hsub = divmod(endpoint - 2, 32)
+            configure_active_chain(sim, (0, 1), hsa=hsa, hsub=hsub)
+            sw(sim, "Core.VDC_TrackNumSlots", 10)
+            sb(sim, "Core.VDC_KzEndSub", kz_end_sub)
+            sb(sim, "Core.VDC_GameState", 1)
+            sb(sim, "Core.VDC_KzFrame", 11)
+            sb(sim, "Core.VDC_LoseHoldCnt", 255)
+            sb(sim, "Core.VDC_HeadAbsorbAlpha", 255)
+
+            hit_before, at_remove_before = call_observing_remove_slot(sim, move_once)
+            rem_after_first = (
+                (10 - sim.get_byte(s["Core.VDC_HSA"])) * 32
+                + kz_end_sub
+                - sim.get_byte(s["Core.VDC_HSub"])
+            )
+            len_after_first = sim.get_byte(s["Core.VDC_SlotsLen"])
+            hit_exact, at_remove_exact = call_observing_remove_slot(sim, move_once)
+            after_pop = (
+                sim.get_byte(s["Core.VDC_HSA"]),
+                sim.get_byte(s["Core.VDC_HSub"]),
+                sim.get_byte(s["Core.VDC_SlotsLen"]),
+            )
+            expected_at_remove = (10, kz_end_sub)
+            expected_after_pop = (9, kz_end_sub, 1)
+            if not (
+                not hit_before
+                and at_remove_before is None
+                and rem_after_first == 1
+                and len_after_first == 2
+                and hit_exact
+                and at_remove_exact == expected_at_remove
+                and after_pop == expected_after_pop
+            ):
+                failures.append(
+                    f"chain={2 if second else 1} K={kz_end_sub}: "
+                    f"before_hit={hit_before}/{at_remove_before}, rem1={rem_after_first}, "
+                    f"len1={len_after_first}, exact_hit={hit_exact}/{at_remove_exact}, "
+                    f"after={after_pop}/{expected_after_pop}"
+                )
+
+    ok = not failures
+    print(
+        f"{'PASS' if ok else 'FAIL'}: RemoveSlotAt only at exact base rem=0 "
+        f"(KzEndSub=0..31, chain1/chain2)"
+    )
+    for failure in failures[:8]:
+        print(f"  {failure}")
+    return ok
+
+
 def run_case(
     name: str,
     setup,
@@ -295,6 +486,7 @@ def run_case(
 
 
 def run_absorb_pending_explode_case() -> bool:
+    """Actual ExplodeFrame держит ABSORB, но сам тикает через AnimateChain."""
     sim = make_sim()
     s = sim.sym
     sb(sim, "Core.VDC_GameState", 1)
@@ -316,26 +508,29 @@ def run_absorb_pending_explode_case() -> bool:
     hsa = sim.get_byte(s["Core.VDC_HSA"])
     hsub = sim.get_byte(s["Core.VDC_HSub"])
     slots_len = sim.get_byte(s["Core.VDC_SlotsLen"])
+    alpha = sim.get_byte(s["Core.VDC_HeadAbsorbAlpha"])
     ok = (
         state == 1
         and active == 1
-        and kz == 9
-        and hold == 24
+        and kz == 11
+        and hold == 255
         and hsa == 10
-        and hsub == 30
+        and hsub == 31
         and slots_len == 3
+        and alpha == 255
         and after_slots == before_slots
         and frames == [0, 2, 0]
     )
     print(
         f"{'PASS' if ok else 'FAIL'}: absorb pending explode animates before absorb: "
         f"state={state}, active={active}, kz={kz}, hold={hold}, hsa={hsa}, hsub={hsub}, "
-        f"len={slots_len}, slots={after_slots}, frames={frames}"
+        f"len={slots_len}, alpha={alpha}, slots={after_slots}, frames={frames}"
     )
     return ok
 
 
 def run_absorb_stale_explode_flag_case() -> bool:
+    """ExplodeActive без единого frame — stale hint, а не причина стопорить ABSORB."""
     sim = make_sim()
     s = sim.sym
     sb(sim, "Core.VDC_GameState", 1)
@@ -353,26 +548,28 @@ def run_absorb_stale_explode_flag_case() -> bool:
     hsub = sim.get_byte(s["Core.VDC_HSub"])
     slots_len = sim.get_byte(s["Core.VDC_SlotsLen"])
     frames = list(sim.get_memory(s["Core.VDC_ExplodeFrame"], 3))
+    alpha = sim.get_byte(s["Core.VDC_HeadAbsorbAlpha"])
     ok = (
-        active == 0
+        active == 1
         and state == 1
-        and kz == 9
-        and hold == 24
+        and kz == 11
+        and hold == 255
         and hsa == 10
-        and hsub == 30
-        and slots_len == 3
+        and hsub == 6
+        and slots_len == 2
+        and alpha == 199
         and frames == [0, 0, 0]
     )
     print(
-        f"{'PASS' if ok else 'FAIL'}: absorb stale explode-active flag is cleared: "
+        f"{'PASS' if ok else 'FAIL'}: stale ExplodeActive alone does not block absorb: "
         f"state={state}, active={active}, kz={kz}, hold={hold}, "
-        f"hsa={hsa}, hsub={hsub}, len={slots_len}, frames={frames}"
+        f"hsa={hsa}, hsub={hsub}, len={slots_len}, alpha={alpha}, frames={frames}"
     )
     return ok
 
 
-def run_dual_absorb_gap_isolation_case(gap_in_second: bool) -> bool:
-    """Проверить независимое обновление обеих цепочек в полном ABSORB-пути."""
+def run_dual_absorb_global_gap_barrier_case(gap_in_second: bool) -> bool:
+    """GAP любой цепи стопорит absorb обеих, но GAP-анимация тикает."""
     sim = make_sim()
     s = sim.sym
     sb(sim, "Core.VDC_HasSecondChain", 1)
@@ -380,47 +577,72 @@ def run_dual_absorb_gap_isolation_case(gap_in_second: bool) -> bool:
     sb(sim, "Core.VDC_SecondActive", 0)
     sim.call(s["Core.VDC_SelectChain1"])
 
-    def configure_active(slots: tuple[int, int, int], hsub: int) -> None:
-        slots_base = sim.get_word(s["Core.VDC_pSlots"])
-        for index, value in enumerate(slots):
-            sim.set_byte(slots_base + index, value)
-        sb(sim, "Core.VDC_HSA", 0)
-        sb(sim, "Core.VDC_HSub", hsub)
-        sb(sim, "Core.VDC_SlotsLen", len(slots))
-        sb(sim, "Core.VDC_ChainFreezeCnt", 0)
-        sb(sim, "Core.VDC_LoseHoldCnt", 0)
-        sb(sim, "Core.VDC_GapJunction", 0)
-        sb(sim, "Core.VDC_GapPosLeft", 0)
-        sb(sim, "Core.VDC_ExplodeActive", 0)
-        sb(sim, "Core.VDC_KzFrame", 1)
-        sb(sim, "Core.VDC_KzEndSub", 31)
-        sw(sim, "Core.VDC_TrackNumSlots", 20)
-        sim.call(s["Core.VDC_MarkTopologyDirty"])
-
-    clean = (0, 1, 2)
+    clean = (2, 3, 4)
     gap = (0, 0xFE, 1)
-    configure_active(gap if not gap_in_second else clean, 3)
+    configure_active_chain(sim, gap if not gap_in_second else clean, hsa=10, hsub=31)
+    sb(sim, "Core.VDC_KzFrame", 11)
+    sb(sim, "Core.VDC_LoseHoldCnt", 255)
+    if not gap_in_second:
+        sw(sim, "Core.VDC_GapAccum", 255)
     sim.call(s["Core.VDC_SwapChains"])
-    configure_active(gap if gap_in_second else clean, 11)
+    configure_active_chain(sim, gap if gap_in_second else clean, hsa=10, hsub=23)
+    sb(sim, "Core.VDC_KzFrame", 11)
+    sb(sim, "Core.VDC_LoseHoldCnt", 255)
+    if gap_in_second:
+        sw(sim, "Core.VDC_GapAccum", 255)
     sim.call(s["Core.VDC_SwapChains"])
 
-    sim.call(s["Core.VDC_UpdateAllChains"], max_steps=5_000_000)
-
-    actual = (
+    before_positions = (
+        sim.get_byte(s["Core.VDC_HSA"]),
         sim.get_byte(s["Core.VDC_HSub"]),
+        sim.get_byte(s["Core.VDC2_ChainLocal"] + (s["Core.VDC_HSA"] - s["Core.VDC_ChainLocalStart"])),
         sim.get_byte(s["Core.VDC2_HSub"]),
     )
-    expected = (11, 30) if gap_in_second else (30, 19)
+    sim.call(s["Core.VDC_UpdateAllChains"], max_steps=5_000_000)
+
+    after_positions = (
+        sim.get_byte(s["Core.VDC_HSA"]),
+        sim.get_byte(s["Core.VDC_HSub"]),
+        sim.get_byte(s["Core.VDC2_ChainLocal"] + (s["Core.VDC_HSA"] - s["Core.VDC_ChainLocalStart"])),
+        sim.get_byte(s["Core.VDC2_HSub"]),
+    )
+    lengths = (
+        sim.get_byte(s["Core.VDC_SlotsLen"]),
+        sim.get_byte(s["Core.VDC2_SlotsLen"]),
+    )
+    expected_lengths = (3, 2) if gap_in_second else (2, 3)
+    live_counts = (
+        sum(
+            sim.get_byte(s["Core.VDC_Slots"] + index) < s["Core.VDC_NUM_COLORS"]
+            for index in range(lengths[0])
+        ),
+        sum(
+            sim.get_byte(s["Core.VDC2_Slots"] + index) < s["Core.VDC_NUM_COLORS"]
+            for index in range(lengths[1])
+        ),
+    )
     restored = (
         sim.get_byte(s["Core.VDC_SecondActive"]) == 0
         and sim.get_word(s["Core.VDC_pSlots"]) == s["Core.VDC_Slots"]
     )
     state = sim.get_byte(s["Core.VDC_GameState"])
-    ok = actual == expected and restored and state == 1
+    alpha = (
+        sim.get_byte(s["Core.VDC_HeadAbsorbAlpha"]),
+        sim.get_byte(s["Core.VDC2_HeadAbsorbAlpha"]),
+    )
+    ok = (
+        after_positions == before_positions
+        and lengths == expected_lengths
+        and live_counts == (2 if not gap_in_second else 3, 2 if gap_in_second else 3)
+        and alpha == (255, 255)
+        and restored
+        and state == 1
+    )
     location = "chain2" if gap_in_second else "chain1"
     print(
-        f"{'PASS' if ok else 'FAIL'}: dual ABSORB gap isolation {location}: "
-        f"hsub={actual}, expected={expected}; restored={restored}; state={state}"
+        f"{'PASS' if ok else 'FAIL'}: dual ABSORB global GAP barrier {location}: "
+        f"position={after_positions}/{before_positions}, len={lengths}/{expected_lengths}, "
+        f"live={live_counts}, alpha={alpha}, restored={restored}, state={state}"
     )
     return ok
 
@@ -434,6 +656,10 @@ def run_dual_play_barrier_lifecycle_case(trigger_second: bool, blocker: str) -> 
     sim = make_sim()
     s = sim.sym
     setup_dual_play_barrier(sim, trigger_second=trigger_second, blocker=blocker)
+    # После освобождения rem=48 цепь проходит 48 sample до exact endpoint.
+    # В этой изолированной Lose-фикстуре запрещаем штатный spawn: тестовый RNG
+    # не проходил VDC_Init, а предмет проверки здесь только GAP/Lose lifecycle.
+    sb(sim, "Core.VDC_GaugeFull", 1)
     sb(sim, "Core.Bullet_Active", 1)
     sb(sim, "Core.Frog_IsFire", 1)
     sb(sim, "Core.Frog_RecoilTick", 7)
@@ -500,6 +726,7 @@ def run_dual_play_barrier_lifecycle_case(trigger_second: bool, blocker: str) -> 
             first_parked = (
                 state == 0
                 and hold > 0
+                and parked_pose == (9, 15, 7)
                 and sim.get_byte(s["Core.Bullet_Active"]) == 1
                 and sim.get_byte(s["Core.Frog_IsFire"]) == 1
                 and (busy1_before or busy2_before)
@@ -590,57 +817,241 @@ def run_dual_play_barrier_lifecycle_case(trigger_second: bool, blocker: str) -> 
 
 
 def run_terminal_park_exhaustive_case() -> bool:
-    """Для всех KzEndSub обе цепи должны стабильно стоять ровно на rem=1."""
+    """Busy rem=49 паркуется на base-rem=48 независимо от uniform offset."""
     failures: list[str] = []
     for trigger_second in (False, True):
         sim = make_sim()
         s = sim.sym
-        for kz_end_sub in range(32):
-            setup_dual_play_barrier(
-                sim,
-                trigger_second=trigger_second,
-                blocker="gap",
-            )
-            if trigger_second:
-                sim.call(s["Core.VDC_SwapChains"])
-            sb(sim, "Core.VDC_GameState", 0)
-            sb(sim, "Core.VDC_KzEndSub", kz_end_sub)
-            sb(sim, "Core.VDC_HSA", 10)
-            sb(sim, "Core.VDC_HSub", kz_end_sub)
-            sb(sim, "Core.VDC_KzFrame", 1)
-            sb(sim, "Core.VDC_LoseHoldCnt", 0)
-
-            for _ in range(4):
-                check_killzone(sim)
-
-            expected_hsa = 9 if kz_end_sub == 0 else 10
-            expected_hsub = 31 if kz_end_sub == 0 else kz_end_sub - 1
-            actual = (
-                sim.get_byte(s["Core.VDC_HSA"]),
-                sim.get_byte(s["Core.VDC_HSub"]),
-                sim.get_byte(s["Core.VDC_KzFrame"]),
-                sim.get_byte(s["Core.VDC_LoseHoldCnt"]),
-                sim.get_byte(s["Core.VDC_GameState"]),
-            )
-            expected = (expected_hsa, expected_hsub, 9, 255, 0)
-            expected_active = 1 if trigger_second else 0
-            expected_slots = s["Core.VDC2_Slots"] if trigger_second else s["Core.VDC_Slots"]
-            selection_ok = (
-                sim.get_byte(s["Core.VDC_SecondActive"]) == expected_active
-                and sim.get_word(s["Core.VDC_pSlots"]) == expected_slots
-            )
-            if actual != expected or not selection_ok:
-                failures.append(
-                    f"chain={2 if trigger_second else 1} K={kz_end_sub}: "
-                    f"actual={actual} expected={expected} selection={selection_ok}"
+        for kz_end_sub in range(CELL_SIZE):
+            for head_offset in HEAD_OFFSETS:
+                setup_dual_play_barrier(
+                    sim,
+                    trigger_second=trigger_second,
+                    blocker="gap",
                 )
-            if trigger_second:
-                sim.call(s["Core.VDC_SwapChains"])
+                if trigger_second:
+                    sim.call(s["Core.VDC_SwapChains"])
+                sb(sim, "Core.VDC_GameState", 0)
+                sb(sim, "Core.VDC_KzEndSub", kz_end_sub)
+                set_position_for_rem(sim, HOLD_CHECK_REM)
+                set_uniform_active_offsets(sim, head_offset)
+                sb(sim, "Core.VDC_KzFrame", 1)
+                sb(sim, "Core.VDC_LoseHoldCnt", 0)
+
+                for _ in range(4):
+                    check_killzone(sim)
+
+                endpoint = 10 * CELL_SIZE + kz_end_sub
+                expected_hsa, expected_hsub = divmod(endpoint - HOLD_REM, CELL_SIZE)
+                actual = (
+                    sim.get_byte(s["Core.VDC_HSA"]),
+                    sim.get_byte(s["Core.VDC_HSub"]),
+                    sim.get_byte(s["Core.VDC_KzFrame"]),
+                    sim.get_byte(s["Core.VDC_LoseHoldCnt"]),
+                    sim.get_byte(s["Core.VDC_GameState"]),
+                    sim.get_byte(sim.get_word(s["Core.VDC_pOffsets"])),
+                )
+                expected = (
+                    expected_hsa,
+                    expected_hsub,
+                    expected_kz_frame(HOLD_REM),
+                    255,
+                    0,
+                    head_offset & 0xFF,
+                )
+                expected_active = 1 if trigger_second else 0
+                expected_slots = (
+                    s["Core.VDC2_Slots"] if trigger_second else s["Core.VDC_Slots"]
+                )
+                selection_ok = (
+                    sim.get_byte(s["Core.VDC_SecondActive"]) == expected_active
+                    and sim.get_word(s["Core.VDC_pSlots"]) == expected_slots
+                )
+                if actual != expected or not selection_ok:
+                    failures.append(
+                        f"chain={2 if trigger_second else 1} K={kz_end_sub} "
+                        f"off={head_offset:+d}: actual={actual} expected={expected} "
+                        f"selection={selection_ok}"
+                    )
+                if trigger_second:
+                    sim.call(s["Core.VDC_SwapChains"])
 
     ok = not failures
     print(
-        f"{'PASS' if ok else 'FAIL'}: terminal rem=1 exhaustive "
-        f"(KzEndSub=0..31, chain1/chain2, 4 repeated checks)"
+        f"{'PASS' if ok else 'FAIL'}: busy rem=49 -> hold rem=48 exhaustive "
+        f"(KzEndSub=0..31, uniform offsets, chain1/chain2, 4 repeated checks)"
+    )
+    for failure in failures[:8]:
+        print(f"  {failure}")
+    return ok
+
+
+def run_terminal_smooth_return_exhaustive_case() -> bool:
+    """Busy hold возвращает прошедшую цепь к rem=48 ровно на 1 sample/check."""
+    failures: list[str] = []
+    for trigger_second in (False, True):
+        sim = make_sim()
+        s = sim.sym
+        for kz_end_sub in range(CELL_SIZE):
+            for rem in (47, 32, 1, 0, -1):
+                for head_offset in HEAD_OFFSETS:
+                    setup_dual_play_barrier(
+                        sim,
+                        trigger_second=trigger_second,
+                        blocker="gap",
+                    )
+                    if trigger_second:
+                        sim.call(s["Core.VDC_SwapChains"])
+                    sb(sim, "Core.VDC_GameState", 0)
+                    sb(sim, "Core.VDC_KzEndSub", kz_end_sub)
+                    set_position_for_rem(sim, rem)
+                    set_uniform_active_offsets(sim, head_offset)
+                    sb(sim, "Core.VDC_KzFrame", 99)
+                    sb(sim, "Core.VDC_LoseHoldCnt", 0)
+
+                    for _ in range(4):
+                        check_killzone(sim)
+
+                    expected_rem = min(rem + 4, HOLD_REM)
+                    endpoint = 10 * CELL_SIZE + kz_end_sub
+                    expected_hsa, expected_hsub = divmod(
+                        endpoint - expected_rem, CELL_SIZE
+                    )
+                    actual = (
+                        sim.get_byte(s["Core.VDC_HSA"]),
+                        sim.get_byte(s["Core.VDC_HSub"]),
+                        base_rem(sim),
+                        sim.get_byte(s["Core.VDC_KzFrame"]),
+                        sim.get_byte(s["Core.VDC_LoseHoldCnt"]),
+                        sim.get_byte(s["Core.VDC_GameState"]),
+                        sim.get_byte(sim.get_word(s["Core.VDC_pOffsets"])),
+                    )
+                    expected = (
+                        expected_hsa,
+                        expected_hsub,
+                        expected_rem,
+                        expected_kz_frame(expected_rem),
+                        255,
+                        0,
+                        head_offset & 0xFF,
+                    )
+                    expected_active = 1 if trigger_second else 0
+                    expected_slots = (
+                        s["Core.VDC2_Slots"] if trigger_second else s["Core.VDC_Slots"]
+                    )
+                    selection_ok = (
+                        sim.get_byte(s["Core.VDC_SecondActive"]) == expected_active
+                        and sim.get_word(s["Core.VDC_pSlots"]) == expected_slots
+                    )
+                    if actual != expected or not selection_ok:
+                        failures.append(
+                        f"chain={2 if trigger_second else 1} K={kz_end_sub} "
+                        f"rem={rem} off={head_offset:+d}: actual={actual} "
+                            f"expected={expected} selection={selection_ok}"
+                        )
+                    if trigger_second:
+                        sim.call(s["Core.VDC_SwapChains"])
+
+    ok = not failures
+    print(
+        f"{'PASS' if ok else 'FAIL'}: busy hold returns smoothly by 1 sample/check "
+        f"(4 checks, rem=47/32/1/0/-1, KzEndSub=0..31, offsets, both chains)"
+    )
+    for failure in failures[:8]:
+        print(f"  {failure}")
+    return ok
+
+
+def run_terminal_smooth_return_update_speed_case() -> bool:
+    """Чужой GAP: normal/fast MoveChain расходуют hold, не гасят reverse-step."""
+    failures: list[str] = []
+    for fast_phase, expected_hold in ((False, 253), (True, 231)):
+        sim = make_sim()
+        s = sim.sym
+        # Цепь 1 уже проскочила точку 48, а удержание создаёт GAP в цепи 2.
+        # Это воспроизводит реальный dual-chain путь через VDC_LoseAllChainsBusy.
+        setup_dual_play_barrier(sim, trigger_second=False, blocker="gap")
+        set_position_for_rem(sim, 26)
+        sb(sim, "Core.VDC_GaugeFull", 1)  # изолированный тест не должен spawn'ить
+        sb(sim, "Core.VDC_BallsSpawned", 0 if fast_phase else 255)
+        sb(sim, "Core.VDC_LevelStart", 35)
+        sb(sim, "Core.VDC_LevelSpeed", 100)
+        sb(sim, "Core.VDC_SpeedAccum", 0)
+
+        sim.call(s["Core.VDC_Update"], max_steps=5_000_000)
+
+        actual = (
+            base_rem(sim),
+            sim.get_byte(s["Core.VDC_LoseHoldCnt"]),
+            sim.get_byte(s["Core.VDC_GameState"]),
+        )
+        expected = (27, expected_hold, 0)
+        if actual != expected:
+            failures.append(
+                f"phase={'fast' if fast_phase else 'normal'}: "
+                f"actual={actual}, expected={expected}"
+            )
+
+    ok = not failures
+    print(
+        f"{'PASS' if ok else 'FAIL'}: dual-chain smooth reverse survives "
+        "normal/fast movement (base 26->27; hold 255->253/231)"
+    )
+    for failure in failures:
+        print(f"  {failure}")
+    return ok
+
+
+def run_terminal_smooth_return_far_closed_case() -> bool:
+    """Дальний latched hold идёт к 48, но до rem=128 череп остаётся закрыт."""
+    failures: list[str] = []
+    # Проверяем именно post-step границу: 129->128 уже открывает frame 2,
+    # а 130->129 и более дальние позиции обязаны остаться на frame 1.
+    cases = (
+        (129, 128, expected_kz_frame(128)),
+        (130, 129, 1),
+        (144, 143, 1),
+        (255, 254, 1),
+    )
+    for trigger_second in (False, True):
+        sim = make_sim()
+        s = sim.sym
+        for kz_end_sub in (0, CELL_SIZE - 1):
+            for start_rem, expected_rem, expected_frame in cases:
+                setup_dual_play_barrier(
+                    sim,
+                    trigger_second=trigger_second,
+                    blocker="gap",
+                )
+                if trigger_second:
+                    sim.call(s["Core.VDC_SwapChains"])
+                sb(sim, "Core.VDC_GameState", 0)
+                sb(sim, "Core.VDC_KzEndSub", kz_end_sub)
+                set_position_for_rem(sim, start_rem)
+                sb(sim, "Core.VDC_KzFrame", 99)
+                sb(sim, "Core.VDC_LoseHoldCnt", 255)
+
+                check_killzone(sim)
+
+                actual = (
+                    base_rem(sim),
+                    sim.get_byte(s["Core.VDC_KzFrame"]),
+                    sim.get_byte(s["Core.VDC_LoseHoldCnt"]),
+                    sim.get_byte(s["Core.VDC_GameState"]),
+                )
+                expected = (expected_rem, expected_frame, 255, 0)
+                if actual != expected:
+                    failures.append(
+                        f"chain={2 if trigger_second else 1} K={kz_end_sub} "
+                        f"rem={start_rem}: actual={actual}, expected={expected}"
+                    )
+                if trigger_second:
+                    sim.call(s["Core.VDC_SwapChains"])
+
+    ok = not failures
+    print(
+        f"{'PASS' if ok else 'FAIL'}: far smooth hold keeps KZ closed until "
+        "post-step rem<=128 (129/130/144/255, both chains)"
     )
     for failure in failures[:8]:
         print(f"  {failure}")
@@ -648,7 +1059,7 @@ def run_terminal_park_exhaustive_case() -> bool:
 
 
 def run_dual_absorb_alpha_independence_case() -> bool:
-    """Фаза прозрачности головы обязана принадлежать своей цепочке."""
+    """Alpha — per-chain progress: минус 8 за каждый фактический sample к endpoint."""
 
     def setup_phases(hsub1: int, hsub2: int) -> ZumaZ80Sim:
         sim = make_sim()
@@ -676,7 +1087,9 @@ def run_dual_absorb_alpha_independence_case() -> bool:
         phased.get_byte(s["Core.VDC_HeadAbsorbAlpha"]),
         phased.get_byte(s["Core.VDC2_HeadAbsorbAlpha"]),
     )
-    phased_expected = (8, 24, 191, 63)
+    # Обе цепи прошли ровно 8 samples: стартовый HSub не должен
+    # подменять фазу прозрачности абсолютным HSub*8.
+    phased_expected = (8, 24, 191, 191)
     phased.call(s["Core.VDC_SwapChains"])
     swapped_values = (
         phased.get_byte(s["Core.VDC_HeadAbsorbAlpha"]),
@@ -694,10 +1107,12 @@ def run_dual_absorb_alpha_independence_case() -> bool:
         popped.get_byte(p["Core.VDC2_HSub"]),
         popped.get_byte(p["Core.VDC2_HeadAbsorbAlpha"]),
     )
-    popped_expected = (0, 2, 255, 16, 127)
+    # Chain1 дошла до endpoint за 7 samples, сменила head на opaque
+    # и за оставшийся в loop sample получила alpha=247. Chain2 прошла 8 samples.
+    popped_expected = (0, 2, 247, 16, 191)
     ok = (
         phased_values == phased_expected
-        and swapped_values == (63, 191)
+        and swapped_values == (191, 191)
         and popped_values == popped_expected
         and pointers_restored(phased)
         and pointers_restored(popped)
@@ -788,7 +1203,7 @@ def main() -> int:
     cases = [
         ("single ready starts absorb", lambda sim: None, 1),
         (
-            "ready chain opens KZ frame at rem=64",
+            "ready chain opens KZ frame at rem=64 inside widened window",
             lambda sim: (
                 sb(sim, "Core.VDC_HSA", 8),
                 sb(sim, "Core.VDC_HSub", 31),
@@ -799,10 +1214,10 @@ def main() -> int:
             False,
             None,
             0,
-            2,
+            6,
         ),
         (
-            "ready chain clears stale hold at rem=65",
+            "ready chain clears stale hold at rem=65 inside widened window",
             lambda sim: (
                 sb(sim, "Core.VDC_HSA", 8),
                 sb(sim, "Core.VDC_HSub", 30),
@@ -814,44 +1229,25 @@ def main() -> int:
             False,
             None,
             0,
-            1,
+            5,
         ),
         (
-            "active destroy frame blocks absorb",
-            lambda sim: sim.set_byte(sim.sym["Core.VDC_ExplodeFrame"] + 1, 1),
+            "active destroy frame at rem=49 parks on rem=48",
+            lambda sim: (
+                set_position_for_rem(sim, 49),
+                sim.set_byte(sim.sym["Core.VDC_ExplodeFrame"] + 1, 1),
+            ),
             0,
-            30,
-            10,
+            15,
+            9,
             False,
             None,
             255,
-            9,
+            7,
         ),
         (
-            "active explode-active flag blocks absorb after gap closure",
+            "stale active ExplodeActive flag does not block absorb",
             lambda sim: sb(sim, "Core.VDC_ExplodeActive", 1),
-            0,
-            30,
-            10,
-            False,
-            None,
-            255,
-            9,
-        ),
-        (
-            "active internal gap marker holds before KZ",
-            lambda sim: sim.set_byte(sim.sym["Core.VDC_Slots"] + 1, 0xFE),
-            0,
-            30,
-            10,
-            False,
-            None,
-            255,
-            9,
-        ),
-        (
-            "active nonzero offset does not block absorb",
-            lambda sim: set_active_offset_blocker(sim, 1, -16),
             1,
             31,
             10,
@@ -861,14 +1257,115 @@ def main() -> int:
             11,
         ),
         (
-            "active destroy frame holds current rem=32 inside KZ window",
+            "active internal gap marker parks rem=49 on rem=48",
+            lambda sim: (
+                set_position_for_rem(sim, 49),
+                sim.set_byte(sim.sym["Core.VDC_Slots"] + 1, 0xFE),
+            ),
+            0,
+            15,
+            9,
+            False,
+            None,
+            255,
+            7,
+        ),
+        (
+            "derived GapJunction without marker does not block absorb",
+            lambda sim: sb(sim, "Core.VDC_GapJunction", 2),
+            1,
+            31,
+            10,
+            False,
+            None,
+            0,
+            11,
+        ),
+        (
+            "derived GapPosLeft without descending offsets does not block absorb",
+            lambda sim: sb(sim, "Core.VDC_GapPosLeft", 1),
+            1,
+            31,
+            10,
+            False,
+            None,
+            0,
+            11,
+        ),
+        (
+            "derived GapAccum without marker does not block absorb",
+            lambda sim: sw(sim, "Core.VDC_GapAccum", 0xFFFF),
+            1,
+            31,
+            10,
+            False,
+            None,
+            0,
+            11,
+        ),
+        (
+            "ordinary non-descending offset profile does not block absorb",
+            set_active_ordinary_offset,
+            1,
+            31,
+            10,
+            False,
+            None,
+            0,
+            11,
+        ),
+        (
+            "descending signed offset profile parks rem=49 on rem=48",
+            lambda sim: (
+                set_position_for_rem(sim, 49),
+                set_active_real_offset_gap(sim),
+            ),
+            0,
+            15,
+            9,
+            False,
+            None,
+            255,
+            7,
+        ),
+        (
+            "active destroy frame at rem=32 returns smoothly to rem=33",
             lambda sim: (
                 sb(sim, "Core.VDC_HSA", 9),
                 sb(sim, "Core.VDC_HSub", 31),
                 sim.set_byte(sim.sym["Core.VDC_ExplodeFrame"] + 1, 1),
             ),
             0,
-            31,
+            30,
+            9,
+            False,
+            None,
+            255,
+            7,
+        ),
+        (
+            "active destroy frame at rem=1 returns smoothly to rem=2",
+            lambda sim: (
+                sb(sim, "Core.VDC_HSA", 10),
+                sb(sim, "Core.VDC_HSub", 30),
+                sim.set_byte(sim.sym["Core.VDC_ExplodeFrame"] + 1, 1),
+            ),
+            0,
+            29,
+            10,
+            False,
+            None,
+            255,
+            9,
+        ),
+        (
+            "active destroy frame at rem=50 remains free",
+            lambda sim: (
+                set_position_for_rem(sim, 50),
+                sim.set_byte(sim.sym["Core.VDC_ExplodeFrame"] + 1, 1),
+            ),
+            0,
+            13,
             9,
             False,
             None,
@@ -876,157 +1373,127 @@ def main() -> int:
             6,
         ),
         (
-            "active destroy frame holds current rem=1 inside KZ window",
+            "active destroy frame at rem=49 clamps forward to rem=48",
             lambda sim: (
-                sb(sim, "Core.VDC_HSA", 10),
-                sb(sim, "Core.VDC_HSub", 30),
+                set_position_for_rem(sim, 49),
                 sim.set_byte(sim.sym["Core.VDC_ExplodeFrame"] + 1, 1),
             ),
             0,
-            30,
-            10,
-            False,
-            None,
-            24,
+            15,
             9,
-        ),
-        (
-            "active destroy frame holds at rem=66 before KZ opening",
-            lambda sim: (
-                sb(sim, "Core.VDC_HSA", 8),
-                sb(sim, "Core.VDC_HSub", 29),
-                sim.set_byte(sim.sym["Core.VDC_ExplodeFrame"] + 1, 1),
-            ),
-            0,
-            29,
-            8,
-            False,
-            None,
-            0,
-            1,
-        ),
-        (
-            "active destroy frame at rem=67 is not held yet",
-            lambda sim: (
-                sb(sim, "Core.VDC_HSA", 8),
-                sb(sim, "Core.VDC_HSub", 28),
-                sim.set_byte(sim.sym["Core.VDC_ExplodeFrame"] + 1, 1),
-            ),
-            0,
-            28,
-            8,
-            False,
-            None,
-            0,
-        ),
-        (
-            "active destroy frame blocks next move before KZ opening",
-            lambda sim: (
-                sb(sim, "Core.VDC_HSA", 8),
-                sb(sim, "Core.VDC_HSub", 29),
-                sim.set_byte(sim.sym["Core.VDC_ExplodeFrame"] + 1, 1),
-            ),
-            0,
-            30,
-            8,
-            True,
-            0,
-            0,
-            1,
-        ),
-        (
-            "active destroy frame wraps pre-KZ hold at KzEndSub=1",
-            lambda sim: (
-                sb(sim, "Core.VDC_KzEndSub", 1),
-                sb(sim, "Core.VDC_HSub", 1),
-                sim.set_byte(sim.sym["Core.VDC_ExplodeFrame"] + 1, 1),
-            ),
-            0,
-            0,
-            10,
             False,
             None,
             255,
+            7,
+        ),
+        (
+            "active destroy frame blocks next move at pre-KZ park",
+            lambda sim: (
+                set_position_for_rem(sim, 49),
+                sim.set_byte(sim.sym["Core.VDC_ExplodeFrame"] + 1, 1),
+            ),
+            0,
+            15,
             9,
+            True,
+            0,
+            254,
+            7,
+        ),
+        (
+            "active destroy frame parks rem=49 at KzEndSub=1",
+            lambda sim: (
+                sb(sim, "Core.VDC_KzEndSub", 1),
+                set_position_for_rem(sim, 49),
+                sim.set_byte(sim.sym["Core.VDC_ExplodeFrame"] + 1, 1),
+            ),
+            0,
+            17,
+            8,
+            False,
+            None,
+            255,
+            7,
         ),
         (
             "active destroy frame blocks next wrapped move before KZ",
             lambda sim: (
                 sb(sim, "Core.VDC_KzEndSub", 1),
-                sb(sim, "Core.VDC_HSA", 9),
-                sb(sim, "Core.VDC_HSub", 31),
+                set_position_for_rem(sim, 49),
                 sim.set_byte(sim.sym["Core.VDC_ExplodeFrame"] + 1, 1),
             ),
             0,
-            0,
-            10,
+            17,
+            8,
             True,
             None,
-            23,
-            9,
+            254,
+            7,
         ),
         (
-            "active destroy frame wraps pre-KZ hold at KzEndSub=0",
+            "active destroy frame parks rem=49 at KzEndSub=0",
             lambda sim: (
                 sb(sim, "Core.VDC_KzEndSub", 0),
-                sb(sim, "Core.VDC_HSub", 0),
+                set_position_for_rem(sim, 49),
                 sim.set_byte(sim.sym["Core.VDC_ExplodeFrame"] + 1, 1),
             ),
             0,
-            31,
-            9,
+            16,
+            8,
             False,
             None,
             255,
-            9,
+            7,
         ),
         (
             "dual inactive destroy frame blocks global absorb at trigger",
             lambda sim: (
                 sb(sim, "Core.VDC_HasSecondChain", 1),
+                set_position_for_rem(sim, 49),
                 sim.set_byte(sim.sym["Core.VDC2_ExplodeFrame"] + 1, 1),
             ),
             0,
-            30,
-            10,
+            15,
+            9,
             False,
             None,
             255,
-            9,
+            7,
         ),
         (
-            "dual inactive explode-active flag blocks global absorb at trigger",
+            "dual inactive stale ExplodeActive does not block global absorb",
             lambda sim: (
                 sb(sim, "Core.VDC_HasSecondChain", 1),
                 set_chain2_explode_active(sim, 1),
             ),
-            0,
-            30,
+            1,
+            31,
             10,
             False,
             None,
-            255,
-            9,
+            0,
+            11,
         ),
         (
             "dual inactive gap marker blocks global absorb at trigger",
             lambda sim: (
                 sb(sim, "Core.VDC_HasSecondChain", 1),
+                set_position_for_rem(sim, 49),
                 sim.set_byte(sim.sym["Core.VDC2_Slots"] + 1, 0xFE),
             ),
             0,
-            30,
-            10,
+            15,
+            9,
             False,
             None,
             255,
-            9,
+            7,
         ),
         (
             "dual inactive ordinary offset does not block global absorb",
             lambda sim: (
                 sb(sim, "Core.VDC_HasSecondChain", 1),
-                set_chain2_unrelated_offset(sim, 1, -16),
+                set_chain2_ordinary_offset(sim),
             ),
             1,
             31,
@@ -1041,37 +1508,35 @@ def main() -> int:
             lambda sim: (
                 sb(sim, "Core.VDC_HasSecondChain", 1),
                 sb(sim, "Core.VDC_KzEndSub", 1),
-                sb(sim, "Core.VDC_HSA", 10),
-                sb(sim, "Core.VDC_HSub", 1),
+                set_position_for_rem(sim, 49),
                 sim.set_byte(sim.sym["Core.VDC2_Slots"] + 1, 0xFE),
             ),
             0,
-            0,
-            10,
+            17,
+            8,
             False,
             None,
             255,
-            9,
+            7,
         ),
         (
             "dual global explosion barrier at KzEndSub=0",
             lambda sim: (
                 sb(sim, "Core.VDC_HasSecondChain", 1),
                 sb(sim, "Core.VDC_KzEndSub", 0),
-                sb(sim, "Core.VDC_HSA", 10),
-                sb(sim, "Core.VDC_HSub", 0),
+                set_position_for_rem(sim, 49),
                 sim.set_byte(sim.sym["Core.VDC2_ExplodeFrame"] + 1, 1),
             ),
             0,
-            31,
-            9,
+            16,
+            8,
             False,
             None,
             255,
-            9,
+            7,
         ),
         (
-            "already-ABSORB trigger bypasses global PLAY barrier",
+            "already-ABSORB CheckKillzone does not retrigger global PLAY barrier",
             lambda sim: (
                 sb(sim, "Core.VDC_HasSecondChain", 1),
                 sb(sim, "Core.VDC_GameState", 1),
@@ -1086,36 +1551,34 @@ def main() -> int:
             11,
         ),
         (
-            "dual inactive destroy frame leaves clean active movement independent",
+            "dual inactive destroy frame globally parks clean chain at KZ entry",
             lambda sim: (
                 sb(sim, "Core.VDC_HasSecondChain", 1),
-                sb(sim, "Core.VDC_HSA", 8),
-                sb(sim, "Core.VDC_HSub", 29),
+                set_position_for_rem(sim, 49),
                 sim.set_byte(sim.sym["Core.VDC2_ExplodeFrame"] + 1, 1),
             ),
             0,
-            30,
-            8,
+            15,
+            9,
             True,
             None,
-            0,
-            1,
+            254,
+            7,
         ),
         (
-            "dual inactive gap marker leaves clean active movement independent",
+            "dual inactive gap marker globally parks clean chain at KZ entry",
             lambda sim: (
                 sb(sim, "Core.VDC_HasSecondChain", 1),
-                sb(sim, "Core.VDC_HSA", 8),
-                sb(sim, "Core.VDC_HSub", 29),
+                set_position_for_rem(sim, 49),
                 sim.set_byte(sim.sym["Core.VDC2_Slots"] + 1, 0xFE),
             ),
             0,
-            30,
-            8,
+            15,
+            9,
             True,
             None,
-            0,
-            1,
+            254,
+            7,
         ),
         (
             "dual both ready starts absorb",
@@ -1132,15 +1595,25 @@ def main() -> int:
         failures += 1
     if not run_absorb_stale_explode_flag_case():
         failures += 1
-    if not run_dual_absorb_gap_isolation_case(False):
+    if not run_dual_absorb_global_gap_barrier_case(False):
         failures += 1
-    if not run_dual_absorb_gap_isolation_case(True):
+    if not run_dual_absorb_global_gap_barrier_case(True):
         failures += 1
     for blocker in ("gap", "explode"):
         for trigger_second in (False, True):
             if not run_dual_play_barrier_lifecycle_case(trigger_second, blocker):
                 failures += 1
     if not run_terminal_park_exhaustive_case():
+        failures += 1
+    if not run_terminal_smooth_return_exhaustive_case():
+        failures += 1
+    if not run_terminal_smooth_return_update_speed_case():
+        failures += 1
+    if not run_terminal_smooth_return_far_closed_case():
+        failures += 1
+    if not run_signed_offset_predicate_boundary_case():
+        failures += 1
+    if not run_absorb_remove_exact_endpoint_exhaustive_case():
         failures += 1
     if not run_dual_absorb_alpha_independence_case():
         failures += 1

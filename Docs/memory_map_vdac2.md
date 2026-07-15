@@ -1,6 +1,6 @@
 # Zuma Deluxe VDAC2: актуальная карта памяти
 
-Дата среза: 2026-07-05, build после `v098-2026-07-05-loading-level-hold-reference`.
+Дата среза: 2026-07-11, сборка после оптимизации горячего пути L19.
 
 Документ описывает текущую рабочую раскладку проекта. Источники истины для
 проверки:
@@ -20,7 +20,7 @@ python Source\OTHER\check_memory_map.py
 python Source\OTHER\audit_ramg_full.py
 ```
 
-Текущий результат: обе проверки проходят. `Main1` почти полон: free 248 bytes.
+Текущий результат: обе проверки проходят. `Main1` почти полон: свободно 24 байта.
 
 ## Правила
 
@@ -44,11 +44,11 @@ python Source\OTHER\audit_ramg_full.py
 
 | Блок | CPU/slot | Файл | Размер | Свободно |
 |---|---:|---|---:|---:|
-| TSLib/slot0 | `#1000`, page `#00` | `Build/TSLib.bin` | 12244 | n/a |
-| Core/Main0 | `#5C00`, page `#05` | `Build/Core.bin` | 9211 | n/a |
-| Gameplay overlay | `#C000`, page `#04` | `Build/main1_play.bin` | 16136 | 248 |
-| UI overlay | `#C000`, page `#41` | `Build/ui_ovl.bin` | 14510 | 1874 |
-| Loader overlay | `#C000`, page `#40` | `Build/loader_ovl.bin` | 12351 | 4033 |
+| TSLib/slot0 | `#1000`, page `#00` | `Build/TSLib.bin` | 12208 | n/a |
+| Core/Main0 | `#5C00`, page `#05` | `Build/Core.bin` | 9207 | n/a |
+| Gameplay overlay | `#C000`, page `#04` | `Build/main1_play.bin` | 16360 | 24 |
+| UI overlay | `#C000`, page `#41` | `Build/ui_ovl.bin` | 14514 | 1870 |
+| Loader overlay | `#C000`, page `#40` | `Build/loader_ovl.bin` | 12318 | 4066 |
 
 Стартовая схема:
 
@@ -56,7 +56,7 @@ python Source\OTHER\audit_ramg_full.py
 |---|---:|---:|---|
 | 0 | `#0000..#3FFF` | `#00` | TSLib + slot0 helpers |
 | 1 | `#4000..#7FFF` | `#05` | Core/Main0, resident state |
-| 2 | `#8000..#BFFF` | `#06` | Track V2 page после загрузки уровня |
+| 2 | `#8000..#BFFF` | первая активная track page | Окно чтения Track V4 |
 | 3 | `#C000..#FFFF` | `#04/#40/#41` | gameplay / loader / UI overlay |
 
 Временные Z80 pages:
@@ -66,23 +66,28 @@ python Source\OTHER\audit_ramg_full.py
 | `#01` | `SCRATCH_PAGE` для ZX7 unpack |
 | `#03` | RawPak sector/staging buffer |
 | `#04` | gameplay overlay |
-| `#06` | Track V2 page A |
+| `#06` | первая страница Track V4 |
 | `#07..#0E` | fallback/staging bg pages |
-| `#0F/#10/#12` | дополнительные Track V2 pages |
+| `#0F/#10/#12` | дополнительные страницы Track V4 |
 | `#40` | loader overlay |
 | `#41` | UI overlay |
 | `#F4` | AY SFX page, source `Sounds/AY/ay_sfx_data.bin` |
+
+В resident-области gameplay два полных кеша шаров занимают
+`#4100..#4B7F` (`#4100` и `#4640`, по 1344 байта). Метаданные раздельных
+under/over-полос L19 занимают `#4B80..#4B86`; формат полосы — до 96 видимых
+записей по 6 байт на каждый слой.
 
 ## Runtime Artifacts
 
 | Файл | Размер |
 |---|---:|
-| `Build/ZUMA_VD2.SPG` | 377344 |
+| `Build/zuma_vdac2.spg` | 377344 |
 | `Build/ZUMAMAIN.PAK` | 3670016 |
 | `Build/ZUMALVL.PAK` | 7139840 |
 | `Build/ZUMAAUD.PAK` | 802136 |
 | `Build/ZUMASND.PAK` | 1215488 |
-| `Sounds/AY/ay_sfx_data.bin` | 11714 |
+| `Sounds/AY/ay_sfx_data.bin` | 11775 |
 
 `spgbld` пишет секунду времени сборки в заголовок SPG по offset `0x3C`, поэтому
 SHA всего `.spg` не является стабильным payload-хешем.
@@ -308,14 +313,15 @@ Same-profile intentional overlaps:
 Актуальный успешный вывод `check_memory_map.py`:
 
 ```text
-[ramg] gameplay: 23 ranges, max end #0FC000
+[ramg] gameplay: 24 ranges, max end #0FC000
 [ramg] level_select: 10 ranges, max end #0F4000
 [ramg] main_menu: 6 ranges, max end #0AD200
 [ramg] more_games: 2 ranges, max end #0ABE60
-[build] Main0_Size=9211 bytes
-[build] Main1_Size=16136 bytes, free=248 bytes (gameplay overlay page #04)
-[build] UiOvl_Size=14510 bytes, free=1874 bytes (ui overlay page #41)
-[build] LoaderOvl_Size=12351 bytes, free=4033 bytes (loader overlay page #40)
+[build] Main0_Size=9207 bytes
+[build] Main1_Size=16360 bytes, free=24 bytes (gameplay overlay page #04)
+[build] warning: gameplay overlay (page #04) has less than 256 bytes free
+[build] UiOvl_Size=14514 bytes, free=1870 bytes (ui overlay page #41)
+[build] LoaderOvl_Size=12318 bytes, free=4066 bytes (loader overlay page #40)
 PASS: memory-map checks
 ```
 

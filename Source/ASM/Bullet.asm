@@ -55,9 +55,17 @@ Bullet_Spawn:       LD   A, (VDC_DialogState)
                     LD   A, (VDC_KzFrame)
                     CP   9
                     JR   NC, .bs_block
+                    ; KZ2 имеет смысл только на L05/L12/L19. После Game Over
+                    ; её последний frame может остаться 11, а одноцепочечный
+                    ; VDC_Init раньше этот backing state не очищал. Без gate
+                    ; stale KZ2 навсегда запрещала выстрелы на следующем уровне.
+                    LD   A, (VDC_HasSecondChain)
+                    OR   A
+                    JR   Z, .bs_kz_ready
                     LD   A, (VDC2_KzFrame)
                     CP   9
                     JR   NC, .bs_block
+.bs_kz_ready:
                     LD   A, (Bullet_Active)
                     OR   A
                     JR   Z, .bs_free

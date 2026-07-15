@@ -9484,6 +9484,204 @@ PULL, если перед левым краем текущего GAP-run уже 
 `ZUMASND.PAK` = `8393DB5BB8EC2FDA98C970A3303C43BDEF86A5CA5B4CF09FF09F8FC0C53409DA`;
 `Build/zuma.sym` = `E229BD9C2A6FDEE486F4D5B876450FC5CA3D36A1526BFC95C8858E76C75CC2D3`.
 
+## [2026-07-10 12:43] Codex / VDAC2 ↔ VDC: оптимизация полного игрового цикла на примере L19, промежуточный отчёт
+
+**Запрос:** ускорить не отдельную пулю, а весь игровой процесс без упрощения
+логики и графики. Worst case — L19; Z80 не должен выходить за кадровое
+прерывание, желателен запас не менее 20% кадра.
+
+**Корневая причина ощущения «медленной пули»:** `Bullet_Update` применяет
+фиксированный `Bullet_DX/DY` ровно один раз за завершённый `MainLoop`. На тяжёлом
+L19 один игровой цикл занимал больше двух видеокадров, поэтому в реальном времени
+замедлялись одновременно пуля, управление, анимация и физика. Увеличивать только
+скорость пули нельзя: это замаскировало бы перегрузку и изменило gameplay.
+
+**Критическая поправка единиц patched Unreal/zprof:** профилировщик показывает
+Unreal `cpu.t`, а не nominal 14-MHz Z80 t-states. В turbo x4:
+`1 cpu.t = 4 nominal Z80 T`. Для текущего FT812 режима
+`1024x768@59.080704` кадровый бюджет равен примерно `59 241 cpu.t`, а потолок
+для 20% резерва — `47 393 cpu.t`. Старое ошибочное сравнение с `236 964`
+отозвано.
+
+**Свежий исходный patched-Unreal baseline L19 (v108, 120 кадров):**
+
+```text
+avg=128629 cpu.t
+max=134052 cpu.t
+MainLoop.Loop #EAC4
+ZL_DrawFrame 93818
+ZLDF_chains_total 74520
+ZLDF_prepare_chain_caches 31891
+VDC_UpdateAllChains 31180
+afterchains 17160
+chain2_over 12669
+chain1_over 9962
+chain2_under 7043
+chain1_under 6905
+hud_top_text 8377
+frog_layer 5021
+```
+
+Это `2.171` кадра в среднем и `2.263` кадра в максимуме, ориентировочно
+`27.2 Hz` игрового цикла. До цели 20% запаса исходной версии не хватало
+`81 236 cpu.t` по average. Baseline валиден: gate попал в `MainLoop`, обе
+chain2-секции имели 120 samples. Строка `slots=0+0` была только ошибкой
+устаревших report-read адресов.
+
+**Patched Unreal:** рабочий exe
+`C:/Users/Администратор/Desktop/unreal_x64/Unreal.exe` был пропатчен для
+zprof; до патча сохранён backup
+`Unreal.exe.pre_zprof_EAC4_20260710_114307`. После дальнейших ASM-изменений
+адреса символов сдвинулись, поэтому текущая section table exe снова устарела.
+До финальной пересборки/перепатчивания этот exe нельзя использовать для
+итоговых чисел. Выявлены стабильные PE sites для будущего автопатча:
+gate `0x5F039`, section table `0xF33A0` (49 строк, stride `0x30`), gate reads
+`0x5F08F/98/A1/AB/B6`, report reads `0x5EA19/21/39`.
+
+### Этап 1: удалён дублирующий полный обход обеих цепочек
+
+`VDC_WinSnapAllChains/VDC_SnapshotWinChain` каждый PLAY-кадр повторно обходили
+все шары. Точный max track sample головы теперь снимается внутри обязательного
+`ZL_BuildActiveChainCache`, после clamp `t`, но до screen cull. Сохранены
+legacy-особенности: `i>HSA` не участвует даже при positive offset, берётся
+максимум всех live slots, empty/marker-only оставляет прошлое значение, chain1/2
+различаются по `VDC_SecondActive`, вне PLAY snapshot выключен.
+
+Одновременно `VDC_SwapBuf` уменьшен с `VDC_MAX_SLOTS*5 = 960` до реального
+размера `VDC_ChainLocal = 33` байта; освобождено 927 байт Main1. Добавлен
+compile-time `ASSERT` размера. Старые snapshot routines удалены.
+
+Новый тест `test_win_snapshot_cache_z80.py` сравнивает production cache-head с
+oracle, который вызывает настоящий Z80 `VDC_SlotT`: normal, leading/all gap,
+all-negative, clamp конца track, non-monotonic offsets, `i>HSA`, chain1/2,
+non-PLAY и empty. Обновлены `test_win_transition_z80.py` и
+`test_dual_chain_win_outro_z80.py`.
+
+Headless A/B при L19 `70+70`: старый сопоставимый профиль около `618 766`
+nominal T/frame, после этапа 1 `546 839`; выигрыш около `71 927` nominal T,
+то есть `11.6%`. Абсолютные headless цифры не равны Unreal cpu.t из-за FT hooks,
+они используются только для A/B.
+
+### Этап 2: специализированная многопроходная отрисовка
+
+В `MainLoop.asm` расширен fast path cached-chain для PLAY pass `0/1/2`.
+Для tunnel/top-mask один раз до цикла выбирается `under` или `over`, вместо
+проверки pass/explosion/head-absorb через косвенные dispatch на каждом slot.
+Фильтр сохранён точно:
+
+```text
+flags & 3 == DRAW_ABOVE (2) -> over
+остальные 0/1/3 -> under; TUNNEL имеет приоритет над DRAW_ABOVE
+```
+
+Порядок cache не меняется, сортировки нет, matrix/CELL/VERTEX2F генерируются
+штатными функциями, pressure flush сохранён. Explosion, dialog, rotation-off,
+ABSORB/WIN/GAMEOVER чисто уходят в прежний slow fallback.
+
+`test_draw_cached_chain_fast_path_z80.py` расширен: counts
+`1/40/73/80/96`, passes `0/1/2`, gaps, flags `0/1/2/3` и старшие биты,
+повторяющиеся/меняющиеся tangent. CMD buffer, BufferPtr и final tangent
+совпали побайтно. На count=96:
+
+```text
+pass0: slow 93597 -> fast 79984 nominal T (-14.5%)
+pass1: slow 84140 -> fast 73903 nominal T (-12.2%)
+pass2: slow 50667 -> fast 44758 nominal T (-11.7%)
+```
+
+`test_shadow_tunnel_pass_z80.py` и memory-map проверка прошли.
+
+### Этап 3: физика и общие scans
+
+В `VDC_AnimateChain/VDC_ScanForNewMatch` устранена пустая работа обычного кадра:
+
+- сначала дешёво доказывается отсутствие любого `Shot2`, после чего нет второго
+  обхода Slots/offset-neighbours;
+- `ClampOffsetOrder` вызывается только при
+  `VDC_GapPosLeft | VDC_GapJunction != 0`, когда positive inversion возможна;
+- `VDC_ClearStaleShot2` вызывается после scan только если до scan был активен
+  `VDC_BridgeScanActive`; без bridge основной scan уже сделал всё возможное,
+  а ClearStale не имел side effect;
+- `VDC_GapJunctionUpdate` вместо двух полных проходов делает один обратный:
+  первый справа `GAP_STOP`, иначе сохранённый самый левый `GAP_CASCADE`;
+- `VDC_InternalGapExists` переписан в трёхфазный автомат
+  live -> marker-run -> live с тем же carry-контрактом.
+
+Добавлен `test_gap_scan_selection_z80.py`: 309 fixed/random layouts совпали с
+legacy Python oracle для выбора junction и internal-gap carry. Прошли:
+`test_gap_pull_z80.py`, `test_gap_boundary_no_kz_drift_z80.py`,
+`test_chain_move_step_z80.py`, `test_cascade_requires_gap_bridge_z80.py`,
+`test_shot2_cleanup_z80.py`, `test_pending_shot2_survives_new_match_z80.py`,
+`test_no_premature_shot2_z80.py`, `test_insert_immediate_match_z80.py`,
+`test_match3_insert_halfcell_z80.py`, `test_explode_active_flag_z80.py`,
+`test_lose_waits_chain_settle_z80.py`, `test_v099_lose_state_regression_z80.py`
+и bullet dual-chain regression.
+
+**Найден и исправлен отдельный dual-chain bug:** slot0 routine
+`ClampOffsetOrder` после pointer-refactor всё ещё использовала прямой
+`Core.VDC_Offsets`. При активной chain2 она повторно клампила chain1, а chain2
+не трогала. Исправлено на `LD HL,(Core.VDC_pOffsets)`. Новый
+`test_dual_chain_clamp_offsets_z80.py` доказывает, что при chain2 меняется только
+`VDC2_Offsets`, primary остаётся byte-for-byte.
+
+### Этап 4: baked spin в Track V3
+
+В 8-byte track sample свободный byte `+6` теперь хранит точную фазу
+`floor(sample*61/256) mod 12`, `+7` остаётся reserved zero. Вычисление перенесено
+в `make_level_pack.py`; `ZL_BuildActiveChainCache` читает готовую фазу вместо
+вызова `ZL_SpinPhase12` для каждого шара. Координаты, tangent, flags, atlas и
+кадры анимации не менялись.
+
+Чтобы старый PAK с zero-padding не дал тихо замороженное вращение, magic track
+metadata изменён с `ZTV2` на `ZTV3`, loader проверяет `ZTV3`. Перегенерирован
+`Build/ZUMALVL.PAK`, размер прежний `7 139 840` bytes / `13 945` sectors;
+внутренняя проверка packer прошла byte-for-byte. Обновлены layout comments и
+loader/full-load tests. Manual bullet fixture теперь также содержит валидный
+spin byte.
+
+`test_track_baked_spin_z80.py`: все 2471 sample L19 совпали с формулой; выборка
+совпала с прежней Z80 `ZL_SpinPhase12` после инициализации LUT.
+`test_level_pack_second_tracks.py`: L05/L12/L19, обе цепочки, включая переход
+2047/2048 между pages, phase/reserved и полные pages совпали.
+`test_zifi_pipeline_python.py` прошёл с новым pack.
+
+### Текущее состояние и что НЕ закончено
+
+Последняя прямая sjasmplus-сборка перед финальной мелкой `INC L`-правкой:
+`Main0=9207`, `Main1=15514` (свободно 870 bytes), `UiOvl=14514`,
+`LoaderOvl=12318`; ошибок нет, только прежние forward-reference warnings.
+
+После последних изменений **ещё не выполнены**:
+
+- полный `build.cmd` и полный regression suite;
+- завершение `test_win_next_level_full_load_z80.py` (долгий запуск был прерван
+  пользователем; оставшиеся Python-процессы Codex остановлены);
+- новый полный headless L19 профиль после всех этапов (один запуск был остановлен
+  timeout 184 s во время длинного прогрева до `70+70`);
+- синхронизация свежих SPG/PAK/SYM с `Desktop/unreal_x64`;
+- инжект свежего комплекта в `wc.img` и hash verification;
+- перепатчивание Unreal section table по новым symbols;
+- финальный реальный patched-Unreal capture L19 и подтверждение бюджета
+  `<=59 241 cpu.t`, тем более цели `<=47 393 cpu.t`.
+
+Следовательно, текущие исходники содержат проверенные локальные оптимизации, но
+это **не финальный доставленный build** и цель 20% запаса пока не доказана.
+Runtime/SPG/wc.img сейчас относятся к более ранней сборке; смешивать их с новым
+`ZTV3` PAK нельзя. Продолжать нужно с полного build/regression, затем атомарно
+обновить все артефакты, перепатчить Unreal из свежего `zuma.sym` и повторить L19.
+
+**Затронутые production files:** `Source/ASM/MainLoop.asm`, `VDC.asm`,
+`main.asm`, `loader_resident.asm`, `ts-dos.asm`,
+`Source/OTHER/make_level_pack.py`.
+
+**Добавленные/обновлённые релевантные тесты:**
+`test_win_snapshot_cache_z80.py`, `test_draw_cached_chain_fast_path_z80.py`,
+`test_dual_chain_clamp_offsets_z80.py`, `test_gap_scan_selection_z80.py`,
+`test_track_baked_spin_z80.py`, `test_win_transition_z80.py`,
+`test_dual_chain_win_outro_z80.py`, `test_level_pack_second_tracks.py`,
+`test_win_next_level_full_load_z80.py`,
+`test_bullet_traj_dual_chain_insert_z80.py`.
+
 ## [2026-07-09] Codex / VDAC2: сохранена опорная версия v108
 
 **Папка опоры:** `releases/v108-2026-07-09-multigap-pull-stable-reference/`.
@@ -9511,3 +9709,1102 @@ PULL, если перед левым краем текущего GAP-run уже 
 `ZUMAAUD.PAK` = `72EF97514A816962D725193DC27C3232373505C859362784C469A8CF057FB017`;
 `ZUMASND.PAK` = `8393DB5BB8EC2FDA98C970A3303C43BDEF86A5CA5B4CF09FF09F8FC0C53409DA`;
 `Build/zuma.sym` = `E229BD9C2A6FDEE486F4D5B876450FC5CA3D36A1526BFC95C8858E76C75CC2D3`.
+
+## [2026-07-10 12:46] Codex / VDAC2 ↔ VDC: указатель на отчёт об оптимизации полного игрового цикла на примере L19
+
+Полный промежуточный отчёт этой сессии уже записан выше в этом append-only
+файле под точным заголовком:
+`[2026-07-10 12:43] Codex / VDAC2 ↔ VDC: оптимизация полного игрового цикла на примере L19, промежуточный отчёт`.
+Он содержит baseline patched Unreal, правильные единицы `cpu.t`, все изменения
+этапов 1-4, тесты, изменённые файлы и полный список незавершённых действий.
+Из-за неуникального hash-якоря отчёт физически попал перед последней записью
+v108; данные не удалялись и не переписывались. Эта запись добавлена в настоящий
+конец файла как канонический указатель на актуальное состояние.
+
+## [2026-07-10 12:47] Codex / VDAC2: память текущей сессии сохранена
+
+**Каноническая цель:** оптимизация полного игрового цикла всей игры без
+упрощения gameplay и графики и без регрессий. L19 используется только как
+самый тяжёлый worst-case пример и основной нагрузочный тест. Формулировка
+«оптимизация полного игрового цикла L19» неверна и исправлена на
+«оптимизация полного игрового цикла на примере L19».
+
+Полная память о выполненной работе сохранена в записи
+`[2026-07-10 12:43] ... оптимизация полного игрового цикла на примере L19,
+промежуточный отчёт`. Там зафиксированы: корректный бюджет patched Unreal,
+исходный L19 baseline, перенос WIN snapshot в cache prepass, уменьшение
+SwapBuf, fast renderer pass 0/under/over, устранение пустых физических scans,
+исправление chain2 `ClampOffsetOrder`, Track V3 с baked spin, пройденные тесты,
+затронутые файлы и ограничения текущего состояния.
+
+**Точка продолжения:** исходники изменены, но финальный результат ещё не
+доставлен. Требуются полный `build.cmd`, полный regression suite, завершение
+full-load test, свежий headless A/B, синхронное обновление SPG/PAK/SYM и
+`wc.img`, перепатчивание Unreal по новым symbols и реальный L19 capture.
+Цель `<=59 241 cpu.t`, а особенно `<=47 393 cpu.t` для 20% запаса, пока не
+подтверждена. Нельзя смешивать новый `ZTV3` PAK со старым runtime/SPG.
+
+## [2026-07-11] VDAC2: неизменяемые требования к имени SPG и комментариям
+
+Пользователь явно зафиксировал два обязательных правила:
+
+- единственное правильное имя SPG-файла — `zuma_vdac2.spg`, строго в таком
+  регистре; запрещено переименовывать его, сокращать имя или создавать второй
+  SPG-псевдоним;
+- все новые и изменяемые комментарии в исходниках должны быть только на русском
+  языке и сохранены в UTF-8.
+
+Правила продублированы в `CLAUDE.md` и `CLAUDE+.md`. Активные build/deploy/check
+скрипты переведены на `zuma_vdac2.spg`; ошибочное имя должно удаляться при
+доставке, а не сохраняться как совместимый псевдоним.
+
+## [2026-07-11 22:24] VDAC2 → VDC: сохранена опора v109 после оптимизации L19
+**Контекст:** создана `releases/v109-2026-07-11-l19-fast-builder-reference/`.
+Она содержит текущие `Source/`, `Docs/`, `Sounds/`, корневые конфигурации и
+точные runtime-артефакты после 35/35 full-regression. `Graphics/` намеренно не
+копируется по указанию пользователя; `Build/`, `Diagnostics/`, `WCImage/` и
+`.git/` также исключены. SPG сохранён только как `zuma_vdac2.spg`.
+
+**Применимо ли в VDC:** это шаблон компактной опоры с исходниками и хэшами
+готовых артефактов, когда тяжёлые графические исходники не нужны для отката.
+
+**Ссылки:** `releases/v109-2026-07-11-l19-fast-builder-reference/REFERENCE.txt`,
+`Build/regress_full_20260711_142649.log`,
+`Diagnostics/L19_headless_z80_tstates_20260711_143032/`.
+
+## [2026-07-11 22:28] VDAC2 → VDC: правило состава будущих опор
+**Контекст:** в `CLAUDE.md` и `CLAUDE+.md` зафиксировано: при создании новых
+опор не копировать `Graphics/` и `Sounds/`, так как это неизменяемые assets.
+Опора v109 создана до этого уточнения и поэтому содержит `Sounds/`, но не
+содержит `Graphics/`.
+
+**Применимо ли в VDC:** для компактных опор сохранять исходники, документы,
+конфигурации и runtime-артефакты; неизменяемые медиа-assets не дублировать.
+
+**Ссылки:** `CLAUDE.md`, `CLAUDE+.md`,
+`releases/v109-2026-07-11-l19-fast-builder-reference/REFERENCE.txt`.
+
+## [2026-07-11 14:33] Codex / VDAC2 ↔ VDC: L19 fast builder, split-render и offset-latch
+
+Продолжена оптимизация полного игрового цикла без изменения gameplay и
+графического CMD-потока. L19 остаётся worst-case примером; текущий формат
+трека — Track V4 (`ZTV4`).
+
+### Архитектурные изменения
+
+- Добавлен `Source/ASM/CacheBuilderFast.asm`: специализированный сборщик
+  стабильной второй цепи L19. Он один раз вычисляет адрес первого образца
+  Track V4, затем идёт назад с корректной сменой даже несмежных физических
+  страниц и сразу раскладывает только видимые шары в under/over-полосы.
+- Быстрый путь включается только при доказанных условиях: PLAY, L19, две цепи,
+  top-mask, точная длина `HSA+1`, не более 96 шаров, все slots `<6`, все
+  offsets равны нулю, нет explosion и clamp. При любом отклонении выполняется
+  прежний общий сборщик без побочных эффектов.
+- Два кеша остаются по адресам `#4100` и `#4640`; компактные L19-полосы имеют
+  до 96 записей по 6 байт, метаданные занимают `#4B80..#4B86`.
+- Добавлен специализированный L19 split-render: указатель FT812 CMD buffer
+  удерживается в регистре между шарами, CELL/VERTEX пишутся напрямую,
+  under/over сохраняют исходный порядок слоёв. 24-байтная матрица L19
+  копируется развёрнутыми `LDI` вместо общего `LDIR`.
+- В topology byte каждой цепи добавлен независимый `OFFSETS_MAYBE`. Благодаря
+  этому пустой offsets-loop пропускается, но CATCH-UP/InsertAt/DoGapStep
+  взводят latch, а снять его может только полный decay-проход, доказавший
+  фактические нули. Это важно: старые gap-скаляры не доказывали нулевые
+  offsets и могли тихо сломать физику разрывов.
+
+### Измерение и эквивалентность
+
+Свежий профиль после полной сборки:
+`Diagnostics/L19_headless_z80_tstates_20260711_143032`, 20 кадров,
+прогрев 1150, `70+70` шаров, один prewarm-кадр:
+
+```text
+avg_tstates=232605
+max_tstates=233538
+avg_steps=24350
+max_cmd_bytes=1696
+```
+
+Сопоставимый профиль непосредственно перед этим этапом был `338331` T/кадр:
+выигрыш `105726`, или `31.25%`. От старого headless baseline `618766` —
+`62.41%`. В дифференциальном тесте сборщик 70 шаров: `62595 -> 35039` T,
+при точном совпадении кеша, WIN, страниц и CMD. Реальный бюджет Unreal в
+`cpu.t` этим не доказан: имеющийся patched `Unreal.exe` привязан к старым
+symbols/section table, а исходники патчера отсутствуют; деление nominal T на 4
+может быть только ориентиром, не результатом железного capture.
+
+### Проверки и доставка
+
+- `build.cmd`: PASS, ошибок ASM 0; `Main0=9207`, `Main1=16367` (свободно 17),
+  `UiOvl=14514`, `LoaderOvl=12318`.
+- `regress.cmd full --skip-build --continue-on-fail`: все 35 шагов PASS за
+  210.8 s. Лог: `Build/regress_full_20260711_142649.log`.
+- В штатный full добавлены 14 оптимизационных шлюзов. Новые точечные тесты:
+  `test_cache_builder_l19_fast_z80.py` и
+  `test_offsets_maybe_latch_z80.py`; fixture gap-boundary теперь явно
+  инвалидирует topology cache после прямой записи Slots.
+- Локальный `Build/test_wc.img` обновлён in-place. Внутри только канонический
+  `zuma_vdac2.spg`; размеры и SHA-256 всех пяти файлов совпали с Build.
+  Внешний host `wc.img` не изменялся.
+
+SHA-256: `zuma_vdac2.spg` =
+`529295F745EA81C521F80348EED9713E411D98A87A64BA90606F5D7241B42A6A`;
+`ZUMAMAIN.PAK` =
+`213FBE8E1E0C2C391B1811D202743DC53C0C3C67ECBB7D36E0814B4FB8CB7083`;
+`ZUMALVL.PAK` =
+`F0660094897B2EB7F0CC014984C033A944C339F03B9DD85D9D393EFC0B5018EA`;
+`Build/zuma.sym` =
+`68859819D0F563579CAC96C086CBAD280911CD2B48218627A5F4C683EA9DEDCA`.
+
+Штатный full-load тест следующего уровня остаётся в quarantine из-за медленной
+старой fixture. Production build, L19 CMD-эквивалентность и основной full suite
+завершены; следующий отдельный этап — восстановить/перепатчить Unreal и снять
+реальный L19 `cpu.t` capture.
+
+## [2026-07-11 22:28] VDAC2 → VDC: каноническая запись об опоре v109 и её составе
+**Контекст:** создана
+`releases/v109-2026-07-11-l19-fast-builder-reference/` после оптимизации L19,
+успешной полной сборки и 35/35 full-regression. В опоре сохранены текущие
+`Source/`, `Docs/`, корневые конфигурации и runtime-артефакты с SHA-256.
+Опора v109 содержит `Sounds/`, потому что была создана до последующего
+уточнения правила, и не содержит `Graphics/`.
+
+**Применимо ли в VDC:** для всех следующих опор правило закреплено в
+`CLAUDE.md` и `CLAUDE+.md`: не копировать ни `Graphics/`, ни `Sounds/`, так как
+это неизменяемые assets. Сохранять исходники, документы, конфигурации и
+согласованные runtime-артефакты.
+
+**Ссылки:** `releases/v109-2026-07-11-l19-fast-builder-reference/REFERENCE.txt`,
+`CLAUDE.md`, `CLAUDE+.md`, `Build/regress_full_20260711_142649.log`.
+
+## [2026-07-11 23:00] VDAC2 → VDC: все вставки шара-пули переведены на непрерывную анимацию
+**Контекст:** найден единственный production-путь попадания пули:
+`Bullet_CheckCollisionEvents → Bullet_HemisphereTarget → VDC_InsertAt`. При
+любом внутреннем marker-GAP старый код сдвигал массив suffix на индекс вправо,
+но не делал ни `HSA++`, ни `offset += CELL`. Поэтому по формуле
+`t=(HSA-index)*32+HSub+offset` все старые шары от target до хвоста
+телепортировались на `-32`, а новый шар сразу вставал в готовую позицию без
+half-cell-анимации. Тот же общий код проявлялся в обеих цепях.
+
+Исправление делит commit на два симметричных преобразования:
+
+- обычная вставка: `HSA+1`, передняя часть получает `offset-32`, новый шар
+  начинает с `average-16`;
+- GAP или предел трека: HSA не меняется, сдвинутый suffix получает `offset+32`,
+  новый шар начинает с `average+16`.
+
+В обоих случаях координаты всех старых шаров сразу после commit теперь строго
+совпадают с координатами до попадания, а новый шар появляется между соседями.
+Убраны ошибочные ограничения незатухших offsets до `±32`; насыщение происходит
+только на границе signed byte. `ClampOffsetOrder` теперь зажимает лишь реальную
+инверсию соседей (`current-prev >= CELL`), не срезая законную insert-анимацию.
+
+**Применимо ли в VDC:** при индексной вставке обязательный инвариант — изменение
+индекса старого элемента компенсируется изменением общей базы или его offset.
+Проверять не только Slots, но и `t` каждого старого шара до/после commit.
+
+Проверки: новый `test_insert_animation_continuity_z80.py` покрывает
+head/middle/tail, GAP до/на/после target, multi-GAP, незатухшую отдачу, предел,
+повторную вставку, immediate match и chain2. Новый
+`test_bullet_insert_animation_full_z80.py` проходит полный ZBT1 GAP-hit.
+Каноническая сборка PASS; full regression `37/37` за 205.1 s:
+`Build/regress_full_20260711_225644.log`. `Main1=16360`, свободно 24 байта.
+
+**Ссылки:** `Source/ASM/VDC.asm`, `Source/ASM/main.asm`,
+`Source/OTHER/test_insert_animation_continuity_z80.py`,
+`Source/OTHER/test_bullet_insert_animation_full_z80.py`.
+
+## [2026-07-11 23:16] VDAC2 → VDC: сохранена опора v110 после фикса анимации вставок
+**Контекст:** создана
+`releases/v110-2026-07-11-insert-animation-reference/` с текущими `Source/`,
+`Docs/`, корневыми конфигурациями и точными runtime-артефактами после
+канонической сборки и 37/37 full-regression. `Graphics/` и `Sounds/` намеренно
+не копируются по правилу проекта; полный `Build/`, диагностики, `WCImage/` и
+`.git/` также исключены. SPG находится только под именем `zuma_vdac2.spg`.
+
+**Применимо ли в VDC:** шаблон компактной опоры: сохранять изменяемые исходники,
+документацию, конфигурации, хэши и финальные артефакты; неизменяемые media-assets
+не дублировать.
+
+**Ссылки:**
+`releases/v110-2026-07-11-insert-animation-reference/REFERENCE.txt`,
+`Build/regress_full_20260711_225644.log`.
+
+## [2026-07-11 23:42] GitHub: опубликован финальный релиз 1.0
+**Контекст:** в репозитории `andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812`
+создан настоящий GitHub Release `Zuma Deluxe VDAC2 1.0` с тегом `v1.0`.
+Это финальный выпуск: `draft=false`, `prerelease=false`. Тег указывает на
+`05028882b8322c7d31fed70836e6439f0a670545` (`main`).
+
+В релиз прикреплён готовый SD-архив
+`Build/SD/Zuma Deluxe VDAC2.zip` (в GitHub отображается как
+`Zuma.Deluxe.VDAC2.zip`): 6 320 837 байт, SHA-256
+`4E8E9D2DE534544864621B7B2219DA4B16B7E3325BEE8AB280141EA47401B7E3`.
+Внутри сохранена структура `Games/Zuma Deluxe VDAC2/` с `SPG` и четырьмя
+PAK-файлами.
+
+**Ссылка:**
+`https://github.com/andrewinsidelazarev/Zuna-Deluxe-VDAC2-FT812/releases/tag/v1.0`.
+
+## [2026-07-12 00:26] GitHub: источники и runtime-assets синхронизированы
+**Контекст:** в `main` слит PR #1 (`7c14e836`): актуальный `Source/`,
+удаление `Build/` и `Diagnostics/` из Git и их постоянное игнорирование.
+Затем слит PR #2 (`2104534`): добавлены отсутствовавшие runtime-assets
+`cursor_p00.zlib`, `arrow1.png`, 12 L19-страниц шаров с палитрой и
+`top_mask_page_f1.bin`…`f3.bin`; удалены 39 файлов `Sounds/Original/`.
+Локальные `Build/`, `Diagnostics/` и оригинальные OGG сохранены, но Git их
+игнорирует.
+
+Инвентаризация по `spgbld_vdac2.ini`: все 197 входов `Graphics/` и `Sounds/`
+для PAK теперь присутствуют в `origin/main`. Локальная сборка
+`make_main_pack.py --pack` создала 224-страничный `ZUMAMAIN.PAK`; проверки
+`test_top_mask_mainpak_delivery.py` и `test_top_mask_overlay_commands.py`
+прошли. Ручной источник top-mask L19 —
+`Graphics/levels/TopMasks/serpents/serpents.png` — уже находился в Git и не
+менялся.
+
+**Важно для следующей сессии:** GitHub Release `v1.0` опубликован ранее и
+по-прежнему указывает на commit `05028882`, тогда как актуальный `main` —
+`2104534`. Переназначать тег/release только после явного решения пользователя.
+В рабочем дереве намеренно остались незафиксированные пользовательские правки
+`CLAUDE.md`, `Docs/memory_map_vdac2.md`, `PATCHED_UNREAL_ZPROF.md`, `Чат.txt`
+и локальный неиспользуемый `Graphics/Original/arrow2.png`; не добавлять их
+автоматически.
+
+## [2026-07-12 12:58] VDAC2 → VDC: GAP-hold двух цепочек развязан
+**Симптом:** на уровнях с двумя цепочками цепочка без дырок останавливалась,
+когда другая цепочка завершала GAP/explosion около kill-zone. Обычный PLAY-update
+вдали от KZ был независим; связь возникала только при `remaining_samples <= 66`.
+
+**Причина:** `VDC_CheckKillzone` вызывал `VDC_LoseStartReady`, а та проверяла не
+только активную цепочку, но и временно свопала/проверяла неактивную. GAP во второй
+цепочке возвращал busy для первой, после чего `VDC_LoseHoldBeforeKillzone`
+откатывал чистую цепочку на `rem=65` и ставил ей `VDC_LoseHoldCnt=24`.
+Минимальный Z80-probe воспроизвёл ошибку: чистая chain1 изменилась
+`HSA/HSub 98/0 -> 97/31`, хотя GAP находился только в chain2.
+
+**Исправление:** `VDC_LoseStartReady` теперь проверяет только текущую активную
+цепочку через `VDC_LoseChainBusy`. Каждая цепочка самостоятельно завершает
+собственные GAP/match-3 этапы и только сама получает KZ-hold. Общий dual-ABSORB
+по-прежнему обновляет обе цепочки и ждёт их полного опустошения перед меню.
+
+**Регрессия:** обновлён `test_lose_waits_chain_settle_z80.py`; добавлены два
+зеркальных full-path случая через `VDC_UpdateAllChains`. При GAP в chain1 итог
+одного ABSORB-update: `(HSub1,HSub2)=(30,19)`; при GAP в chain2: `(11,30)`.
+В обоих случаях выбор chain1/указатели восстанавливаются. Каноническая сборка
+PASS, ASM errors 0, `Main1=16334`, свободно 50 байт. Полная регрессия 37/37
+PASS за 176.6 s; лог `Build/regress_full_20260712_125447.log`.
+
+**SHA-256:** `zuma_vdac2.spg` =
+`B734048E3ECF818442E0AC947AB1430786EC6BDD2CE5C83C3C8C20B7BEC4FBAE`;
+`ZUMAMAIN.PAK` =
+`CECB4D0EE7C5BC39E0E4014D354C07175551562055A360F88B091CCCAB924180`;
+`ZUMALVL.PAK` =
+`F0660094897B2EB7F0CC014984C033A944C339F03B9DD85D9D393EFC0B5018EA`;
+`Build/zuma.sym` =
+`3CD437B260175255AFDF037EC28E3C09C88646543D831FA3BF9D2168D80869EB`.
+
+## [2026-07-12 13:00] Codex / VDAC2: память сессии сохранена
+**Завершённая задача:** исправлена межцепочечная остановка у kill-zone. Код,
+root cause, зеркальные тесты, полный regression и SHA-256 зафиксированы в
+предыдущей записи `[2026-07-12 12:58] VDAC2 → VDC: GAP-hold двух цепочек
+развязан`.
+
+**Изменения этой сессии:** `Source/ASM/VDC.asm` и
+`Source/OTHER/test_lose_waits_chain_settle_z80.py`; в `Чат.txt` добавлены только
+append-only записи. Сборка обновила игнорируемые `Build/`-артефакты. Готовый
+SPG: `Build/zuma_vdac2.spg`. Внешний `wc.img`, GitHub tag/release и файлы в
+других runtime-папках не обновлялись. Commit и push не выполнялись.
+
+**Состояние дерева при завершении:** ветка `agent/runtime-assets-cleanup`
+отслеживает `origin/agent/runtime-assets-cleanup`. Помимо двух файлов фикса и
+`Чат.txt`, остаются прежние пользовательские изменения `CLAUDE.md`,
+`Docs/memory_map_vdac2.md`, `PATCHED_UNREAL_ZPROF.md` и новый
+`Graphics/Original/arrow2.png`; не добавлять и не откатывать их автоматически.
+
+**Точка продолжения:** исправление полностью собрано и прошло 37/37 full
+regression; следующая осмысленная проверка — запуск нового
+`Build/zuma_vdac2.spg` на реальном железе в двухцепочечном уровне. Внешнюю
+доставку/обновление `wc.img`, commit, push или переназначение release `v1.0`
+делать только по отдельному указанию пользователя.
+
+## [2026-07-12 22:39] VDAC2 → VDC: восстановлен глобальный барьер старта Lose для двух цепочек
+**[OBSOLETE: нарушал общий инвариант старта Lose]** Вывод записи
+`[2026-07-12 12:58]` о том, что `VDC_LoseStartReady` должна проверять только
+активную цепочку, неполон. Локальная проверка нужна для раннего KZ-hold, но
+использовать её как разрешение общего `PLAY → ABSORB` нельзя.
+
+**Root cause:** одна функция обслуживала две разные границы. Глобальную проверку
+обеих цепочек заменили локальной, чтобы GAP второй цепи не откатывала чистую
+первую на `rem=65`. Это устранило преждевременную межцепочечную остановку, но
+одновременно разрешило `.ck_trigger` поставить общий `VDC_GameState=ABSORB`,
+пока в другой цепочке ещё оставались GAP, `VDC_ExplodeActive` или ненулевые
+`ExplodeFrame`. Затем обе цепи уже обновлялись через lose/absorb path — сам
+процесс Lose начинался до завершения всех анимаций.
+
+**Исправление:** ранняя зона `rem<=66` и defensive already-ABSORB update остаются
+локальными через `VDC_LoseStartReady → VDC_LoseChainBusy`. Только фактический
+`.ck_trigger` дополнительно проверяет неактивную цепь через новый
+`VDC_LoseOtherChainBusy`, временно свопая состояние и точно восстанавливая CF и
+активные указатели. Если в другой цепи есть незавершённая работа, глобальный
+state остаётся PLAY, дошедшая цепь паркуется непосредственно у mouth с
+`KzFrame=10` и per-chain hold без отката к `rem=65`; другая цепь продолжает
+обычный PLAY-update и закрывает GAP/доигрывает explosion. `Bullet_Active`, fire
+и recoil гасятся только после готовности обеих цепей; перед настоящим ABSORB
+terminal hold снимается.
+
+**Регрессия:** `test_lose_waits_chain_settle_z80.py` снова запрещает ранний
+ABSORB и дополнен зеркальными full-`VDC_UpdateAllChains` lifecycle-кейсами.
+GAP держит PLAY до кадров 13/14, explosion вместе с последующей GAP — до 27/28;
+все swap-указатели восстановлены. PASS также: `test_dual_lose_full_path_z80.py`,
+`test_dual_chain_lose_absorb_z80.py` для L05/L12/L19 и зеркал, GAP boundary,
+оба explode-active guard, shot blocking и v099 lose regression. Каноническая
+сборка: ASM errors 0, `Main1=16351`, свободно 33 байта. Полный regression 37/37
+PASS за 163.6 s; лог `Build/regress_full_20260712_223244.log`.
+
+**Доставка:** обновлены `Build/SD/Games/Zuma Deluxe VDAC2/`,
+`Build/SD/Zuma Deluxe VDAC2.zip`, `Build/test_wc.img`, прямые runtime-файлы и
+локальный `C:/Users/Администратор/Desktop/unreal_x64/wc.img`. Host
+`\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` обновлён in-place
+12.07.2026 22:36:58; все пять внутренних файлов имеют `size_match=True` и
+`hash_match=True`. GitHub release/tag, commit и push не изменялись.
+
+SHA-256: `zuma_vdac2.spg` =
+`BB3ED9D2B354CA2B7A7BBDEF2C487D3E3CD5C70D4806D82DE11CF2F223914451`;
+`ZUMAMAIN.PAK` =
+`8FFAC60241BF77A27081064D4990BAFA3EAD98E5E93D61DF27C7ECAF6E9C37F5`;
+`ZUMALVL.PAK` =
+`F0660094897B2EB7F0CC014984C033A944C339F03B9DD85D9D393EFC0B5018EA`;
+`Build/zuma.sym` =
+`2636D85150C140EA621B59D8E7BBC249177A503B1DEBAF8A290BE1049F6CE3CB`;
+SD ZIP =
+`29B9145A43D9F0B8653FF12AB9B2CA70A01B2F2FAF433C50E6E418D53AD5338C`.
+
+## [2026-07-12 22:49] VDAC2 → VDC: финальный state-gate и повторная доставка Lose-barrier
+**Уточнение к записи 22:39:** её архитектурный вывод остаётся верным, но
+указанные там сборка, лог и SHA были промежуточными. После дополнительного
+review глобальная проверка второй цепочки явно ограничена состоянием PLAY:
+внутри уже начатого defensive ABSORB цепи снова обновляются независимо и не
+ждут друг друга у mouth. Добавлены крайние проверки `KzEndSub=0/1`, обход
+глобального барьера для already-ABSORB и многокадровая проверка отсутствия
+дрейфа terminal hold.
+
+Финальная сборка: ASM errors 0, `Main1=16351`, свободно 33 байта. Повторный
+full regression 37/37 PASS за 164.8 s; окончательный лог
+`Build/regress_full_20260712_224523.log`. SD-папка/ZIP, `Build/test_wc.img`,
+прямые локальные runtime-файлы, локальный `Desktop/unreal_x64/wc.img` и host
+`\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` повторно обновлены. Host
+timestamp `12.07.2026 22:48:48`; все пять файлов внутри обоих образов имеют
+`size_match=True` и `hash_match=True`.
+
+Финальные SHA-256: `zuma_vdac2.spg` =
+`F3FD582F815040B850550C938920ECD65E7F66CC9707F295FB8384C4A2F4BF00`;
+`ZUMAMAIN.PAK` =
+`CCDC838E525C33ED5176DF0D636AF5FC148F429BD110E60FC7FDEAD5D3B01A9A`;
+`ZUMALVL.PAK` =
+`F0660094897B2EB7F0CC014984C033A944C339F03B9DD85D9D393EFC0B5018EA`;
+`Build/zuma.sym` =
+`7D9EC984BA15007438B4D7B375AEF54475BBCAFED40350C53E61D44A2AF9EA96`;
+SD ZIP =
+`2C0C68257C515FEA07D4745B084BF14FA9C55B2A615921435E9D5E33380FAE89`.
+
+## [2026-07-12 22:52] VDAC2: восстановлен readme в финальном SD ZIP
+После финальной сборки обнаружено, что генераторы очистили
+`Build/SD/Games/Zuma Deluxe VDAC2/readme.txt`. Файл размером 378 байт
+восстановлен побайтно из опубликованного v1.0 ZIP; архив повторно упакован и
+проверен: внутри `readme.txt`, `zuma_vdac2.spg` и четыре PAK. Игровые SHA из
+записи 22:49 не изменились. Окончательный SHA-256 SD ZIP =
+`899079199FB15CFF205A371C3C5DBE4DA371907AC0C30D9E936223C7A8889357`.
+
+## [2026-07-13 00:05] VDAC2 → VDC: исправлены парковка перед KZ и дырка во время Lose
+**Записи 22:49 и 22:52 содержат промежуточную сборку, которую аппаратная
+проверка признала неверной.** В ней при незавершённой работе цепь могла остаться
+на самой kill-zone, а во время двухцепочного ABSORB возникала видимая дырка.
+
+**Причины:** `VDC_CheckKillzone` считал расстояние только по `HSA/HSub`, хотя
+рендер головы дополнительно использует знаковый `offsets[0]`. Поэтому логический
+`rem=1` при положительном смещении мог означать, что видимый шар уже прошёл
+границу. Кроме того, общий `VDC_HeadAbsorbAlpha` последовательно перезаписывался
+обеими цепочками: фаза второй цепочки делала голову первой почти прозрачной.
+Третья причина геометрической дырки — Lose мог стартовать при ненулевых offsets;
+после перехода в ABSORB обычное затухание смещений уже не выполнялось.
+
+**Исправление:** расстояние до kill-zone теперь вычисляется от реальной позиции
+`VDC_SlotT(0)` с `offsets[0]`. При busy обеих цепочек голова удерживается перед
+границей: положительное смещение компенсируется до видимого `rem=1`, отрицательное
+остаётся безопасно позади и затухает к `rem=1`; защёлка удержания продолжает
+проверку независимо от текущего rem. Переход `PLAY -> ABSORB` остаётся глобально
+запрещён, пока в любой цепочке есть дырка, кадры взрыва или точная защёлка
+`OFFSETS_MAYBE`. Добавлен отдельный `VDC2_HeadAbsorbAlpha`, который
+инициализируется и свопается вместе с состоянием второй цепочки.
+
+**Проверка:** новый тест перебирает `KzEndSub=0/1/31`, effective rem
+`65/64/3/2/1/0/-1` и `offsets[0]` от `-128` до `+127`; многократная парковка не
+дрейфует. Двухцепочный lifecycle проверяет GAP, explosion и offsets для обеих
+triggering chains; отдельный тест проверяет независимые alpha, swap и pop головы.
+Сборка: ASM errors 0, `Main1=16384`. Полная регрессия `37/37 PASS` за 167.1 s,
+лог `Build/regress_full_20260712_235612.log`. Из-за заполнения страницы до
+`#FFFF` сторож тестового эмулятора перенесён из исполняемого `#FFFE` в свободное
+окно до `#1000`; это исправление harness, production-код не затрагивает.
+
+**Доставка:** обновлены `Build/SD/Games/Zuma Deluxe VDAC2/`, SD ZIP,
+`Build/test_wc.img`, прямые файлы в `Desktop/unreal_x64`, локальный
+`Desktop/unreal_x64/wc.img` и host
+`\\tsclient\D\Работа.Андрей\unreal_x64\wc.img`. Host timestamp
+`13.07.2026 00:00:30`; во всех трёх образах пять игровых файлов имеют
+`size_match=True` и `hash_match=True`. `readme.txt` размером 378 байт восстановлен
+из опубликованного v1.0 ZIP; структура SD ZIP проверена. GitHub release/tag,
+commit и push не изменялись.
+
+Финальные SHA-256: `zuma_vdac2.spg` =
+`7518CE3D39D3F1F7B70F61098FD58E0D46EEF7003C47871F7A355DDC486F3326`;
+`ZUMAMAIN.PAK` =
+`8A49091115B24B1900E91C87A869EE893CB15752E3C761E318E57DD60FFEAC26`;
+`ZUMALVL.PAK` =
+`F0660094897B2EB7F0CC014984C033A944C339F03B9DD85D9D393EFC0B5018EA`;
+`ZUMAAUD.PAK` =
+`72EF97514A816962D725193DC27C3232373505C859362784C469A8CF057FB017`;
+`ZUMASND.PAK` =
+`8393DB5BB8EC2FDA98C970A3303C43BDEF86A5CA5B4CF09FF09F8FC0C53409DA`;
+`Build/zuma.sym` =
+`C4C706DBA76F4302B6EB572F2C31B0ED8947B40BCAAEA9AC18556D3B1AA4A994`;
+SD ZIP =
+`FADD94F374D18506F3C5B3B7DC5FD2F45DA1C9CB1C05353F35CEE271FB915D73`.
+
+## [2026-07-13 15:05] VDAC2 → VDC: Lose блокируют только дырки и взрывы
+Предыдущие записи 00:05, 00:11 и 00:45 о расширенном барьере и парковке
+`rem=65` признаны ошибочными и заменены этой версией.
+
+Точный контракт: проверка общего барьера двух цепочек выполняется только у
+фактической границы Lose (`rem<=2`). Если в любой цепочке ещё есть незакрытая
+дырка или незавершённая анимация взрыва, triggering chain удерживается на
+`rem=1`, перед kill-zone. До границы чужая дырка или взрыв не тормозит чистую
+цепь. `Lose/ABSORB` начинается сразу после завершения этих двух типов работы.
+
+Причина ложных остановок: `VDC_LoseChainBusy` ошибочно считал общий флаг
+`OFFSETS_MAYBE` условием ожидания. Этот флаг взводится не только при закрытии
+дырки, но и при обычной вставке/отдаче шара, поэтому посторонние игровые события
+останавливали Lose. Из production удалена только проверка `OFFSETS_MAYBE`.
+Блокирующими остались только `GapJunction`, `GapPosLeft`, marker-GAP,
+`ExplodeActive` и ненулевые `ExplodeFrame[]`. `Shot2`, `ChainFreezeCnt` и
+обычные offsets Lose не блокируют.
+
+Проверено отдельно для первой и второй цепочки: ordinary offset/Shot2/freeze
+не ставят hold и разрешают Lose; GAP и explosion у `rem=1` блокируют Lose;
+GAP/explosion при `rem=32/66` заранее не останавливают движение; полный
+двухцепочный lifecycle GAP/explosion завершает анимацию и только затем запускает
+ABSORB. Парковка `rem=1` проверена для `KzEndSub=0..31` без дрейфа.
+
+Сборка: `0 errors`, 11 прежних warnings, `Main1=16376` (8 байт свободно).
+Полная регрессия `37/37 PASS` за `179.3 s`, лог
+`Build/regress_full_20260713_145958.log`. Обновлены `Build/test_wc.img`,
+локальный `Desktop/unreal_x64/wc.img`, прямые runtime-файлы и host
+`\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` (timestamp `15:03:34`).
+Во всех трёх образах пять игровых файлов имеют `size_match=True` и
+`hash_match=True`.
+
+Опорный Git-коммит: `9ba877e` (`fix: gate lose only on gaps and explosions`).
+Локальный тег `baseline-20260713-lose-kz` перенесён на этот коммит. Push и
+GitHub release не выполнялись.
+
+SHA-256: `zuma_vdac2.spg` =
+`3707AD89B5B33CF048A6C7C55EF7B08A195E0C665C4CEBF2CEF66FED6CFB617D`;
+`ZUMAMAIN.PAK` =
+`731363CCFC080F29F771BFFD0E1E24CB75BD72398B5656EE5FF2737CB7FD5A7C`;
+`zuma.sym` =
+`4D868E408653D3A049CF333D2C04BDA998C77A4EF9B995D4C4163B0E27191F3B`;
+SD ZIP =
+`CF63C6CE70D14286D640C16693AC647FED09660E1FA5610AE92864895998BFF7`;
+архив исходников =
+`F507AA79A01120CA3C66FAF6F4D4606AE39297C53D97AD4F388B1466E4836DDF`.
+
+## [2026-07-13 00:45] VDAC2 → VDC: исправлена ошибочная парковка на kill-zone; опора заменена
+**Записи 00:05 и 00:11 признаны ошибочными и больше не являются опорными.**
+Парковка на effective `rem=1` ставила центр головы непосредственно на kill-zone,
+а не перед ней. Аудит всех 25 треков дал расстояние центра шара до центра KZ
+всего `0..2.26 px` для `rem=1`; исторически правильный `rem=65` даёт
+`101.42..104.34 px`, то есть шар полностью остаётся перед зоной.
+
+Исправлен production-контракт: при effective `rem<=66` и незавершённой работе
+любой из двух цепочек triggering chain паркуется на effective `rem=65` с
+закрытой пастью `KzFrame=1`. Положительный `offsets[0]` компенсируется назад
+до ровно `rem=65`; отрицательный offset остаётся ещё дальше и при затухании
+монотонно подходит к `rem=65`, не входя в окно KZ. Защёлка устанавливается в
+`25`, поэтому выдерживает все 24 попытки `MoveChain` fast-кадра. `Lose/ABSORB`
+по-прежнему не запускается, пока в любой цепочке остаются marker-GAP,
+`GapJunction`, `GapPosLeft`, `ExplodeActive`, кадры взрыва либо незатухшие
+offsets. После полного settle защёлка снимается, цепь штатно проходит окно KZ
+и только затем запускает всасывание.
+
+Тесты синхронизированы с контрактом `rem=65`. Исправлена только фикстура
+многокадрового lifecycle: `BallsSpawned=255` выбирает normal-фазу, но не
+запрещает spawn; в этом изолированном сценарии штатная выдача теперь отключена
+через `VDC_GaugeFull=1`. Production spawn не менялся. Проверены обе triggering
+chains, GAP/explosion/offset blocker, `KzEndSub=0..31`, `offsets[0]=-128..127`,
+повторные проверки без дрейфа и независимая ABSORB-alpha обеих цепей.
+
+Каноническая сборка: `0 errors`, 11 прежних warnings, `Main1=16384`.
+Полная регрессия: `37/37 PASS` за `175.8 s`, лог
+`Build/regress_full_20260713_003945.log`. Обновлены SD-папка/ZIP,
+`Build/test_wc.img`, прямые runtime-файлы и локальный
+`Desktop/unreal_x64/wc.img`, а также host
+`\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` (timestamp 00:44:16).
+Во всех трёх образах пять игровых файлов имеют `size_match=True` и
+`hash_match=True`.
+
+Исправление сохранено локальным Git-коммитом
+`f356dea5e6f032d4aef6bfceee412650d5496ad4`. Аннотированный тег
+`baseline-20260713-lose-kz` перенесён с ошибочной версии на этот коммит.
+Опорный комплект `Build/Reference/baseline-20260713-lose-kz/` пересобран;
+push и GitHub release не выполнялись.
+
+SHA-256: `zuma_vdac2.spg` =
+`5A0CFDAA15666D1C425813C895EB104324703731673BC8E84E803504FC345794`;
+`ZUMAMAIN.PAK` =
+`C68E9AE0986B08BDEE3E006F1CAE0F5F00CB806B53CE3A8CE19A1F5D3DBC5953`;
+`zuma.sym` =
+`474A42574D4A620754B07C249B61871238A9E02DF0A5C6010D1A50F5890B483F`;
+SD ZIP =
+`72BBD686E864C985CBC5168E6964362D483060F01CE6FD2719844894C2FD9554`;
+архив исходников =
+`9DBD207C06F9D6ECEBA8B9851827EE96F1E067A2FA8FC79C5031291C78B844E0`.
+
+## [2026-07-13 00:11] Создана локальная опорная версия с исходниками
+Аппаратно проверенная версия Lose/KZ зафиксирована отдельным Git-коммитом
+`7865a593b24c54795a56160a5c08345284eaef5f` и локальным аннотированным тегом
+`baseline-20260713-lose-kz`. В коммит вошли только два production ASM-файла,
+обновлённые регрессионные тесты и исправление сторожевого адреса эмуляторов;
+посторонние пользовательские изменения не добавлялись. Push и GitHub release
+не выполнялись.
+
+Полный комплект восстановления находится в
+`Build/Reference/baseline-20260713-lose-kz/`: архив 2567 отслеживаемых файлов с
+исходниками, канонический SPG, SD ZIP, `zuma.sym`, лог `37/37 PASS`, текущая
+копия `Чат.txt`, описание восстановления и SHA-256 manifest.
+
+SHA-256 архива исходников =
+`200ABCBDA22AB4CE8F065B895513152C17BAC4DB18784FFDCB5136CCAD3A2614`;
+канонического SPG =
+`7518CE3D39D3F1F7B70F61098FD58E0D46EEF7003C47871F7A355DDC486F3326`;
+SD ZIP =
+`FADD94F374D18506F3C5B3B7DC5FD2F45DA1C9CB1C05353F35CEE271FB915D73`.
+
+## [2026-07-13 15:06] ВАЖНО: действующая опора
+Физически последняя действующая запись журнала — запись `2026-07-13 15:05`
+выше: Lose блокируют **только незакрытые дырки и незавершённые взрывы**;
+обычные offsets/Shot2/freeze не блокируют. Парковка у границы — `rem=1`, ранней
+остановки при `rem=32/66` нет. Опорный коммит и тег указывают на `9ba877e`.
+Старые хэши непосредственно перед этой пометкой недействительны; актуальный
+SHA-256 SPG: `3707AD89B5B33CF048A6C7C55EF7B08A195E0C665C4CEBF2CEF66FED6CFB617D`.
+
+## [2026-07-13 16:48] ОШИБОЧНАЯ СБОРКА 14:59 ОТМЕНЕНА; СОЗДАНА НОВАЯ ОПОРА
+**Записи 15:05 и 15:06, коммит `9ba877e` и SPG с SHA-256 `3707AD89...`
+недействительны. Их нельзя использовать для восстановления или проверки.**
+
+Восстановлен исходный принцип Lose: переход PLAY -> ABSORB не начинается,
+пока в любой из двух цепочек остаётся незакрытая дырка или незавершённая
+анимация взрыва. Обычные offsets, `Shot2`, `ChainFreezeCnt` и прочие события
+не входят в барьер. Цепочка, первой дошедшая до границы, остаётся на `rem=1`
+перед kill-zone; занятая цепочка продолжает локально закрывать дырку или
+доигрывать взрыв и не получает чужой hold. После завершения обеих цепочек Lose
+начинается один раз. В кадре перехода PLAY-физика больше не выполняется, поэтому
+при всасывании не создаётся новая дырка. Прозрачность головы хранится отдельно
+для каждой цепочки, обе цепочки полностью опустошаются, зацикливания нет.
+
+Каноническая сборка: `0 errors`, 11 прежних warnings, `Main1=16384` байта.
+Полная регрессия: `37/37 PASS` за `158.8 s`, лог
+`Build/regress_full_20260713_163936.log`. Обновлены `Build/test_wc.img`,
+локальный `Desktop/unreal_x64/wc.img`, прямые runtime-файлы и host
+`\\tsclient\D\Работа.Андрей\unreal_x64\wc.img`. Во всех трёх образах пять
+игровых файлов совпадают с финальной сборкой по размеру и SHA-256.
+
+Опорный Git-коммит: `7ecd67e` (`fix: restore independent dual-chain lose
+transition`). Аннотированный локальный тег `baseline-20260713-lose-kz`
+перенесён на этот коммит. Опорный комплект с исходниками пересобран в
+`Build/Reference/baseline-20260713-lose-kz/`. Push и GitHub release не
+выполнялись; аппаратная проверка не заявляется.
+
+SHA-256: `zuma_vdac2.spg` =
+`5042F629A0EFB51C5D0C68BFA3A4CB8E406ADDE0BF74129DF8401284D3E0EBC8`;
+`ZUMAMAIN.PAK` =
+`AD1B29EF416C34930AEB534B8B9BB5DA62406505770EDB9E0302234A7AD64EB8`;
+`zuma.sym` =
+`D3A1B99DF0B644BC9A2DD4D5223A99E94A260655FD23865001D1D5B8618B7F7F`;
+SD ZIP =
+`B9605611FE3C3DF8FB8BF165BB0614DCFB4D9750859638B0BC0DB76EB2144253`;
+архив исходников =
+`DF655A7CED46D14B41240F0250E3A778A39B358B9BA5DE5738C82C02BADBA6C9`.
+
+## [2026-07-14 00:48] НОВАЯ ОПОРА v111: Lose начинается на входе в kill-zone, rem=64
+**Предыдущие записи о парковке на `rem=1`, запуске Lose у endpoint и опоре
+`baseline-20260713-lose-kz` не описывают текущую механику и не должны
+использоваться для восстановления этой версии.**
+
+Граница проверена на L12 по обеим baked-кривым: последние 64 sample являются
+kill-zone. Теперь `PLAY -> ABSORB` начинается при `rem<=64`, а `rem=0` служит
+только концом baked-трека внутри уже запущенного ABSORB. После MoveChain и
+AnimateChain граница повторно проверяется в том же кадре, поэтому цепочка не
+успевает отрисоваться внутри kill-zone ещё в PLAY.
+
+Ожидание разрешено только при реальной внутренней дырке
+`живые шары -> GAP -> живые шары` и/или при `ExplodeFrame != 0`. Концевые
+маркеры и любые settle-состояния ожидание не включают. Без этих двух условий
+hold не вызывается. `VDC_LoseHoldBeforeKillzone` не переписывает HSA, HSub или
+offsets, поэтому скачка цепочки назад нет.
+
+Опорная папка с исходниками:
+`releases/v111-2026-07-14-killzone-rem64-reference/`.
+Включены Source/, Docs/, конфигурации, чат и пять runtime-файлов. Graphics/,
+Sounds/, wc.img, .git и ZUMA.SYM намеренно не включены. Удалённый хост не
+изменялся.
+
+Сборка: 0 ошибок; Slot0=16366, Main0=9207, Main1=16252, UiOvl=14514,
+LoaderOvl=12318 байт. Локальный `Desktop/unreal_x64/wc.img` обновлён, все пять
+файлов внутри образа совпадают со сборкой по размеру и SHA-256.
+
+SHA-256: `zuma_vdac2.spg` =
+`516BF479FD80FB2974878D08BB2A52AFB5CE0B235F1B6F6ACD0B7C74DF4CF244`;
+`ZUMAMAIN.PAK` =
+`C445172FE7A98313914CC822F3F007D0F80E28B6E5D09EE68195AF79239E073D`.
+
+## [2026-07-14 21:15] VDAC2 → VDC: строгий GAP-барьер Lose и раннее открытие черепа
+**Контекст:** найден пропуск GAP в политике v111: `VDC_LoseChainBusy` вызывал
+`VDC_InternalGapExists`, который считает только последовательность
+`живой шар -> GAP -> живой шар`, намеренно пропускает крайние `#FD/#FE` и не
+учитывает незавершённые состояния PULL/CATCH-UP. Из-за этого `ABSORB` мог
+начаться до полного завершения GAP-механики.
+
+В текущей рабочей копии per-chain busy теперь требует `SlotsLen != 0` и
+блокирует Lose при любом из условий: `GapJunction != 0`,
+`(GapPosLeft & #7F) != 0`, `GapCatchDebt != 0`, любой
+`Slots[0..SlotsLen-1] >= VDC_NUM_COLORS` либо любой `ExplodeFrame != 0`.
+`GapPosLeft=#80` по-прежнему считается обычным положительным offset, не GAP.
+`VDC_LoseStartReady` применяет тот же predicate к обеим цепочкам.
+
+Открытие черепа отделено от Lose: `KzFrame` начинает меняться при `rem<=128`,
+а `PLAY -> ABSORB` остаётся при `rem<=64` и только после снятия всех перечисленных
+GAP/Explode-блокеров обеих цепочек. Hold больше не сбрасывает `KzFrame` в 1.
+
+**Применимо ли в VDC:** проверить, не использует ли VDC внутренний-only GAP
+predicate как глобальный Lose-барьер; крайние маркеры и незавершённые
+PULL/CATCH-UP должны учитываться согласно выбранному контракту.
+
+**Ссылки:** `Source/ASM/main.asm` (`VDC_CheckKillzone`, `VDC_LoseChainBusy`),
+`Source/ASM/VDC.asm` (`VDC_KZ_OPEN_DISTANCE`, `VDC_LOSE_DISTANCE`,
+`VDC_LoseHoldBeforeKillzone`). `sjasmplus`: 0 ошибок, прежние 11 warning,
+Slot0 end=`#3FF3`, Main0=9207, Main1=16247. Локальный `Build/zuma_vdac2.spg`
+собран через `spgbld`, SHA-256
+`49052E0D3148B8589340F93DB416E93A45DFDA383CFC4BB61DE13EA1EAE6CAE8`.
+Аппаратная/runtime-проверка не заявляется.
+
+## [2026-07-14 21:17] VDAC2 → VDC: финальные хэши после перепаковки Main PAK
+**Контекст:** хэш SPG в записи 21:15 относился к промежуточному `spgbld` до
+обязательных двух проходов таблицы Main PAK. После штатных `--table`, двух
+проходов `sjasmplus`, `--pack` и финального `spgbld` действуют хэши ниже.
+
+**Применимо ли в VDC:** не применимо, это идентификация локальных артефактов VDAC2.
+
+**Ссылки:** `Build/zuma_vdac2.spg` =
+`2BD65F763B29E059116B84F6353B083BA096E9E4450A3A2E82160A2FEBABF2BC`;
+`Build/ZUMAMAIN.PAK` =
+`3879C9141FECEA5CC7E7807DA131A2E6EBB9961578175D1CC56CC827AA795AD3`;
+`Build/TSLib.bin` =
+`041F50F1781C4818326A36B4B6CB35B3C6685EDB41F66D61D7996ADF15613064`;
+`Build/main1_play.bin` =
+`A3EC9ECD85D8E7FF43C645DC65BD49CD89037B916BBC1C1F449B1C1F05B81FF3`.
+
+## [2026-07-14 21:22] VDAC2 → VDC: сборка GAP/Lose развёрнута в runtime-образы
+**Контекст:** после финальной сборки пять runtime-файлов скопированы в
+`Desktop/unreal_x64/`; их SHA-256 побайтно совпадают с файлами `Build/`.
+Тем же комплектом in-place обновлены `Build/test_wc.img`, локальный
+`Desktop/unreal_x64/wc.img` и рабочий
+`\\tsclient\D\Работа.Андрей\unreal_x64\wc.img`.
+
+**Применимо ли в VDC:** не применимо, это статус развёртывания VDAC2.
+
+**Ссылки:** `/Games/Zuma Deluxe VDAC2/` внутри всех трёх образов содержит
+`zuma_vdac2.spg`, `ZUMAMAIN.PAK`, `ZUMALVL.PAK`, `ZUMAAUD.PAK`, `ZUMASND.PAK`.
+
+## [2026-07-14 21:37] VDAC2 → VDC: восстановлена опорная Lose/KZ-сборка
+**Контекст:** записи 21:15, 21:17 и 21:22 помечаются как устаревшие для VDAC2:
+строгий барьер по `GapJunction`, `GapPosLeft & #7F` и `GapCatchDebt` откатан.
+Затронутые файлы `Source/ASM/VDC.asm`, `Source/ASM/main.asm` и lose/kz-тесты
+вернуты к `HEAD` / `baseline-20260713-lose-kz`, то есть к опорной версии
+до незакоммиченного эксперимента с GAP/Lose.
+
+**Сборка:** штатный `build.cmd` прошел успешно: `sjasmplus` 0 ошибок, прежние
+11 forward-reference warning, `Slot0 end=#3FC8`, `Main0=9207`, `Main1=16384`.
+Z80-симуляторные тесты не запускались.
+
+**Развертывание:** свежие пять runtime-файлов скопированы в `Build/SD/Games/`
+и `Desktop/unreal_x64/`; `Build/test_wc.img`, локальный
+`Desktop/unreal_x64/wc.img` и
+`\\tsclient\D\Работа.Андрей\unreal_x64\wc.img` обновлены in-place через
+`inject_zuma_to_wc_img.py`. Прямое копирование loose-файлов в `\\tsclient`
+вернуло `Access denied`, но сам `wc.img` был успешно перепакован.
+
+**Актуальные SHA-256:** `Build/zuma_vdac2.spg` =
+`76E60CBE708D59F6DFC21BF0E51CED1143D7A4D689E8220C751CC12B211AF6F6`;
+`Build/ZUMAMAIN.PAK` =
+`AD1B29EF416C34930AEB534B8B9BB5DA62406505770EDB9E0302234A7AD64EB8`;
+`Build/ZUMALVL.PAK` =
+`F0660094897B2EB7F0CC014984C033A944C339F03B9DD85D9D393EFC0B5018EA`;
+`Build/ZUMAAUD.PAK` =
+`72EF97514A816962D725193DC27C3232373505C859362784C469A8CF057FB017`;
+`Build/ZUMASND.PAK` =
+`8393DB5BB8EC2FDA98C970A3303C43BDEF86A5CA5B4CF09FF09F8FC0C53409DA`.
+
+## [2026-07-15 00:38] VDAC2 → VDC: Lose ждёт GAP перед kill-zone, поглощение только в центре
+**Контекст:** записи 2026-07-14 21:37, 22:11 и 22:14 не являются опорными
+для ожидания Lose: в проверенной тогда версии шары могли остановиться уже на
+самой kill-zone. Актуальный контракт: череп начинает открываться при `rem=128`;
+пока в любой из двух цепочек остаётся настоящий GAP, маркер или незавершённый
+взрыв, подошедшая цепь удерживается **перед** kill-zone на `rem=65`; после
+освобождения обеих цепочек движение продолжается, `PLAY -> ABSORB` и удаление
+головного шара происходят только в центре kill-zone на точном `rem=0`.
+
+**Проверка GAP:** цепь занята при служебном маркере в активном слоте,
+`ExplodeFrame != 0` либо при реальном разрыве соседних signed-offset
+(`left > right`). Производные `GapJunction`/`GapPosLeft` сами по себе Lose не
+блокируют. Для обеих трасс исправлены собственные `TrackNumSlots` и `KzEndSub`,
+включая endpoint, кратный 32. После последнего шара сохранена задержка меню не
+менее 12 кадров.
+
+**Проверки:** затронутые z80-тесты, полные трассы L05/L12/L19 в обеих
+ориентациях и официальный `regress.py full --skip-build --continue-on-fail`
+прошли; итог `37/37 PASS` (`Build/regress_full_20260715_003226.log`). Во всех
+endpoint-вариантах `KzEndSub=0..31` реальный `VDC_RemoveSlotAt` вызывается
+только при `rem=0`. Финальный `build.cmd`: 0 ошибок, прежние 11 предупреждений,
+`Slot0 end=#3FE6`, `Main0=9207`, `Main1=16337` (свободно 47 байт).
+
+**Развёртывание:** обновлены `Build/SD/Games/Zuma Deluxe VDAC2`, ZIP,
+`Desktop/unreal_x64`, `Build/test_wc.img`, локальный и удалённый `wc.img`.
+Прямое копирование loose-файлов в `\\tsclient` отклонено с `Access denied`,
+но удалённый `wc.img` обновлён и все пять файлов внутри проверены по размеру и
+SHA-256. `zuma.sym` не развёртывался.
+
+**Актуальные SHA-256:** `Build/zuma_vdac2.spg` =
+`E0F93B7B9EE6EEC425F02FF2881756BFE4D8C96AF57363EC22EB235ED805400A`;
+`Build/ZUMAMAIN.PAK` =
+`7181F118195504C02D6D2120643ECF2FF8CA35118FD45A40C00F95861F2E2C66`;
+`Build/ZUMALVL.PAK` =
+`F0660094897B2EB7F0CC014984C033A944C339F03B9DD85D9D393EFC0B5018EA`;
+`Build/ZUMAAUD.PAK` =
+`72EF97514A816962D725193DC27C3232373505C859362784C469A8CF057FB017`;
+`Build/ZUMASND.PAK` =
+`8393DB5BB8EC2FDA98C970A3303C43BDEF86A5CA5B4CF09FF09F8FC0C53409DA`;
+`Build/SD/Zuma Deluxe VDAC2.zip` =
+`F540094C71CF16859E9B6E0E907AE4AA7C8A0E2D2C9A7EB0794F3C346636E5DF`.
+
+## [2026-07-14 22:14] VDAC2 → VDC: z80-проверки widened kill-zone open прошли
+**Контекст:** после изменения окна открытия черепа `rem<=128` пользователь
+попросил запустить z80-проверки. Запущены три затронутых теста:
+`test_killzone_open_distance_z80.py`, `test_v099_lose_state_regression_z80.py`,
+`test_lose_waits_chain_settle_z80.py`.
+
+**Результат:** все три завершились с кодом 0. Ключевые подтверждения:
+`rem=129 -> KzFrame=1`, `rem=128 -> KzFrame=2`,
+`rem=65 -> KzFrame=5`, `rem=64 -> KzFrame=6`, `rem=1 -> KzFrame=9`,
+`rem=0 -> ABSORB/KzFrame=11`. Lose/ABSORB остался на физическом endpoint,
+а widened open не двигает границу состояния.
+
+## [2026-07-14 22:11] VDAC2 → VDC: череп kill-zone открывается на 2 шара раньше
+**Контекст:** по запросу пользователя изменено только визуальное окно открытия
+черепа перед Lose. В `VDC_CheckKillzone` окно `rem=1..64` заменено на
+`rem=1..128`: отсечки `CP 67/CP 65` стали `CP 131/CP 129`, база кадра
+`LD A,64` стала `LD A,128`, деление кадра растянуто с `>>3` до `>>4`.
+Фактический переход `PLAY -> ABSORB` через `.ck_trigger` не менялся.
+
+**Тестовый контракт:** обновлены ожидания в
+`test_killzone_open_distance_z80.py`, `test_lose_waits_chain_settle_z80.py`
+и `test_v099_lose_state_regression_z80.py`: закрыто при `rem>=129`,
+открытие с `rem=128`, Lose/ABSORB по-прежнему при `rem<=0`.
+Z80-симуляторные тесты не запускались.
+
+**Сборка/развертывание:** `build.cmd` прошел успешно: `sjasmplus` 0 ошибок,
+прежние 11 forward-reference warning, `Slot0 end=#3FCA`, `Main0=9207`,
+`Main1=16384`. Обновлены `Build/SD/Games/`, `Build/SD/Zuma Deluxe VDAC2.zip`,
+локальный `Desktop/unreal_x64/`, `Build/test_wc.img`,
+`Desktop/unreal_x64/wc.img` и
+`\\tsclient\D\Работа.Андрей\unreal_x64\wc.img`. Прямое копирование loose-файлов
+в `\\tsclient` снова вернуло `Access denied`, но `wc.img` был перепакован.
+
+**Актуальные SHA-256:** `Build/zuma_vdac2.spg` =
+`084A8F4762D6A7EBD19C54529B1577BCD00536A2E68993C65B171CD900CD9D88`;
+`Build/ZUMAMAIN.PAK` =
+`785D42E174BC523C51D018F707E0ED62593A721577D340F683F087B26ACEAB87`;
+`Build/ZUMALVL.PAK` =
+`F0660094897B2EB7F0CC014984C033A944C339F03B9DD85D9D393EFC0B5018EA`;
+`Build/ZUMAAUD.PAK` =
+`72EF97514A816962D725193DC27C3232373505C859362784C469A8CF057FB017`;
+`Build/ZUMASND.PAK` =
+`8393DB5BB8EC2FDA98C970A3303C43BDEF86A5CA5B4CF09FF09F8FC0C53409DA`.
+
+## [2026-07-15 01:04] VDAC2 → VDC: GAP-hold перенесён на rem=48 без отката цепи
+**Контекст:** эта запись заменяет контракт ожидания `rem=65` из записи 00:38.
+Окно открытия черепа `rem=128` и точка поглощения `rem=0` не менялись.
+Если при `rem=49` любая из двух цепочек ещё занята настоящим GAP, marker'ом или
+`ExplodeFrame`, готовая цепь подаётся только вперёд на один sample до
+base-`rem=48` и удерживается. Если busy обнаружен уже при `rem<=48`, её
+`HSA/HSub` остаются неизменными: возврата к 48 и рывка назад нет. `Offsets[0]`
+точку ожидания не пересчитывает; это намеренно контракт базовой координаты.
+После settle обеих цепочек PLAY продолжается, а `ABSORB` и реальный
+`VDC_RemoveSlotAt` по-прежнему разрешены только в exact base-`rem=0`.
+
+**Проверки:** добавлены exhaustive-матрицы для `KzEndSub=0..31`, обеих цепей,
+uniform signed-offset `-128..127` и границ `rem=50/49/48/47/32/1/0`.
+Подтверждено: `49 -> 48`, `50` свободен, `47/32/1/0` никогда не откатываются;
+полные трассы L05/L12/L19 в обеих ориентациях сохраняют pop только на `rem=0`
+и post-empty задержку 12–13 кадров. Официальный полный набор: `37/37 PASS`,
+лог `Build/regress_full_20260715_005758.log`.
+
+**Сборка:** финальный `build.cmd` прошёл двумя проходами: 0 ошибок, прежние
+11 forward-reference warning; `Slot0 end=#3FE8`, `Main0=9207`, `Main1=16359`
+(свободно 25 байт).
+
+**Развёртывание:** обновлены `Build/SD/Games/Zuma Deluxe VDAC2`, ZIP,
+`Desktop/unreal_x64`, `Build/test_wc.img`, локальный
+`Desktop/unreal_x64/wc.img` и удалённый
+`\\tsclient\D\Работа.Андрей\unreal_x64\wc.img`. Во всех трёх образах пять
+runtime-файлов проверены по размеру и SHA-256. ZIP содержит только `readme.txt`
+и пять runtime-файлов в `Games/Zuma Deluxe VDAC2`; `zuma.sym` не развёртывался.
+
+**Актуальные SHA-256:** `Build/zuma_vdac2.spg` =
+`A7F22C06053FB2F0C2BF548D0C64819F07E8BB7E57AB08FF168CB09F2B11574D`;
+`Build/ZUMAMAIN.PAK` =
+`627C3875E67244AD028ED4E2F30DF1BBA245925A0A853582EE7F815C91197D7B`;
+`Build/ZUMALVL.PAK` =
+`F0660094897B2EB7F0CC014984C033A944C339F03B9DD85D9D393EFC0B5018EA`;
+`Build/ZUMAAUD.PAK` =
+`72EF97514A816962D725193DC27C3232373505C859362784C469A8CF057FB017`;
+`Build/ZUMASND.PAK` =
+`8393DB5BB8EC2FDA98C970A3303C43BDEF86A5CA5B4CF09FF09F8FC0C53409DA`;
+`Build/SD/Zuma Deluxe VDAC2.zip` =
+`01A7F328741BEF5DA9EFD565FAAE619254F874F50B03D186A6FA82C54C292B6E`.
+
+## [2026-07-15 01:11] VDAC2: текущая версия сохранена как проектная опора v112
+**Папка опоры:**
+`releases/v112-2026-07-15-gap-hold-rem48-no-rewind-reference/`.
+
+Опора является снимком текущего рабочего дерева, а не отдельным Git-коммитом;
+Git HEAD на момент сохранения — `7ecd67e93a04f39a100b24c36de38ca28b13606f`.
+Сохранены полные текущие `Source/` (448 файлов), `Docs/` (93 файла), корневые
+конфигурации/build-скрипты/документы, эта версия `Чат.txt`, `REFERENCE.txt` и
+пять runtime-файлов. Всего 563 файла.
+
+По обязательному правилу проекта в опору не включены `Graphics/`, `Sounds/`,
+`Build/`, `Diagnostics/`, `WCImage/`, `releases/`, `.git/`, образы и
+`ZUMA.SYM`/`zuma.sym`. Опора восстанавливается поверх рабочего проекта с
+неизменяемыми assets. SPG присутствует только под именем `zuma_vdac2.spg`.
+
+Проверка снимка до финального обновления `Чат.txt`: для всех файлов `Source/`
+и `Docs/` получено `MirrorFailures=0`; запрещённые каталоги/файлы отсутствуют;
+все пять runtime-файлов совпадают с `Build` по SHA-256. `REFERENCE.txt`
+фиксирует контракт `rem=128 / busy 49->48 без отката / ABSORB+pop rem=0`,
+результат `37/37 PASS`, состав опоры, ограничения восстановления и актуальные
+хэши.
+
+## [2026-07-15 14:39] VDAC2 → VDC: recovery SD/SPI после Game Over
+**Симптом:** после `Game Over -> Главное меню -> Gauntlet` иногда переставали
+загружаться и миниатюры фонов, и сами уровни. Оба пути читают
+`ZUMALVL.PAK`, поэтому это общий loader/SD session failure, а не отдельный
+дефект Level Select. Сверка с v099 показала, что переходы Game Over, loader и
+`sd_zc.asm` в существенной части одинаковы: это старый латентный дефект,
+который данный переход лишь проявляет по timing/shared-bus state.
+
+**Корень/исправление:** старый `sd_wait` проглатывал timeout, `sd_resp` не
+отличал отсутствие R1, а `ZiFi_Init` безусловно возвращал успех. Повторное
+чтение поэтому выполнялось в той же отравленной FT812/SD SPI-сессии. Теперь
+`sd_init` создаёт сильную границу сессии: снимает оба CS, выдаёт idle clocks,
+заново выбирает SD и отправляет advisory CMD12 без предварительного ожидания
+`#FF`; при активном CS отдельно принимает stuff byte/R1 и bounded ждёт снятия
+R1b busy, затем выполняет отдельный ready probe. Этот порядок совпадает с ранее
+зафиксированным в чате `sd_idle_reset` (запись 2026-05-25 21:02). `sd_wait` и
+`sd_resp` получили явный CF-контракт, `ZiFi_Init` преобразует его в свой
+инвертированный CF-контракт, а публичный `sd_read_sector` делает не более трёх
+физических попыток одного LBA/IX с recovery между ними. Вложенный retry
+`RawPak_ReadOneLogicalIX_Retry` убран, чтобы не получить 3x3 попытки.
+
+**Комментарии/тесты:** новая ассемблерная логика снабжена комментариями к
+регистрам, CF/Z и аппаратному порядку CS/CMD12. Добавлен
+`test_sd_session_recovery_z80.py`: transient/exhausted failures, failed
+recovery, LBA guard, сохранение LBA/IX/`sd_blkt`, ready-but-stuck до CMD12,
+контракты `ZiFi_Init`/R1 и stuck-card. Тест включён в `regress.py`.
+
+**Проверено:** `build.cmd` PASS, sjasmplus 0 ошибок и прежние 11 fwdref
+warning; `Slot0 end=#3FE8`, `Main0=9207`, `Main1=16359`,
+`LoaderOvl=12442`. Официальный full regress финального бинарника: `38/38 PASS`,
+лог `Build/regress_full_20260715_144402.log`; отдельно прошли rawpak contiguous,
+partitioned, fragmented, gameplay loader error carry и preview stream.
+`Build/zuma_vdac2.spg` SHA-256
+`DB0285A33E6576EA8830A8D1F6D0721A9D522BEBEC94D679D574DCF190475D64`;
+`Build/ZUMALVL.PAK` не изменился:
+`F0660094897B2EB7F0CC014984C033A944C339F03B9DD85D9D393EFC0B5018EA`.
+
+**Открыто:** сборка локальная; аппаратный цикл Game Over -> Menu -> Gauntlet
+ещё обязателен, потому что эмулятор проверяет протокольный контракт и порядок
+портов, но не аналоговые/timing особенности реальной SD-карты.
+
+## [2026-07-15 15:36] VDAC2: плавный возврат занятой цепочки к base-rem=48
+**Решение:** вчерашний контракт «при busy и `rem<=48` не возвращать цепочку»
+заменён по результату игрового теста. Пока хотя бы в одной цепочке живы GAP,
+`ExplodeFrame` или реальная signed-ступень offsets, активная цепочка идёт к
+base-`rem=48` ровно на один базовый sample за кадр:
+`rem_next = rem + clamp(48-rem, -1, +1)`. Примеры: `49->48`, `47->48`,
+`32->33->...->48`, `0->1->...->48`. В точке 48 координата остаётся
+неподвижной. Мгновенного пересчёта/скачка `HSA/HSub` больше нет.
+
+**Границы поведения:** двигается только базовая координата `HSA/HSub`;
+`Offsets[]` не трогаются и продолжают закрывать GAP независимо. Возврат
+выполняется только пока действует busy-барьер: после settle обычное движение
+PLAY возобновляется. Переход в `ABSORB` и `VDC_RemoveSlotAt` по-прежнему
+разрешены только в exact base-`rem=0`. Сверка с v099 подтвердила исходное
+намерение возвращать цепочку от центра, но v099 делал это телепортом к другой
+точке; текущая реализация сохраняет намерение без рывка.
+
+**Код/комментарии:** `VDC_LoseHoldBeforeKillzone*` теперь симметрично меняет
+`HSub` на один sample с корректным переносом/заёмом `HSA` на границе клетки.
+В ASM подробно записаны смысл signed `rem`, обе ветки движения, wrap
+`HSub 31->0`/`0->31`, сохранение post-step `HL`, расчёт `KzFrame` и то, почему
+offsets остаются неизменными.
+
+**Проверено:** добавлены траектории `rem=47/32/1/0/-1`, все
+`KzEndSub=0..31`, обе цепочки, неизменность signed offsets и четыре
+последовательных кадра. Реальный dual-chain `VDC_Update` подтверждает
+`26->27` как на normal, так и на fast-фазе; последующие 2/24 вызова
+`MoveChain` только расходуют hold и не гасят обратный шаг. Соседние тесты
+килл-зоны, спасательных выстрелов, GAP и dual ABSORB прошли. Финальный
+`build.cmd`: 0 ошибок, прежние 11 fwdref warning; `Slot0 end=#3FE8`,
+`Main0=9207`, `Main1=16378` (свободно 6 байт), `LoaderOvl=12442`.
+Полный регресс: `38/38 PASS`, лог
+`Build/regress_full_20260715_153212.log`. `Build/zuma_vdac2.spg` SHA-256:
+`E4B0AF0754B785B8CC3281FF0C5C675A9F60491BF69F0BC5F6F02D9A1D302E8A`.
+
+**Развёртывание:** все пять runtime-файлов синхронизированы в
+`Build/SD/Games/Zuma Deluxe VDAC2` и побайтово проверены по SHA-256.
+`wc.img`, ZIP и устройство не обновлялись.
+
+## [2026-07-15 17:18] VDAC2: повторный loader-баг — RAM clobber плюс полный SD re-init
+**Повторный аппаратный симптом:** после `Game Over -> Главное меню -> Gauntlet`
+снова одновременно отказали превью и загрузка уровней. Предыдущее исправление
+таймаутов/`CMD12` оказалось необходимым, но недостаточным.
+
+**Что исключено:** полный Z80 trace `ABSORB -> Game Over -> Menu -> Gauntlet`
+не изменяет executable bytes физической loader page `#40`; Main PAK/staging её
+не используют. Минимальный SP в Game Over — `#40D2`, поэтому стек также не
+доходит до границы `#4000`. В RTL ZX-Evolution cache tag содержит физическую
+page вместе с адресом, поэтому простого alias `#04/#40/#41` нет. То есть сам
+loader overlay не исчезает из своей страницы.
+
+**Найденная порча RAM:** host command buffer занимает `#4CB0..#5BFF`, а с
+`#5C00` начинается resident Core. `ZL_DrawExplosions` шёл отдельным проходом
+после ball renderer и не имел pressure guard. При 86+ одновременно видимых
+destroy sprites он мог продолжить запись команд за `#5C00`; сценарий L1 с 111
+active slots до исправления доходил до `#5EEC` и перезаписывал в том числе
+`LoadGameplayAssets` (`#5CDB`). Теперь перед destroy bitmap setup и перед каждым
+видимым sprite проверяется `BufferPtr>=#5800`; редкая ветка сохраняет `BC/HL/IX`,
+отправляет текущий chunk через `ZL_FlushCommandBufferMidFrame` и продолжает с
+сохранённым EVE graphics context. Preserve-helper занял последние 12 байт
+Slot0; дублированное RGB-тело объединено, мёртвые Main1 bytes удалены.
+
+**SD/SPI, второй уровень причины:** прежний recovery считал одиночный `#FF`
+доказательством ready-card, хотя ровно `#FF` возвращает плавающий/pulled-up MISO,
+когда карта проигнорировала CMD12. `sd_wait_token` ждал только 1024 polls и мог
+сам запустить этот ложный recovery на законно позднем token. Теперь успех
+требует настоящий `CMD58 R1=#00`, полный OCR с `POWER_UP_STATUS=1`, а CCS заново
+задаёт `sd_blkt`. Если abort/probe не ответили, выполняется bounded стандартный
+SPI init `CMD0 -> CMD8 -> CMD55/ACMD41 -> CMD58 -> [CMD16 для SDSC]`. Плавающий
+`#FF` и stuck-low `#00` возвращают ошибку, token ждётся до 65536 polls, один LBA
+имеет три физические попытки с recovery между ними. Все новые ветки и CF/Z/
+регистровые контракты подробно прокомментированы в ASM.
+
+**Дополнительный настоящий bounds bug:** `RawPak_StoreLfn` при FAT LFN `seq=5`
+писал байт 64 в `RawPak_CheckSize`, а `seq=6` портил ещё 13 служебных bytes
+loader state. Теперь `seq=0`/`seq>=5` до вычисления адреса ставят poison `#FF`
+и не пишут в `RawPak_EntName`; последующие `4->3->2->1` poison не снимают.
+Валидными считаются только `seq=1..4` и `HaveLfn==1`, иначе используется
+bounded 8.3 fallback.
+
+**Проверено:** финальный `build.cmd` PASS, оба прохода sjasmplus — 0 ошибок и
+прежние 11 fwdref warning. Layout: `Slot0 end=#4000`, `Main0=9207`,
+`Main1=16378` (6 байт свободно), `UiOvl=14514`, `LoaderOvl=12770`.
+Полная регрессия: `41/41 PASS`, лог
+`Build/regress_full_20260715_171032.log`. После финальной пересборки отдельно
+повторены SD session recovery, LFN bounds/poison и CMD-buffer budget. В
+explosion-сценарии 111 sprites получен `flushes=1`, final chunk 2208 bytes,
+`corrupt_core=False`. Contiguous/fragmented/partitioned RawPak, preview stream
+и gameplay loader error-carry также PASS.
+
+**Развёртывание:** пять runtime-файлов обновлены именно в
+`Build/SD/Games/Zuma Deluxe VDAC2`; все копии совпадают с `Build` по SHA-256.
+ZIP, `wc.img`, эмулятор и устройство не обновлялись.
+
+**SHA-256:** `zuma_vdac2.spg` =
+`E1F413D31436950A45DF169DCD92CC56D9B3E0546C8E503E4288F9FE3B5B04A5`;
+`ZUMAMAIN.PAK` =
+`6DBC4C1794CF411F5C3712347565731C845DA99B8DBD9D28F87567C8BD960843`;
+`ZUMALVL.PAK` =
+`F0660094897B2EB7F0CC014984C033A944C339F03B9DD85D9D393EFC0B5018EA`;
+`ZUMAAUD.PAK` =
+`72EF97514A816962D725193DC27C3232373505C859362784C469A8CF057FB017`;
+`ZUMASND.PAK` =
+`8393DB5BB8EC2FDA98C970A3303C43BDEF86A5CA5B4CF09FF09F8FC0C53409DA`.
+
+## [2026-07-15 17:30] VDAC2: текущая версия сохранена как проектная опора v113
+**Папка опоры:**
+`releases/v113-2026-07-15-smooth-rem48-loader-recovery-reference/`.
+
+Опора является снимком текущего рабочего дерева, а не отдельным Git-коммитом;
+Git HEAD на момент сохранения — `7ecd67e93a04f39a100b24c36de38ca28b13606f`.
+Зафиксированы полные текущие `Source/` и `Docs/`, проектные корневые файлы,
+обновлённый `Чат.txt`, новый `REFERENCE.txt` и пять runtime-файлов финальной
+сборки. В описании опоры записаны плавный возврат busy-chain к rem=48,
+ограничение кадров kill-zone, защита command buffer от записи за `#5C00`,
+полный SD/SPI recovery и bounds/poison для FAT LFN.
+
+**Состав:** `Source/` — 450 файлов, `Docs/` — 93 файла, корневой allowlist —
+16 файлов, runtime — 5 файлов; вместе с `REFERENCE.txt` всего 565 файлов.
+По обязательному формату проекта не включены `Graphics/`, `Sounds/`, `Build/`,
+`Diagnostics/`, `WCImage/`, `releases/`, `.git/`, образы, случайные корневые
+PNG и `ZUMA.SYM`/`zuma.sym`. Опора восстанавливается поверх рабочего проекта с
+неизменяемыми assets. SPG сохранён только как `zuma_vdac2.spg`.
+
+**Проверка снимка:** `Source` 450/450 и `Docs` 93/93 совпали по относительным
+путям и SHA-256, `MirrorFailures=0`; 16 корневых файлов совпали, запрещённых
+путей нет. Все пять runtime-файлов совпали с `Build` по SHA-256. Финальный
+build и regress относятся к сохранённому состоянию: `build.cmd` PASS,
+SjASMPlus 0 ошибок, полный набор `41/41 PASS`, лог
+`Build/regress_full_20260715_171032.log`. Аппаратный цикл
+`Game Over -> Menu -> Gauntlet` после финального исправления ещё не выполнен,
+поэтому опора не помечена как hwverified.
+
+## [2026-07-15 18:21] VDAC2: исправлена пропажа огня после dual Game Over → single level
+**Симптом:** после одного из Game Over на L05/L12/L19 новая игра на обычном
+одноцепочечном уровне принимала управление и позволяла ПКМ менять шары, но не
+создавала пулю по Enter, Space и Kempston Fire. Аппаратный F12 восстанавливал
+стрельбу.
+
+**Корень:** в одном из порядков завершения двух цепочек terminal state оставлял
+`VDC2_KzFrame=11`. Затем `VDC_InitSecondChainMaybe` выставлял
+`VDC_HasSecondChain=0`, но делал ранний RET без очистки KZ2. `Bullet_Spawn`
+безусловно проверял stale `VDC2_KzFrame>=9` даже на одноцепочечном уровне и
+блокировал любой путь выстрела. ПКМ работал, потому что swap не вызывает
+`Bullet_Spawn`. Дефект унаследован как минимум от v099.
+
+**Исправление:** `Source/ASM/Bullet.asm` учитывает `VDC2_KzFrame` только при
+`VDC_HasSecondChain!=0`; `Source/ASM/VDC.asm` дополнительно обнуляет
+неактивный `VDC2_KzFrame` перед ранним single-level RET. Нетривиальный gate и
+причина stale state прокомментированы в ASM. Для byte budget удалены только
+эквивалентные лишние загрузки: повторный sentinel #FF и лишний XOR перед
+`LD A,24`.
+
+**Регрессия:** `test_lose_blocks_shots_z80.py` теперь разделяет single/dual KZ
+и содержит точный случай `L19 Game Over -> L01 init -> Fire`. Старый бинарник
+падал на двух новых проверках; исправленный проходит все 11. Дополнительно PASS:
+dual lose L05/L12/L19 в normal+mirror порядке и win transition. Финальный
+`build.cmd` PASS, SjASMPlus 0 ошибок, Main1=16383/16384.
+
+**Развёртывание:** пять runtime-файлов обновлены в
+`Build/SD/Games/Zuma Deluxe VDAC2` и совпадают с `Build` по SHA-256.
+Последняя проектная опора v113 заменена этим состоянием с исходниками и
+исправленной сборкой.

@@ -73,7 +73,6 @@ Frog_Init:        XOR  A
                   LD   (Frog_PrevMouseLeft), A         ; фронт ЛКМ на первом кадре не нужен
                   LD   (Frog_KeySpacePrev), A
                   LD   (Frog_SwapPrev), A
-                  XOR  A
                   LD   A, 24
                   LD   (Frog_TongueExpand), A
                   LD   A, FROG_BALL_IDLE

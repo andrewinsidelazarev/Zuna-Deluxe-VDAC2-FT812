@@ -52,6 +52,9 @@ def main() -> int:
         check("L19 shared skull keeps chain1 open frame once", drawn_cells(18, 9, 1), [0, 9]),
         check("L05 still draws two kill-zones", drawn_cells(4, 1, 9), [0, 1, 0, 9]),
         check("L12 still draws two kill-zones", drawn_cells(11, 1, 9), [0, 1, 0, 9]),
+        check("L19 clamps corrupt shared frame to last atlas cell", drawn_cells(18, 1, 255), [0, 11]),
+        check("L05 clamps corrupt chain1 frame", drawn_cells(4, 99, 1), [0, 11, 0, 1]),
+        check("L12 clamps corrupt chain2 frame", drawn_cells(11, 1, 12), [0, 1, 0, 11]),
     ]
     return 0 if all(checks) else 1
 

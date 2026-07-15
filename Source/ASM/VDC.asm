@@ -35,6 +35,7 @@ VDC_FAST_ADVANCE       EQU 12                            ; MoveChain ×12 за t
 VDC_ABSORB_ADVANCE     EQU 8                             ; advance absorb chain: 8 px/tick (32/8=4 ticks/cell)
 VDC_CELL_SIZE          EQU 32                            ; sample-units на slot.
 VDC_GLOBAL_SPEED_FACTOR EQU 2                            ; поддерживается 1 или 2; множитель fast-фазы и normal-вызовов SpeedAdvance.
+VDC_LOSE_GAP_HOLD_REM  EQU 48                            ; GAP/Lose ждёт здесь; прошедшая цепь плавно возвращается по 1 sample/кадр.
                 ASSERT VDC_GLOBAL_SPEED_FACTOR >= 1
                 ASSERT VDC_GLOBAL_SPEED_FACTOR <= 2
 VDC_DECAY_NEG          EQU 2                             ; insert head slide (neg→0) быстро.
@@ -217,9 +218,7 @@ VDC_Init:
                 LD   (VDC_BulletGapCount),     A
                 LD   A, 255
                 LD   (VDC_BulletGapMinDist),   A
-                XOR  A
-                LD   A, #FF
-                LD   (VDC_StatPrevMatchColor), A
+                LD   (VDC_StatPrevMatchColor), A      ; тот же sentinel #FF, A уже равен 255
                 LD   HL, 0
                 LD   (VDC_StatTimeFrames),     HL
                 LD   (VDC_GaugeScore),         HL
@@ -238,11 +237,12 @@ VDC_Init:
                 LD   HL, (VDC_ActiveTrackSamples)      ; HL = NumSamples
                 LD   A, VDC_CELL_SIZE                 ; A = divisor; без него TrackNumSlots ломается.
                 CALL VDC_DivHLbyA                     ; HL = NumSamples / CELL_SIZE
-                LD   (VDC_TrackNumSlots), HL
                 OR   A
                 JR   NZ, .kz_rem_ok
+                DEC  HL                                ; ровная кратность: последний slot = quotient-1
                 LD   A, VDC_CELL_SIZE
-.kz_rem_ok:     DEC  A
+.kz_rem_ok:     LD   (VDC_TrackNumSlots), HL
+                DEC  A
                 LD   (VDC_KzEndSub), A
 
                 ; LFSR seed: базовый #ACE1, scramble через RTC секунды (low_byte ×
@@ -322,6 +322,10 @@ VDC_Init:
 VDC_InitSecondChainMaybe:
                 XOR  A
                 LD   (VDC_HasSecondChain), A
+                ; Неактивная KZ2 не должна наследовать terminal frame=11 после
+                ; Game Over двухцепочечного уровня. Для L05/L12/L19 значение
+                ; ниже будет заново скопировано из freshly initialized KZ1.
+                LD   (VDC2_KzFrame), A
                 LD   A, (CurrentLevel)
                 CP   4                                ; L05 blackswirley
                 JR   Z, .has2
@@ -364,6 +368,14 @@ VDC_InitSecondChainMaybe:
                 LD   HL, (VDC_ActiveTrackSamples)
                 LD   A, VDC_CELL_SIZE
                 CALL VDC_DivHLbyA
+                OR   A
+                JR   NZ, .second_kz_rem_ok
+                DEC  HL                                ; тот же exact endpoint для кратного трека
+                LD   A, VDC_CELL_SIZE
+.second_kz_rem_ok:
+                DEC  A                                 ; A = remainder-1 = KzEndSub
+                LD   DE, VDC2_ChainLocal + (VDC_KzEndSub - VDC_ChainLocalStart)
+                LD   (DE), A
                 LD   DE, VDC2_ChainLocal + (VDC_TrackNumSlots - VDC_ChainLocalStart)
                 LD   A, L
                 LD   (DE), A
@@ -747,94 +759,56 @@ VDC_UpdateSecondAbsorbMaybe:
                 JP   SetCurrentTrackPage
 
 VDC_UpdateAbsorbOrRush:
-                CALL VDC_LoseStartReady                ; защитный путь: ABSORB мог начаться до завершения дырки
+                ; Ни одна цепочка не начинает поглощение, пока в любой из них
+                ; остаётся marker/explosion либо реальная offset-щель.
+                CALL VDC_LoseAllChainsBusy
                 JR   NC, .uar_settled
-                CALL VDC_LoseHoldBeforeKillzone
                 CALL VDC_AnimateChain
                 RET
-.uar_settled:
-                LD   A, (VDC_KzFrame)
-                CP   11
-                JR   NZ, .uar_rush_start
-                LD   A, (VDC_LoseHoldCnt)
-                CP   255
-                JR   Z, .uar_absorb_ready
-                LD   A, (VDC_HSub)
-                OR   A
-                JR   NZ, .uar_rush_start
-.uar_mark_ready:
-                LD   A, 255
-                LD   (VDC_LoseHoldCnt), A
-.uar_absorb_ready:
-                CALL VDC_DualLoseHoldLastMaybe
-                RET  C
-                JP   VDC_UpdateAbsorb
-.uar_rush_start:
-                CALL VDC_CheckKillzone
-                XOR  A
-                LD   (VDC_ChainFreezeCnt), A
-                LD   B, VDC_ABSORB_ADVANCE
-.uar_loop:      PUSH BC
-                LD   A, (VDC_KzFrame)
-                CP   11
-                LD   E, 0
-                JR   NZ, .uar_arm_done
-                INC  E
-.uar_arm_done:  LD   A, (VDC_HSub)
-                LD   C, A
-                PUSH DE                                ; E = признак открытой пасти на время вызовов
-                PUSH BC                                ; C = прежний HSub на время вызовов
-                CALL VDC_MoveChain
-                CALL VDC_CheckKillzone
-                POP  BC
-                POP  DE
-                LD   A, E
-                OR   A
-                JR   Z, .uar_no_hit
-                LD   A, (VDC_HSub)
-                CP   C
-                JR   C, .uar_hit                       ; пасть открыта, HSub перешёл через зону уничтожения
-.uar_no_hit:
-                POP  BC
-                DJNZ .uar_loop
-                RET
-.uar_hit:       XOR  A
-                LD   (VDC_HSub), A
-                LD   A, 11
-                LD   (VDC_KzFrame), A
-                LD   A, 255
-                LD   (VDC_LoseHoldCnt), A
-                POP  BC
-                RET
+.uar_settled:   JP   VDC_UpdateAbsorb                  ; единый rush/absorb считает exact endpoint
 
-VDC_DualLoseHoldLastMaybe:
-                LD   A, (VDC_HasSecondChain)
-                OR   A
-                RET  Z
-                LD   A, (VDC_SlotsLen)
-                OR   A
-                RET  Z
-                LD   A, (VDC2_SlotsLen)
-                OR   A
-                RET  NZ
-                LD   A, (VDC_HSub)
-                CP   24
-                JR   NC, .dll_maybe_hold
-                OR   A
-                RET
-.dll_maybe_hold:
-                LD   A, (VDC_DualLoseMenuDelay)
-                OR   A
-                JR   NZ, .dll_count
-                LD   A, 6
-.dll_count:     DEC  A
-                LD   (VDC_DualLoseMenuDelay), A
-                RET  Z
-                LD   A, VDC_CELL_SIZE - 1
-                LD   (VDC_HSub), A
-                LD   A, 255
+; Один sample движения ABSORB к центру собственной kill-zone.
+; CF=1, если head уже находился либо этим шагом пришёл в base rem=0.
+; CF=0 — endpoint ещё впереди. TrackNumSlots гарантированно <256 (HSA byte).
+VDC_AbsorbAdvanceToEndpoint:
+                LD   A, (VDC_TrackNumSlots)
+                LD   HL, VDC_HSA
+                CP   (HL)
+                JR   C, .aae_hit                        ; HSA уже за endpoint cell
+                JR   NZ, .aae_advance                   ; HSA ещё перед endpoint cell
+                LD   A, (VDC_KzEndSub)
+                LD   HL, VDC_HSub
+                CP   (HL)
+                JR   C, .aae_hit
+                JR   Z, .aae_hit
+
+.aae_advance:  LD   HL, VDC_HSub
+                INC  (HL)
+                LD   A, (HL)
+                CP   VDC_CELL_SIZE
+                JR   C, .aae_fade
+                LD   (HL), 0
+                LD   HL, VDC_HSA
+                INC  (HL)
+.aae_fade:     LD   A, (VDC_LoseHoldCnt)
+                CP   255
+                JR   NZ, .aae_check
+                LD   A, (VDC_HeadAbsorbAlpha)
+                SUB  8
                 LD   (VDC_HeadAbsorbAlpha), A
-                SCF
+.aae_check:    LD   A, (VDC_TrackNumSlots)
+                LD   HL, VDC_HSA
+                CP   (HL)
+                JR   C, .aae_hit
+                JR   NZ, .aae_not_hit
+                LD   A, (VDC_KzEndSub)
+                LD   HL, VDC_HSub
+                CP   (HL)
+                JR   C, .aae_hit
+                JR   Z, .aae_hit
+.aae_not_hit:  AND  A
+                RET
+.aae_hit:      SCF
                 RET
 
 VDC_DualAbsorbWaitOther:
@@ -866,11 +840,18 @@ VDC_DualLoseDelayMaybe:
                 LD   A, (VDC2_SlotsLen)
                 OR   A
                 RET  NZ
+                ; UpdateAllChains вызывает empty-path для обеих цепочек.
+                ; Считать post-empty задержку только на проходе chain1,
+                ; иначе один экранный кадр уменьшает счётчик дважды.
+                LD   A, (VDC_SecondActive)
+                OR   A
+                JR   NZ, .dld_hold
                 LD   A, (VDC_DualLoseMenuDelay)
                 OR   A
                 JR   NZ, .dld_count
                 LD   A, VDC_DUAL_LOSE_MENU_DELAY
                 LD   (VDC_DualLoseMenuDelay), A
+.dld_hold:
                 SCF
                 RET
 .dld_count:     DEC  A
@@ -905,63 +886,87 @@ VDC_LoseAllChainsBusy:
                 RET  C
                 JP   VDC_LoseOtherChainBusy
 
-; Локально удержать видимую голову на rem=1, непосредственно перед kill-zone.
-; Положительный offset компенсируется общей базой цепочки; отрицательный
-; оставляет голову ещё дальше от границы и безопасно затухает к rem=1.
+; Удержать базу цепочки около rem=48. Вход: HL = signed base rem, сохранённый
+; VDC_CheckKillzone. За один вызов меняется ровно один base sample в сторону 48:
+; 49->48 движется к центру, 47->48/32->33/0->1 — от центра. Это тот же атомарный
+; шаг, что у VDC_MoveChain, поэтому возврат видим как движение, а не телепорт.
+; Offsets не трогаются: они продолжают независимо закрывать GAP/взрыв.
 VDC_LoseHoldBeforeKillzone:
                 LD   A, VDC_FAST_ADVANCE * VDC_GLOBAL_SPEED_FACTOR
-; Глобальный вход получает A=255 из VDC_LoseChainBusy. Поэтому только цепочка,
-; первой дошедшая до границы, хранит старший бит и ждёт другую цепочку.
+; Глобальный вход получает A=255 из VDC_LoseChainBusy. Старший бит отличает
+; общий барьер обеих цепочек от старого локального короткого hold.
 VDC_LoseHoldBeforeKillzoneGlobal:
                 LD   (VDC_LoseHoldCnt), A
-                LD   A, (VDC_KzEndSub)
-                DEC  A
-                LD   L, A
-                RLCA
-                SBC  A, A                              ; знаковое расширение KzEndSub-1
-                LD   H, A
-                LD   BC, (VDC_pOffsets)
-                LD   A, (BC)
-                BIT  7, A
-                JR   Z, .lh_offset_ok
-                XOR  A                                 ; отрицательный offset не подтягивать вперёд
-.lh_offset_ok:  LD   E, A
-                LD   D, 0
-                AND  A
-                SBC  HL, DE
+                LD   A, H
+                OR   A
+                JP   M, .lh_back_one                    ; rem < 0: тоже возвращать плавно к 48
+                JR   NZ, .lh_closed                     ; защитный случай rem > 255
                 LD   A, L
+                CP   VDC_LOSE_GAP_HOLD_REM
+                JR   Z, .lh_positive_frame              ; exact rem=48: clamp без дрейфа
+                JR   C, .lh_back_one                    ; rem < 48: один sample от центра
+
+                ; rem > 48: один sample к центру. DEC HL держит post-step rem
+                ; для KzFrame; wrap HSub 31->0 одновременно продвигает HSA.
+                DEC  HL
+                LD   A, (VDC_HSub)
+                INC  A
                 AND  VDC_CELL_SIZE - 1
                 LD   (VDC_HSub), A
-                LD   B, 5
-.lh_div32:      SRA  H
-                RR   L
-                DJNZ .lh_div32
-                LD   A, (VDC_TrackNumSlots)
-                ADD  A, L
-                LD   (VDC_HSA), A
-                LD   A, 9                              ; последний кадр открытия перед входом
+                JR   NZ, .lh_positive_frame
+                PUSH HL
+                LD   HL, VDC_HSA
+                INC  (HL)
+                POP  HL
+                JR   .lh_positive_frame
+
+.lh_back_one:   INC  HL                                 ; post-step rem = old rem + 1
+                LD   A, (VDC_HSub)
+                DEC  A
+                CP   #FF
+                JR   Z, .lh_back_wrap
+                LD   (VDC_HSub), A                      ; обычный шаг внутри cell
+                JR   .lh_back_done
+.lh_back_wrap:  LD   A, VDC_CELL_SIZE - 1
+                LD   (VDC_HSub), A                      ; HSub 0->31 требует HSA--
+                PUSH HL                                 ; сохранить signed post-step rem
+                LD   HL, VDC_HSA
+                DEC  (HL)
+                POP  HL
+.lh_back_done:  LD   A, H
+                OR   A
+                JP   M, .lh_endpoint                    ; rem всё ещё <0: пасть открыта
+                OR   L
+                JR   Z, .lh_endpoint                    ; exact rem=0 также frame 11
+.lh_positive_frame:
+                ; HL уже содержит rem ПОСЛЕ плавного шага. Пока hold был защёлкнут,
+                ; удаление GAP могло оттолкнуть базу далеко вперёд (например 144->143).
+                ; Формула ниже допустима только для 1..128: при 129+ SUB 128 ушёл бы
+                ; в unsigned wrap и выдал CELL за пределами 12-кадрового KZ atlas.
+                LD   A, L
+                CP   129
+                JR   NC, .lh_closed                     ; далеко от пасти: закрытый frame 1
+                LD   A, 128
+                SUB  L
+                SRL  A : SRL A : SRL A : SRL A
+                ADD  A, 2
+                JR   .lh_store_frame
+.lh_closed:     LD   A, 1
+                JR   .lh_store_frame
+.lh_endpoint:   LD   A, 11                             ; у центра пасть полностью открыта
+.lh_store_frame:
                 LD   (VDC_KzFrame), A
                 SCF
                 RET
 
 ; CF=1 только пока в активной цепочке есть незакрытая дырка или незавершённый
-; взрыв. Обычные смещения, Shot2 и ChainFreezeCnt не блокируют Lose: они
-; возникают и при посторонних событиях, не относящихся к условию поражения.
+; взрыв. После удаления marker'а щель ещё живёт в offsets: для соседних шаров
+; расстояние больше клетки точно тогда, когда signed off[i] > off[i+1].
+; Обычная вставка создаёт overlap (неубывающий профиль) и Lose не блокирует.
 VDC_LoseChainBusy:
-                LD   A, (VDC_ExplodeActive)
-                OR   A
-                JR   NZ, .lcb_busy                    ; затухание взрыва match-3 ещё видно
                 LD   A, (VDC_SlotsLen)
                 OR   A
                 JR   Z, .lcb_ready
-                LD   A, (VDC_GapJunction)
-                OR   A
-                JR   NZ, .lcb_busy
-                LD   A, (VDC_GapPosLeft)
-                OR   A
-                JR   NZ, .lcb_busy
-
-                LD   A, (VDC_SlotsLen)
                 LD   B, A
                 LD   HL, (VDC_pSlots)
                 LD   DE, (VDC_pExplodeFrame)
@@ -975,6 +980,22 @@ VDC_LoseChainBusy:
                 INC  HL
                 INC  DE
                 DJNZ .lcb_slot_loop
+
+                LD   A, (VDC_SlotsLen)
+                DEC  A
+                JR   Z, .lcb_ready
+                LD   B, A
+                LD   HL, (VDC_pOffsets)
+.lcb_offset_loop:
+                LD   A, (HL)
+                XOR  #80                               ; signed -> monotonic unsigned key
+                LD   C, A                              ; C = key(left)
+                INC  HL
+                LD   A, (HL)
+                XOR  #80                               ; A = key(right)
+                CP   C
+                JR   C, .lcb_busy                      ; right < left: реальная щель ещё открыта
+                DJNZ .lcb_offset_loop
 
 .lcb_ready:
                 XOR  A
@@ -3574,7 +3595,7 @@ VDC_ChainLocalStart:
 VDC_HSA:           DEFB 0
 ; VDC_HSub, VDC_SlotsLen -> hoisted to loader_resident.asm (resident Core)
 VDC_ChainFreezeCnt:DEFB 0
-VDC_LoseHoldCnt:   DEFB 0                  ; отдельное ожидание цепочки перед KZ до завершения анимаций
+VDC_LoseHoldCnt:   DEFB 0                  ; ожидание цепочки около KZ до завершения GAP/взрывов
 VDC_GapPullVp:     DEFB VDC_PULL_BASE_X10  ; скорость подтяжки ×10 (per-chain, в swap-блоке)
 VDC_GapAccum:      DEFW 0                  ; аккумулятор подтяжки ×10 (порог VDC_GAP_ACCUM_STEP)
 VDC_GapJunction:   DEFB 0                  ; 0=нет гэпов / 1=PULL / 2=CATCH-UP

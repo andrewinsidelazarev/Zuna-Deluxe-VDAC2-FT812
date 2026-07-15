@@ -649,6 +649,7 @@ DrawKillzoneAfterXY:
                 JR   NC, .kz1_have_frame
                 LD   A, B
 .kz1_have_frame:
+                CALL ClampKillzoneCellA
                 CALL FT.Coprocessor.Cell
                 LD   BC, (KzDrawX16)
                 LD   DE, (KzDrawY16)
@@ -681,10 +682,22 @@ DrawSecondKillzoneDual:
                 JR   C, .ks2_have_frame
                 LD   A, (Core.VDC_KzFrame)                ; >=2 → общий кадр цепочки 1
 .ks2_have_frame:
+                CALL ClampKillzoneCellA
                 CALL FT.Coprocessor.Cell
                 LD   BC, (Core.VDC2_KzDrawX16)
                 LD   DE, (Core.VDC2_KzDrawY16)
                 JP   FT.Coprocessor.Vertex2f
+
+; Последний барьер непосредственно перед EVE CELL: KZ atlas содержит ровно
+; Core.VDC_KZ_FRAMES ячеек 88x88. CELL 12 уже указывает за bitmap-кадры, а
+; большие stale/corrupt значения читают palette/padding/соседний destroy atlas
+; как KZ-спрайт — отсюда квадрат мусора поверх фона. Валидные 0..11 не меняем,
+; любое внешнее значение безопасно прижимаем к последнему кадру.
+ClampKillzoneCellA:
+                CP   Core.VDC_KZ_FRAMES
+                RET  C
+                LD   A, Core.VDC_KZ_FRAMES - 1
+                RET
 
 UpdateKillzoneDrawXY:
                 CALL Core.GetCurrentKzX
@@ -2164,17 +2177,19 @@ VDC_UpdateAbsorb:
                 LD   A, (Core.VDC_GameOverTick)
                 INC  A
                 LD   (Core.VDC_GameOverTick), A
-                LD   A, (Core.VDC_KzFrame)
-                CP   11
-                JR   NC, .ua_frame_done
-                INC  A
-                LD   (Core.VDC_KzFrame), A
-.ua_frame_done:
-                ; Plitnaya advance цепи в kill-zone: HSub++ × VDC_ABSORB_ADVANCE
-                ; per tick.  На wrap (HSub == CS) → array shift (remove slot 0),
-                ; HSA ограничен, HSub=0.  Визуально: tail-балы плавно скользят
-                ; вперёд (sub-pixel HSub), head clamped на последнем сэмпле трека,
-                ; alpha fade пропорционально HSub.
+                ; До первого поглощения удалённая цепочка может быть далеко от
+                ; своей KZ. Обновить кадр пасти по тому же rem, что и в PLAY.
+                LD   A, (Core.VDC_LoseHoldCnt)
+                CP   255
+                CALL NZ, VDC_CheckKillzone
+                ; Пустая цепочка обслуживает post-empty state machine ровно
+                ; один раз за кадр, а не для каждого unit-step ABSORB.
+                LD   A, (Core.VDC_SlotsLen)
+                OR   A
+                JR   Z, .ua_done
+                ; Единый rush/absorb: каждый unit-step движется к exact endpoint.
+                ; Шар удаляется только при rem=0; следующий head ставится на
+                ; endpoint-CELL и проходит ту же точку без HSub-wrap суррогата.
                 LD   B, Core.VDC_ABSORB_ADVANCE
 .ua_loop:       PUSH BC
                 CALL .ua_move_once
@@ -2184,23 +2199,26 @@ VDC_UpdateAbsorb:
                 JR   NZ, .ua_state_changed              ; transitioned to state=2
                 DJNZ .ua_loop
 .ua_state_changed:
-                ; Alpha = 255 - HSub*8 (HSub 0..31 → alpha 255..7).  Когда HSub=0
-                ; (только что был wrap+remove) → alpha=255 для нового head.
-                LD   A, (Core.VDC_HSub)
-                ADD  A, A : ADD A, A : ADD A, A
-                CPL
-                LD   (Core.VDC_HeadAbsorbAlpha), A
                 RET
 
-.ua_move_once:  LD   A, (Core.VDC_HSub)
-                INC  A
-                CP   Core.VDC_CELL_SIZE
-                JR   C, .ua_save_hsub
-                ; Wrap: HSub=0, удалить slot 0.  HSA остаётся ограниченным — head
-                ; ball «застрял» на последнем сэмпле трека (clamped), новый
-                ; head после shift попадает туда же → 1px continuity jump.
-                XOR  A
+.ua_move_once:  LD   A, (Core.VDC_SlotsLen)
+                OR   A
+                RET  Z
+                CALL Core.VDC_AbsorbAdvanceToEndpoint   ; CF=1 только в exact rem=0
+                JR   C, .ua_at_endpoint
+                RET
+
+.ua_at_endpoint:
+                ; Clamp к единственной точке поглощения: base rem=0.
+                LD   A, (Core.VDC_TrackNumSlots)
+                LD   (Core.VDC_HSA), A
+                LD   A, (Core.VDC_KzEndSub)
                 LD   (Core.VDC_HSub), A
+                LD   A, 11
+                LD   (Core.VDC_KzFrame), A
+                LD   A, 255
+                LD   (Core.VDC_LoseHoldCnt), A
+                LD   (Core.VDC_HeadAbsorbAlpha), A
                 LD   A, (Core.VDC_SlotsLen)
                 OR   A
                 JR   Z, .ua_done
@@ -2223,7 +2241,15 @@ VDC_UpdateAbsorb:
 .ua_pop_capped:
                 LD   A, (Core.VDC_SlotsLen)
                 OR   A
-                RET  NZ
+                JR   Z, .ua_done
+                ; После shift новый slot0 был на одну клетку позади старого.
+                ; Отвести base на CELL без скачка позиции и снова вести к rem=0.
+                LD   HL, Core.VDC_HSA
+                LD   A, (HL)
+                OR   A
+                RET  Z
+                DEC  (HL)
+                RET
 .ua_done:       CALL Core.VDC_DualAbsorbWaitOther
                 RET  C
                 CALL Core.VDC_DualLoseDelayMaybe
@@ -2257,15 +2283,14 @@ VDC_UpdateAbsorb:
                 LD   (Core.VDC_PrevMouseL), A           ; sentinel: ждать пока пользователь
                                                         ; нажмёт+отпустит mouse (avoid auto-restart)
                 RET
-.ua_save_hsub:  LD   (Core.VDC_HSub), A
-                RET
 
 ; ============================================================================
 ; VDC_CheckKillzone — штатная механика рабочей версии.
 ; Остаток пути считается только по базовой координате цепочки:
 ; (TrackNumSlots-HSA)*CS + KzEndSub-HSub. Обычные offsets не управляют Lose.
-; Раннее ожидание проверяет только активную цепочку. Общий барьер обеих цепочек
-; проверяется лишь при фактическом переходе PLAY -> ABSORB.
+; Около rem=48 и при фактическом PLAY -> ABSORB проверяется общий барьер обеих
+; цепочек. Пока барьер активен, прошедшая точку цепь возвращается к rem=48
+; по одному base sample за кадр; мгновенного переписывания HSA/HSub нет.
 ; ============================================================================
 VDC_CheckKillzone:
                 LD   A, (Core.VDC_SlotsLen)
@@ -2297,8 +2322,8 @@ VDC_CheckKillzone:
                 JP   Z, .ck_trigger
 .ck_set_frame:  ; HL = положительный остаток пути.
                 ; Уже поставленный hold проверяется отдельно. Глобальный hold
-                ; имеет старший бит и принадлежит только цепочке, первой дошедшей
-                ; до границы. Локальный hold зависит только от своей цепочки.
+                ; имеет старший бит и принадлежит каждой цепочке, дошедшей до
+                ; входа в KZ, пока хотя бы одна цепь ещё занята GAP/взрывом.
                 LD   A, (Core.VDC_LoseHoldCnt)
                 OR   A
                 JR   Z, .ck_frame_range
@@ -2319,30 +2344,30 @@ VDC_CheckKillzone:
 .ck_frame_range:
                 LD   A, H
                 OR   A
-                JR   NZ, .ck_closed                    ; rem > 255 → > 64 → closed
+                JR   NZ, .ck_closed                    ; rem > 255 → > 128 → closed
                 LD   A, L
-                CP   67
-                JR   NC, .ck_closed                    ; rem >= 67: до окна KZ ещё есть запас
-                ; Локальную незавершённую дырку/взрыв проверять только у самой
-                ; границы. Другая цепочка здесь движение не останавливает.
+                CP   131
+                JR   NC, .ck_closed                    ; rem >= 131: до окна KZ ещё есть запас
+                ; Около rem=48 проверить обе цепочки. Пока GAP/взрыв не завершён,
+                ; helper ведёт базу к rem=48 ровно на один sample за этот кадр.
                 LD   A, (Core.VDC_GameState)
                 OR   A
                 JR   NZ, .ck_terminal_ready
                 LD   A, L
-                CP   Core.VDC_GLOBAL_SPEED_FACTOR + 1
+                CP   Core.VDC_LOSE_GAP_HOLD_REM + Core.VDC_GLOBAL_SPEED_FACTOR
                 JR   NC, .ck_terminal_ready
                 PUSH HL
-                CALL Core.VDC_LoseStartReady
+                CALL Core.VDC_LoseAllChainsBusy
                 POP  HL
-                JP   C, Core.VDC_LoseHoldBeforeKillzone
+                JP   C, Core.VDC_LoseHoldBeforeKillzoneGlobal
 .ck_terminal_ready:
                 LD   A, L
-                CP   65
+                CP   129
                 JR   NC, .ck_closed
-                ; rem ∈ [1..64]: KzFrame = 2 + ((64 - rem) >> 3) ∈ [2..9]
-                LD   A, 64
+                ; rem ∈ [1..128]: KzFrame = 2 + ((128 - rem) >> 4) ∈ [2..9]
+                LD   A, 128
                 SUB  L
-                SRL  A : SRL A : SRL A
+                SRL  A : SRL A : SRL A : SRL A
                 ADD  A, 2
                 LD   (Core.VDC_KzFrame), A
                 DEC  L
@@ -2356,8 +2381,14 @@ VDC_CheckKillzone:
 .ck_trigger:    ; Фактический переход PLAY -> ABSORB — общий барьер обеих цепочек.
                 LD   A, (Core.VDC_GameState)
                 OR   A
-                JR   NZ, .ck_begin_lose                ; уже начатый ABSORB обновляется независимо
+                JR   Z, .ck_play_trigger
+                LD   A, 11                             ; ABSORB уже начат: только exact endpoint
+                LD   (Core.VDC_KzFrame), A
+                RET                                    ; SFX/state повторно не запускать
+.ck_play_trigger:
+                PUSH HL
                 CALL Core.VDC_LoseAllChainsBusy
+                POP  HL
                 JP   C, Core.VDC_LoseHoldBeforeKillzoneGlobal
 .ck_begin_lose: XOR  A
                 LD   (Core.VDC_LoseHoldCnt), A         ; снять ожидание перед ускорением/всасыванием
@@ -2885,6 +2916,24 @@ VDC_V16ToCenter_Slot0:
                 SRA  H : RR L
                 LD   DE, 26
                 ADD  HL, DE
+                RET
+
+; ZL_ExplosionFlushPreserve — редкая pressure-branch из
+; ZL_DrawExplosions. Помещена в оставшиеся 12 байт slot0,
+; чтобы не переполнить ни resident Main0, ни gameplay page #04.
+; Call sites сами проверяют BufferPtr>=#5800; сюда входят
+; только когда chunk надо реально отправить. BC несёт loop/frame,
+; HL — ExplodeFrame pointer, IX — 7-байтную cache record; все три
+; обязаны пережить mid-frame flush. EVE graphics context между
+; FIFO chunks сохраняется; сбрасывается только host BufferPtr.
+ZL_ExplosionFlushPreserve:
+                PUSH BC
+                PUSH HL
+                PUSH IX
+                CALL ZL_FlushCommandBufferMidFrame
+                POP  IX
+                POP  HL
+                POP  BC
                 RET
 
                 include "BulletTraj.asm"              ; slot0 resident ZBT1 bullet trajectory event reader

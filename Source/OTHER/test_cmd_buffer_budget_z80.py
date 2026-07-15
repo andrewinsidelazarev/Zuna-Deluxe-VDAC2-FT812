@@ -14,7 +14,7 @@
 FAIL-критерии (до midframe-flush — документирующие):
   - corrupt Core в сценариях A/B (текущий код обязан жить в бюджете);
   - peak A/B > BUDGET.
-Сценарии C/D/E проверяют flush-on-pressure: длинный кадр может быть разбит
+Сценарии C/D/E/F проверяют flush-on-pressure: длинный кадр может быть разбит
 на несколько CMD chunks, но каждый chunk обязан оставаться в RAM-буфере.
 """
 from __future__ import annotations
@@ -138,6 +138,79 @@ def run_scenario(name: str, level_idx0: int, patch_gate: bool,
     return peak, corrupt, peaks
 
 
+def run_explosion_pressure_scenario(length: int = 111) -> tuple[int, bool, int, int]:
+    """Проверить отдельный destroy pass на длинной допустимой цепочке L1.
+
+    До pressure guard обычный ball pass оставлял BufferPtr близко к #5800, а
+    ``ZL_DrawExplosions`` без проверки добавлял ещё 12 байт на каждый active
+    sprite. При 111 slots указатель доходил за #5C00 и реальные записи команд
+    заменяли начало resident Core. Здесь используется полный Z80 DrawFrame:
+    синтетическим является только содержимое валидных VDC arrays.
+
+    Счётчик входов в ``ZL_FlushCommandBufferMidFrame`` доказывает, что тест не
+    прошёл случайно за счёт маленького кадра. High-water снимается после каждой
+    инструкции, а canary сравнивает фактические bytes кода за границей буфера.
+    """
+
+    h = Harness(0)                                # L1: одна цепь, без top-mask
+    h.setup()
+    if "Core.CurrentCodePage" in h.S:
+        h.sb("Core.CurrentCodePage", 0x04)
+
+    # Несколько штатных updates подготавливают level/track state; затем длина
+    # фиксируется в пределах VDC_MAX_SLOTS и до DrawFrame больше не обновляется.
+    for _ in range(64):
+        h.sb("Core.VDC_GameState", 0)
+        big_call(h, "Core.VDC_UpdateAllChains")
+    synth_fill_chain(h, "VDC_", length)
+    if "Core.VDC2_SlotsLen" in h.S:
+        h.sb("Core.VDC2_SlotsLen", 0)
+    h.sb("Core.VDC_HSub", 0)
+
+    explode = h.S["Core.VDC_ExplodeFrame"]
+    marker = h.S["Core.VDC_ExplodeMarker"]
+    for index in range(length):
+        h.e.set_byte(explode + index, 1)           # первый видимый destroy frame
+        h.e.set_byte(marker + index, index % 6)    # допустимый цвет 0..5
+    h.sw("Core.VDC_pExplodeFrame", explode)
+    h.sb("Core.VDC_ExplodeActive", 1)
+    h.sb("Core.VDC_GameState", 0)
+
+    guard_before = bytes(h.e.get_memory(CORE_GUARD_ADDR, CORE_GUARD_LEN))
+    flush_addr = h.S["Core.ZL_FlushCommandBufferMidFrame"]
+    original_step = h.e.step
+    flushes = 0
+    high_water = CMD
+
+    def watched_step() -> int:
+        nonlocal flushes, high_water
+        if h.e.reg.PC == flush_addr:
+            flushes += 1
+        ptr = h.gw("FT.Coprocessor.BufferPtr")
+        # BufferPtr всегда host pointer, но range guard не даёт случайному
+        # неинициализированному значению исказить high-water диагностику.
+        if CMD <= ptr < 0x8000 and ptr > high_water:
+            high_water = ptr
+        return original_step()
+
+    h.e.step = watched_step
+    h.sw("FT.Coprocessor.BufferPtr", CMD)
+    try:
+        big_call(h, "Core.ZL_DrawFrame")
+    finally:
+        h.e.step = original_step
+
+    final_used = (h.gw("FT.Coprocessor.BufferPtr") - CMD) & 0xFFFF
+    high_used = high_water - CMD
+    corrupt = bytes(h.e.get_memory(CORE_GUARD_ADDR, CORE_GUARD_LEN)) != guard_before
+    print(
+        f"F L01 explosions x{length}: final={final_used}b high={high_used}b "
+        f"flushes={flushes} corrupt_core={corrupt}",
+        flush=True,
+    )
+    return final_used, corrupt, flushes, high_used
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -177,6 +250,17 @@ def main() -> int:
         failures.append("E: предохранитель не удержал Core")
     if peak_e > BUDGET:
         failures.append(f"E: peak {peak_e} > budget {BUDGET} — ступени не сработали")
+
+    # F: регрессия конкретного пропущенного guard — отдельный explosion pass.
+    final_f, corrupt_f, flushes_f, high_f = run_explosion_pressure_scenario()
+    if corrupt_f:
+        failures.append("F: destroy-sprites затёрли resident Core за #5C00")
+    if flushes_f == 0:
+        failures.append("F: pressure path не был достигнут — сценарий не проверяет исправление")
+    if final_f > BUDGET or high_f > BUDGET:
+        failures.append(
+            f"F: CMD chunk вышел за budget {BUDGET}: final={final_f}, high={high_f}"
+        )
 
     if failures:
         print("FAIL:\n  " + "\n  ".join(failures))

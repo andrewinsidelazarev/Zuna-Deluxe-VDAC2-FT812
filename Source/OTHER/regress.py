@@ -55,6 +55,8 @@ SMOKE_STEPS: tuple[Step, ...] = (
 FULL_EXTRA_STEPS: tuple[Step, ...] = (
     py("test_menu_hover_keyboard_focus.py", 90, "menu"),
     py("test_levelsel_preview_stream_z80.py", 240, "sd"),
+    py("test_sd_session_recovery_z80.py", 90, "sd"),
+    py("test_rawpak_lfn_bounds_z80.py", 90, "sd"),
     py("test_levelsel_transition.py", 120, "menu"),
     py("test_win_transition_z80.py", 240, "flow"),
     py("test_gap_bonus_score_z80.py", 120, "score"),
@@ -65,6 +67,8 @@ FULL_EXTRA_STEPS: tuple[Step, ...] = (
     py("test_dual_chain_win_outro_z80.py", 240, "win"),
     py("test_lose_blocks_shots_z80.py", 120, "lose"),
     py("test_lose_waits_chain_settle_z80.py", 240, "lose"),
+    py("test_l19_shared_killzone_draw_z80.py", 90, "render"),
+    py("test_cmd_buffer_budget_z80.py", 240, "render"),
     py("test_audio_cache_stream.py", 120, "audio"),
     py("test_space_starfield_static.py", 90, "render"),
     py("test_top_mask_mainpak_delivery.py", 90, "render"),

@@ -90,12 +90,13 @@ ZiFi_Init:
                 LD   BC, #0057
                 LD   A, #FF
                 OUT  (C), A
-                LD   A,  TSLibPage
-                SetPage0_A
-                CALL sd_init
-                SCF
+                LD   A, TSLibPage
+                SetPage0_A                     ; slot 0 вернуть на штатную TSLib page до SD-session
+                CALL sd_init                   ; внутренний контракт: CF=0 ready, CF=1 recovery failed
+                JR   C, .Err                   ; не выдавать ложный успех вызывающему loader'у
+                SCF                            ; публичный ZiFi-контракт наоборот: CF=1 означает success
                 RET
-.Err:           OR   A
+.Err:           OR   A                         ; публичный ZiFi-контракт: CF=0 означает init error
                 RET
 
 ; ZiFi_Done — восстановить TSLib в slot 0, EI.
@@ -479,8 +480,8 @@ RawPak_FindByName:
                 JR   NZ, .isDir                 ; subdirectory
                 ; --- regular file: сверить name, затем exact size ---
                 LD   A, (RawPak_HaveLfn)
-                OR   A
-                JR   NZ, .haveName
+                CP   1                          ; только 1 = собранный LFN; #FF = poisoned chain
+                JR   Z, .haveName
                 CALL RawPak_Build83
 .haveName:     CALL RawPak_NameMatch           ; Z если name == RawPak_TargetName
                 JR   NZ, .skip
@@ -694,8 +695,8 @@ RawPak_FindEntryInCur:
                 CP   '.'
                 JR   Z, .skip
 .match:         LD   A, (RawPak_HaveLfn)
-                OR   A
-                JR   NZ, .haveName
+                CP   1                          ; poisoned LFN (#FF) обязан уйти в безопасный 8.3 fallback
+                JR   Z, .haveName
                 CALL RawPak_Build83
 .haveName:      CALL RawPak_NameMatch
                 JR   NZ, .skip
@@ -846,9 +847,29 @@ RawPak_NameMatch:
 
 ; Сохранить один LFN fragment (IX = LFN entry) в RawPak_EntName по (seq-1)*13.
 ; Выставляет RawPak_HaveLfn. Chars берутся как UTF-16 low byte, uppercased.
+;
+; RawPak_EntName имеет ровно 64 байта. Фрагменты seq=1..4 занимают диапазоны
+; 0..12, 13..25, 26..38 и 39..51. Уже seq=5 начинается с байта 52, поэтому
+; его тринадцатый символ попал бы в байт 64 — RawPak_CheckSize, лежащий сразу
+; после буфера. seq=0 ещё опаснее: прежний DEC превращал его в #FF и цикл
+; вычисления адреса уходил далеко за все поля loader state.
+;
+; Непредставимое/повреждённое LFN не пытаемся усекать: ставим HaveLfn=#FF,
+; ничего не пишем в EntName и возвращаемся. Значение #FF служит poison-state
+; до следующей short entry: иначе после seq=5 следующий допустимый seq=4 снова
+; поставил бы HaveLfn=1 и частично собранное имя было бы принято за целое.
+; Caller считает валидным только HaveLfn==1 и при #FF вызывает RawPak_Build83.
 RawPak_StoreLfn:
                 LD   A, (IX + 0)
-                AND  #1F
+                AND  #1F                       ; только FAT sequence number, без флага LAST_LONG_ENTRY
+                JR   Z, RawPak_StoreLfn_Invalid ; seq=0 запрещён FAT и ломал (seq-1)*13
+                CP   5
+                JR   NC, RawPak_StoreLfn_Invalid ; seq>=5 не помещается целиком в 64-byte EntName
+                PUSH AF                         ; сохранить проверенный seq на время проверки poison-state
+                LD   A, (RawPak_HaveLfn)
+                INC  A                          ; #FF + 1 = 0: цепочка уже забракована ранее
+                JR   Z, RawPak_StoreLfn_Poisoned
+                POP  AF
                 DEC  A                          ; idx (0-based)
                 LD   HL, RawPak_EntName
                 OR   A
@@ -857,23 +878,31 @@ RawPak_StoreLfn:
 .mul:          ADD  HL, DE
                 DEC  A
                 JR   NZ, .mul
-.pos:          LD   A, (IX + 1)  : CALL .put
-                LD   A, (IX + 3)  : CALL .put
-                LD   A, (IX + 5)  : CALL .put
-                LD   A, (IX + 7)  : CALL .put
-                LD   A, (IX + 9)  : CALL .put
-                LD   A, (IX + 14) : CALL .put
-                LD   A, (IX + 16) : CALL .put
-                LD   A, (IX + 18) : CALL .put
-                LD   A, (IX + 20) : CALL .put
-                LD   A, (IX + 22) : CALL .put
-                LD   A, (IX + 24) : CALL .put
-                LD   A, (IX + 28) : CALL .put
-                LD   A, (IX + 30) : CALL .put
+.pos:          LD   A, (IX + 1)  : CALL RawPak_StoreLfn_Put
+                LD   A, (IX + 3)  : CALL RawPak_StoreLfn_Put
+                LD   A, (IX + 5)  : CALL RawPak_StoreLfn_Put
+                LD   A, (IX + 7)  : CALL RawPak_StoreLfn_Put
+                LD   A, (IX + 9)  : CALL RawPak_StoreLfn_Put
+                LD   A, (IX + 14) : CALL RawPak_StoreLfn_Put
+                LD   A, (IX + 16) : CALL RawPak_StoreLfn_Put
+                LD   A, (IX + 18) : CALL RawPak_StoreLfn_Put
+                LD   A, (IX + 20) : CALL RawPak_StoreLfn_Put
+                LD   A, (IX + 22) : CALL RawPak_StoreLfn_Put
+                LD   A, (IX + 24) : CALL RawPak_StoreLfn_Put
+                LD   A, (IX + 28) : CALL RawPak_StoreLfn_Put
+                LD   A, (IX + 30) : CALL RawPak_StoreLfn_Put
                 LD   A, 1
                 LD   (RawPak_HaveLfn), A
                 RET
-.put:          CALL RawPak_Upcase
+RawPak_StoreLfn_Invalid:
+                LD   A, #FF                     ; poison всей LFN-цепочки вплоть до следующей short entry
+                LD   (RawPak_HaveLfn), A
+                RET                             ; принципиально без единой записи в RawPak_EntName/соседей
+RawPak_StoreLfn_Poisoned:
+                POP  AF                         ; уравнять PUSH выше; проверенный seq больше не нужен
+                RET                             ; не писать даже допустимый fragment из уже плохой цепочки
+RawPak_StoreLfn_Put:
+                CALL RawPak_Upcase
                 LD   (HL), A
                 INC  HL
                 RET
@@ -1385,24 +1414,11 @@ RawPak_ReadOneLogicalIX:
                 LD   (RawPak_LogCur), HL
                 RET
 
-; То же чтение, но с коротким retry. Важно: RawPak_ReadOneLogicalIX не двигает
-; RawPak_LogCur на ошибке, поэтому повтор читает тот же logical sector.
+; Compatibility entry для callers, которым исторически требовался sector retry.
+; Теперь три физические попытки + recovery находятся в публичном sd_read_sector,
+; поэтому второй цикл здесь дал бы 3x3 CMD17 и ненужно растянул hard failure.
 RawPak_ReadOneLogicalIX_Retry:
-                PUSH BC
-                LD   A, 3
-                LD   (RawPak_ReadRetryLeft), A
-.try:          CALL RawPak_ReadOneLogicalIX
-                JR   NC, .ok
-                LD   A, (RawPak_ReadRetryLeft)
-                DEC  A
-                LD   (RawPak_ReadRetryLeft), A
-                JR   NZ, .try
-                POP  BC
-                SCF
-                RET
-.ok:           POP  BC
-                OR   A
-                RET
+                JP   RawPak_ReadOneLogicalIX    ; сохраняет прежний symbol/API без nested retry
 
 ; Tmp = Tmp + 1 (32-bit LE, carry-propagated).
 RawPak_IncTmp32:

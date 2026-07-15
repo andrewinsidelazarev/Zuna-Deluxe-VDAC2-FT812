@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Проверка окна раскрытия черепа по базовой координате цепочки.
 
-VDC_CheckKillzone должна держать череп закрытым при rem >= 65, начинать
-раскрытие при rem == 64, продолжать его до rem == 1 включительно и запускать
-всасывание при rem <= 0. Граница Lose определяется только HSA/HSub; знаковый
-Offsets[0] остаётся визуальной анимацией и не сдвигает границу состояния.
-Проверяются все допустимые KzEndSub и полный диапазон смещений головы.
+VDC_CheckKillzone должна держать череп закрытым при rem >= 129, начинать
+раскрытие при rem == 128, продолжать его до rem == 1 включительно и запускать
+всасывание при rem <= 0. Граница Lose определяется только HSA/HSub; равномерное
+знаковое смещение всех живых шаров не создаёт GAP и не сдвигает границу
+состояния. Проверяются все допустимые KzEndSub и полный диапазон смещений.
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from zuma_z80_simulator import ZumaZ80Sim  # noqa: E402
 CELL_SIZE = 32
 TRACK_NUM_SLOTS = 20
 HEAD_OFFSETS = (-128, -64, -32, -1, 0, 1, 31, 32, 64, 127)
-EFFECTIVE_REMS = (65, 64, 3, 2, 1, 0, -1)
+EFFECTIVE_REMS = (129, 128, 65, 64, 50, 49, 48, 47, 3, 2, 1, 0, -1)
 EDGE_KZ_END_SUBS = (0, 1, 31)
 
 
@@ -47,8 +47,8 @@ def clear_array(sim: ZumaZ80Sim, name: str) -> None:
 def expected(rem: int) -> tuple[int, int]:
     if rem <= 0:
         return 1, 11
-    if rem <= 64:
-        return 0, 2 + ((64 - rem) >> 3)
+    if rem <= 128:
+        return 0, 2 + ((128 - rem) >> 4)
     return 0, 1
 
 
@@ -97,6 +97,12 @@ def set_offsets_topology_busy(sim: ZumaZ80Sim) -> None:
     sim.call(sim.sym["Core.VDC_MarkOffsetsMaybe"])
 
 
+def set_uniform_live_offsets(sim: ZumaZ80Sim, value: int) -> None:
+    """Сместить всю живую цепочку без signed-ступени между соседями."""
+    for i in range(sim.get_byte(sim.sym["Core.VDC_SlotsLen"])):
+        sim.set_byte(sim.sym["Core.VDC_Offsets"] + i, value & 0xFF)
+
+
 def reset_case(sim: ZumaZ80Sim, kz_end_sub: int, rem: int) -> None:
     sb(sim, "Core.VDC_GameState", 0)
     sb(sim, "Core.VDC_DialogState", 0)
@@ -132,12 +138,12 @@ def run_effective_head_cases(
     check_addr: int,
     failures: list[str],
 ) -> None:
-    """Знаковое смещение головы не должно менять логическую границу Lose."""
+    """Равномерное смещение цепочки не должно менять логическую границу Lose."""
     for kz_end_sub in EDGE_KZ_END_SUBS:
         for head_offset in HEAD_OFFSETS:
             for rem in EFFECTIVE_REMS:
                 reset_case(sim, kz_end_sub, rem)
-                sim.set_byte(sim.sym["Core.VDC_Offsets"], head_offset & 0xFF)
+                set_uniform_live_offsets(sim, head_offset)
                 before_head = raw_head(sim)
 
                 sim.call(check_addr, max_steps=5_000_000)
@@ -168,7 +174,7 @@ def run_unrelated_offsets_do_not_block(
         for head_offset in HEAD_OFFSETS:
             for rem in EFFECTIVE_REMS:
                 reset_case(sim, kz_end_sub, rem)
-                sim.set_byte(sim.sym["Core.VDC_Offsets"], head_offset & 0xFF)
+                set_uniform_live_offsets(sim, head_offset)
                 set_offsets_topology_busy(sim)
 
                 sim.call(check_addr, max_steps=5_000_000)
@@ -216,7 +222,7 @@ def main() -> int:
     interesting: list[str] = []
 
     for kz_end_sub in range(CELL_SIZE):
-        for rem in range(-2, 97):
+        for rem in range(-2, 161):
             reset_case(sim, kz_end_sub, rem)
             sim.call(check_addr, max_steps=5_000_000)
             state = sim.get_byte(sim.sym["Core.VDC_GameState"])
@@ -231,7 +237,20 @@ def main() -> int:
                     f"состояние/кадр=({state},{frame}) "
                     f"ожидалось=({exp_state},{exp_frame})"
                 )
-            if kz_end_sub in (0, 1, 31) and rem in (65, 64, 63, 11, 10, 9, 8, 2, 1, 0):
+            if kz_end_sub in (0, 1, 31) and rem in (
+                129,
+                128,
+                127,
+                65,
+                64,
+                63,
+                17,
+                16,
+                15,
+                2,
+                1,
+                0,
+            ):
                 interesting.append(
                     f"kz_end_sub={kz_end_sub:02d} rem={rem:2d} -> "
                     f"state={state} frame={frame}"
@@ -253,7 +272,7 @@ def main() -> int:
 
     print(
         "\nУСПЕХ: килл-зона использует базовые HSA/HSub, раскрывается при "
-        "rem<=64, а обычные offsets не двигают границу и не блокируют Lose"
+        "rem<=128, а обычные offsets не двигают границу и не блокируют Lose"
     )
     return 0
 

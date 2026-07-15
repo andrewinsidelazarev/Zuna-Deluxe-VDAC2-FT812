@@ -31,9 +31,17 @@ def bullet_active(sim) -> int:
     return sim.get_byte(sim.sym["Core.Bullet_Active"])
 
 
-def run_spawn_case(name: str, kz1: int, kz2: int, expected_active: int) -> bool:
+def run_spawn_case(
+    name: str,
+    kz1: int,
+    kz2: int,
+    expected_active: int,
+    *,
+    has_second: int = 0,
+) -> bool:
     sim = make_sim()
     arm_frog_for_spawn(sim)
+    sb(sim, "Core.VDC_HasSecondChain", has_second)
     sb(sim, "Core.VDC_KzFrame", kz1)
     sb(sim, "Core.VDC2_KzFrame", kz2)
 
@@ -43,7 +51,38 @@ def run_spawn_case(name: str, kz1: int, kz2: int, expected_active: int) -> bool:
     ok = active == expected_active
     print(
         f"{'PASS' if ok else 'FAIL'}: {name}: "
-        f"kz1={kz1} kz2={kz2} bullet={active}, ожидалось={expected_active}"
+        f"has2={has_second} kz1={kz1} kz2={kz2} "
+        f"bullet={active}, ожидалось={expected_active}"
+    )
+    return ok
+
+
+def run_dual_gameover_to_single_init_case() -> bool:
+    """Stale terminal KZ2 from L19 must not survive initialization of L1."""
+    sim = make_sim()
+    s = sim.sym
+
+    # Ровно состояние, остававшееся после одного из порядков завершения L19:
+    # вторая цепочка была активна и закончила absorb с полностью открытой KZ2.
+    sb(sim, "Core.VDC_HasSecondChain", 1)
+    sb(sim, "Core.VDC2_KzFrame", 11)
+    sb(sim, "Core.CurrentLevel", 0)  # следующий запуск — L01, одна цепочка
+
+    sim.call(s["Core.VDC_Init"], max_steps=5_000_000)
+    has_second = sim.get_byte(s["Core.VDC_HasSecondChain"])
+    kz2 = sim.get_byte(s["Core.VDC2_KzFrame"])
+
+    # Довести только релевантные для spawn поля до обычного PLAY-состояния.
+    arm_frog_for_spawn(sim)
+    sb(sim, "Core.VDC_KzFrame", 1)
+    sim.call(s["Core.Bullet_Spawn"], max_steps=5_000_000)
+    active = bullet_active(sim)
+
+    ok = has_second == 0 and kz2 == 0 and active == 1
+    print(
+        f"{'PASS' if ok else 'FAIL'}: L19 Game Over -> L01 init: "
+        f"has2={has_second} kz2={kz2} bullet={active}, "
+        "ожидалось has2=0 kz2=0 bullet=1"
     )
     return ok
 
@@ -103,11 +142,37 @@ def main() -> int:
     checks = [
         run_spawn_case("закрытый череп разрешает обычный выстрел", 1, 0, 1),
         run_spawn_case("открытый KZ цепи 1 в PLAY разрешает спасательный выстрел", 2, 0, 1),
-        run_spawn_case("открытый KZ цепи 2 в PLAY разрешает спасательный выстрел", 1, 2, 1),
+        run_spawn_case(
+            "открытый KZ цепи 2 в PLAY разрешает спасательный выстрел",
+            1,
+            2,
+            1,
+            has_second=1,
+        ),
         run_spawn_case("открытый KZ frame 8 цепи 1 ещё разрешает спасательный выстрел", 8, 0, 1),
-        run_spawn_case("открытый KZ frame 8 цепи 2 ещё разрешает спасательный выстрел", 1, 8, 1),
+        run_spawn_case(
+            "открытый KZ frame 8 цепи 2 ещё разрешает спасательный выстрел",
+            1,
+            8,
+            1,
+            has_second=1,
+        ),
         run_spawn_case("последняя фаза KZ цепи 1 блокирует новый выстрел", 9, 0, 0),
-        run_spawn_case("последняя фаза KZ цепи 2 блокирует новый выстрел", 1, 9, 0),
+        run_spawn_case(
+            "последняя фаза KZ цепи 2 блокирует новый выстрел",
+            1,
+            9,
+            0,
+            has_second=1,
+        ),
+        run_spawn_case(
+            "stale KZ2 одноцепочечного уровня не блокирует выстрел",
+            1,
+            11,
+            1,
+            has_second=0,
+        ),
+        run_dual_gameover_to_single_init_case(),
         run_absorb_spawn_block_case(),
         run_absorb_clears_active_shot(),
     ]

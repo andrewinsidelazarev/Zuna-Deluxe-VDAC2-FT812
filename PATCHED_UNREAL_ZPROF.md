@@ -161,13 +161,13 @@ This is the exact visible launch sequence that was used when checking L12.
    .\build.cmd
    ```
 
-   Result: build passed, `Build\ZUMA_VD2.SPG` was written at `2026-07-01 12:11:19`.
+   Result: build passed, `Build\zuma_vdac2.spg` was written at `2026-07-01 12:11:19`.
 
 2. Verify/copy the fresh SPG into the patched Unreal runtime:
 
    ```powershell
-   Copy-Item -LiteralPath 'C:\Users\Администратор\Desktop\Zuma Deluxe VDAC2\Build\ZUMA_VD2.SPG' `
-     -Destination 'C:\Users\Администратор\Desktop\unreal_x64\ZUMA_VD2.SPG' -Force
+   Copy-Item -LiteralPath 'C:\Users\Администратор\Desktop\Zuma Deluxe VDAC2\Build\zuma_vdac2.spg' `
+     -Destination 'C:\Users\Администратор\Desktop\unreal_x64\zuma_vdac2.spg' -Force
    ```
 
    Fresh SPG hash after copy:
@@ -187,7 +187,7 @@ This is the exact visible launch sequence that was used when checking L12.
    The injector reported `/Games/Zuma Deluxe VDAC2/` files written, including:
 
    ```text
-   ZUMA_VD2.SPG 365056
+   zuma_vdac2.spg 365056
    ZUMALVL.PAK 7139840
    ZUMAMAIN.PAK 3653632
    ZUMAAUD.PAK 802136
@@ -200,7 +200,7 @@ This is the exact visible launch sequence that was used when checking L12.
 
    ```powershell
    Start-Process -FilePath '.\Unreal.exe' `
-     -ArgumentList 'ZUMA_VD2.SPG' `
+     -ArgumentList 'zuma_vdac2.spg' `
      -WorkingDirectory 'C:\Users\Администратор\Desktop\unreal_x64'
    ```
 
@@ -210,4 +210,4 @@ This is the exact visible launch sequence that was used when checking L12.
    Unreal.exe started from C:\Users\Администратор\Desktop\unreal_x64\Unreal.exe
    ```
 
-Important: do not pass the full SPG path to Unreal for this workflow. Use `WorkingDirectory = C:\Users\Администратор\Desktop\unreal_x64` and `ArgumentList = ZUMA_VD2.SPG`.
+Important: do not pass the full SPG path to Unreal for this workflow. Use `WorkingDirectory = C:\Users\Администратор\Desktop\unreal_x64` and `ArgumentList = zuma_vdac2.spg`.
