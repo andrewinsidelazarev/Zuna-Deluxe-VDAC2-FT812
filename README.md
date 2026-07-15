@@ -1,5 +1,11 @@
 # Zuma Deluxe — VDAC2 / FT812 порт (640×480)
 
+<p align="center">
+  <img src="Docs/screenshots/zuma-vdac2-title-screen.webp"
+       alt="Zuma Deluxe VDAC2 — титульный экран на ZX Evolution"
+       width="960">
+</p>
+
 Порт классической **Zuma Deluxe** под аппаратную связку **ZX-Evo (Pentevo / TS-Config) + VDAC2 + FT812**
 в нативном разрешении **640×480** с апскейлом до 1024x768.
 
