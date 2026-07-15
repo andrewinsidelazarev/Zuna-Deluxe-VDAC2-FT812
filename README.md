@@ -9,6 +9,8 @@
 
 Игра содержит независимые: 1D-дискретный основной движок (VDC - virtual discrette chain) и 2D-рендер, благодаря чему может быть портирована и на другие ретро-платформы.
 
+В эмуляторе https://github.com/tslabs/zx-evo/tree/master/pentevo/unreal/ игра тормозит - это неточная эмуляция, но если у Вас нет реальной ZX Evolution, то ознакомиться с игрой в эмуляторе можно.
+
 ---
 
 ## Hardware target
@@ -93,6 +95,15 @@ python make_misc_sprites.py
 python make_cursor.py
 python make_track_640.py
 ```
+---
+
+В создании игры помогали:
+
+- мой сын Лазарев Олег - тестирование;
+- Сергей Слободчиков - тестирование, идеи;
+- Lina TSL (https://github.com/tslabs/) - техническая информация, идеи;
+- Юрий Cyberpunkerr - тестирование, идеи.
+
 
 ---
 
