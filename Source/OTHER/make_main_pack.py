@@ -16,7 +16,9 @@ SECTORS_PER_PAGE = PAGE_SIZE // 512
 # Pages that must already exist in the small boot SPG and must survive
 # ZUMAMAIN.PAK loading. Temporary boot artwork pages are intentionally not
 # listed here: ZUMAMAIN.PAK reloads those page numbers with the real game data.
-BOOT_PAGES = {0x00, 0x05, 0x25, 0x26, 0x27, 0x40, 0x41}
+# Клод: #14/#15 — FAT32-драйвер (код и рабочая страница): ZUMAMAIN.PAK читает
+# сам драйвер, его страницы в пак попадать не должны.
+BOOT_PAGES = {0x00, 0x05, 0x14, 0x15, 0x25, 0x26, 0x27, 0x40, 0x41}
 
 BLOCK_RE = re.compile(
     r"^\s*Block\s*=\s*(#[0-9A-Fa-f]+|0x[0-9A-Fa-f]+|\d+)\s*,\s*"

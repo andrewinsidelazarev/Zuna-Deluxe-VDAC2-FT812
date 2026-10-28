@@ -12,19 +12,25 @@ from full_stack_trace import FullStackTrace  # noqa: E402
 from zuma_full_z80_emulator import PAGE_SIZE  # noqa: E402
 
 
-def patch_retry_to_fail(fs: FullStackTrace) -> None:
-    """Force gameplay section reads to fail after TOC has already loaded."""
-    addr = fs.sym["Core.RawPak_ReadOneLogicalIX_Retry"]
+def patch_read_to_fail(fs: FullStackTrace) -> None:
+    """Force gameplay section reads to fail after TOC has already loaded.
+
+    Клод: страницы уровня читает Fat_ReadSectors (fat32_adapter.asm, READ_AT
+    FAT32-драйвера), а не посекторный RawPak_ReadOneLogicalIX_Retry: отказ
+    подставляется туда; TOC (RawPak_ReadOneLogicalIX) стенд по-прежнему читает.
+    """
+    addr = fs.sym["Core.Fat_ReadSectors"]
     loader_page = fs.sym.get("Core.LOADER_OVL_PAGE", 0x40) & 0xFF
     phys = loader_page * PAGE_SIZE + (addr & 0x3FFF)
     fs.emu.mem.physical[phys : phys + 2] = b"\x37\xc9"  # SCF; RET
+    fs.sym.pop("Core.Fat_ReadSectors", None)  # без перехвата стенда: он сам «прочитал» бы
 
 
 def main() -> int:
     fs = FullStackTrace(ROOT, shadow_ft812=True)
     fs.call("Core.Init_Core", 1_000_000)
-    fs.emu.mem.write(fs.sym["Core.CurrentLevel"], 18)  # L19, first bg sector will fail.
-    patch_retry_to_fail(fs)
+    fs.emu.mem.write(fs.sym["Core.CurrentLevel"], 18)  # L19, first bg page read will fail.
+    patch_read_to_fail(fs)
 
     fs.call("Core.LoadGameplayLevelSpecificFromPack", 20_000_000)
     if fs.emu.reg.F & 0x01:

@@ -408,22 +408,24 @@ GS_SfxRequestNote:  DEFB 0
 GS_SfxSilenceTimer: DEFB 0
 GS_SfxHandles:      DEFS GS_SOUND_COUNT
 
-; LevelsMapLoaded — 0, пока PAK не найден и его sector run-table не собрана
-; один раз за session (ставится в RawPak_OpenRoot при успешном recursive search).
+; LevelsMapLoaded — 0, пока каталог игры (ZUMALVL.PAK) не найден один раз за
+; session (Клод: ставит Fat_FindGameDir, fat32_adapter.asm).
 ; Нужен, чтобы показать "LOADING LEVELS..." только на первом медленном переходе
 ; menu->level-select; поздние transitions используют cached map и почти мгновенны.
 LevelsMapLoaded:   DEFB 0
 
-; --- Quit HOBETA loader, Этап 1: проба BOOT.$C. Результаты резидентны (slot1/Core),
+; --- Quit HOBETA loader, Этап 1: BOOT.$C. Результаты резидентны (slot1/Core),
 ; читаются в F12-дампе независимо от того, что в slot3. ProbeBootHobeta — трамплин:
 ; мапит loader overlay в slot3, зовёт OVL_ProbeBoot, восстанавливает UI overlay.
-Boot_Found:        DEFB 0         ; 1 = BOOT.$C найден и 1-й сектор прочитан
-Boot_Clus:         DEFS 4         ; стартовый кластер (LE)
+; Клод: OVL_ProbeBoot читает BOOT.$C FAT32-драйвером целиком в страницы
+; QUIT_BOOT_PAGE0/1 (свободные в SPG и ZUMAMAIN.PAK); стаб выхода копирует его
+; оттуда. Прежние Boot_Clus/Boot_StartLba/Boot_SecCount/Boot_Blkt (LBA и режим
+; адресации карты для собственного чтения стаба) удалены.
+QUIT_BOOT_PAGE0    EQU #50        ; BOOT.$C [#0000..#3FFF]
+QUIT_BOOT_PAGE1    EQU #51        ; BOOT.$C [#4000..конец]
+Boot_Found:        DEFB 0         ; 1 = BOOT.$C найден и прочитан целиком
 Boot_Size:         DEFS 4         ; размер файла в байтах (LE)
 Boot_Hdr:          DEFS 32        ; первые 32 байта файла (HOBETA-заголовок)
-Boot_StartLba:     DEFS 4         ; LBA первого сектора файла (абсолютный, LE)
-Boot_SecCount:     DEFB 0         ; число секторов = ceil(size/512)
-Boot_Blkt:         DEFB 0         ; sd_blkt (0=byte addressing, 1=block)
                 if RUNTIME_DIAGNOSTICS_ENABLED
                 define DIAG_SECTION_QUIT_TRACE_VARS
                 include "DiagnosticsRuntime.asm"
@@ -440,8 +442,7 @@ ProbeBootHobeta:
 
 ; QuitStub_Image — байты релоцируемого загрузчика WC (Этап 2). Ассемблируются как
 ; будто по #4000 (DISP), но лежат в резиденте; на Quit копируются в #4000 (bank5).
-; QuitStub_Run/QS_Lba/QS_Cnt/QS_Blkt — это адреса #40xx (disp), оркестратор пишет
-; параметры по ним ПОСЛЕ копирования образа.
+; Клод: параметров у стаба больше нет — BOOT.$C уже в QUIT_BOOT_PAGE0/1.
 QuitStub_Image:
                 DISP #4000
                 include "quit_loader_stub.asm"

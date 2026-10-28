@@ -55,8 +55,10 @@ SMOKE_STEPS: tuple[Step, ...] = (
 FULL_EXTRA_STEPS: tuple[Step, ...] = (
     py("test_menu_hover_keyboard_focus.py", 90, "menu"),
     py("test_levelsel_preview_stream_z80.py", 240, "sd"),
-    py("test_sd_session_recovery_z80.py", 90, "sd"),
-    py("test_rawpak_lfn_bounds_z80.py", 90, "sd"),
+    # Клод: test_sd_session_recovery_z80 и test_rawpak_lfn_bounds_z80 удалены вместе
+    # с собственным SD-ZC и разбором LFN: SD и FAT32 теперь — FAT32-драйвер, его
+    # проверяет test_fat32_sd_z80 (настоящий код драйвера, образ карты в памяти).
+    py("test_fat32_sd_z80.py", 240, "sd"),
     py("test_levelsel_transition.py", 120, "menu"),
     py("test_win_transition_z80.py", 240, "flow"),
     py("test_gap_bonus_score_z80.py", 120, "score"),
@@ -98,9 +100,8 @@ OPTIMIZATION_GATE_STEPS: tuple[Step, ...] = (
 QUARANTINE_STEPS: tuple[Step, ...] = (
     py("test_win_next_level_full_load_z80.py", 240, "quarantine"),
     py("test_gap_pull_z80.py", 240, "quarantine"),
-    py("test_rawpak_z80.py", 180, "quarantine"),
-    py("test_rawpak_fragmented.py", 180, "quarantine"),
-    py("test_rawpak_partitioned.py", 180, "quarantine"),
+    # Клод: test_rawpak_z80/fragmented/partitioned удалены — RawPak_OpenRoot и
+    # таблицы кусков файла больше нет (FAT32-драйвер).
     py("test_tunnel_pause_dialog_skip.py", 90, "quarantine"),
     py("test_tunnel_render_pass_priority.py", 90, "quarantine"),
     py("test_tunnel_top_overlay_order.py", 90, "quarantine"),

@@ -264,6 +264,9 @@ class FullStackTrace:
         if pc == self.sym.get("Core.RawPak_ReadOneLogicalIX"):
             self._hook_rawpak_read_one_logical_ix()
             return True
+        if pc == self.sym.get("Core.Fat_ReadSectors"):
+            self._hook_fat_read_sectors()
+            return True
         if pc == self.sym.get("Core.sd_init"):
             self._hook_sd_init()
             return True
@@ -468,6 +471,27 @@ class FullStackTrace:
         self.emu.mem.write(log_addr + 1, next_sector >> 8)
         self.zifi_calls.append(f"Core.RawPak_ReadOneLogicalIX(sec={sector}, ix={hx(ix)})")
         self.event(f"RawPak_ReadOneLogicalIX sector={sector} -> IX={hx(ix)}")
+        ret_from_hook(self.emu, carry=False)
+
+    def _hook_fat_read_sectors(self) -> None:
+        """Клод: Fat_ReadSectors (fat32_adapter.asm) — B секторов с RawPak_LogCur
+        в страницу C со смещения HL; CF=0, RawPak_LogCur += B."""
+        log_addr = self.sym["Core.RawPak_LogCur"]
+        sector = self.emu.mem.read(log_addr) | (self.emu.mem.read(log_addr + 1) << 8)
+        page = self.emu.reg.C & 0xFF
+        off = (self.emu.reg.L | (self.emu.reg.H << 8)) & 0x3FFF
+        count = self.emu.reg.B & 0xFF
+        start = sector * 512
+        data = self.zifi.pak[start : start + count * 512]
+        if len(data) < count * 512:
+            data += bytes(count * 512 - len(data))
+        phys = page * PAGE_SIZE + off
+        self.emu.mem.physical[phys : phys + len(data)] = data
+        next_sector = (sector + count) & 0xFFFF
+        self.emu.mem.write(log_addr, next_sector & 0xFF)
+        self.emu.mem.write(log_addr + 1, next_sector >> 8)
+        self.zifi_calls.append(f"Core.Fat_ReadSectors(sec={sector}, n={count}, page={hx(page, 2)}, off={hx(off)})")
+        self.event(f"Fat_ReadSectors sector={sector} n={count} -> #{page:02X}:{hx(off)}")
         ret_from_hook(self.emu, carry=False)
 
     def call(self, sym_name: str, max_steps: int = 10_000_000) -> None:

@@ -342,7 +342,11 @@ class ZumaFullZ80Emulator:
             # memory writes to #0410..#0413 mirror to PAGE0..PAGE3 ports.
             # Real HW: TSLib SetPage* macros expand to LD (FMADDR_REGS+HIGH PAGEn), value.
             # FMADDR_REGS = #0400, HIGH PAGEn = #10..#13.
-            if 0x0410 <= ref <= 0x0413:
+            # Клод: только при включённом FM (FMADDR=FM_EN, как ставит Init_Core);
+            # запись при этом ложится и в RAM (на железе W0_WE пишет насквозь —
+            # на этом держится GetPage*), иначе это обычная RAM: буферы FAT32-драйвера.
+            if 0x0410 <= ref <= 0x0413 and getattr(self, "fm_enabled", True):
+                self.mem.write(ref, value)
                 slot = ref - 0x0410
                 old = self.mem.pages[slot]
                 self.mem.pages[slot] = value & 0xFF
@@ -367,6 +371,8 @@ class ZumaFullZ80Emulator:
                 return self.dma.status & 0xFF
             return 0x07 if high == 0x00 else 0x00
         if low == 0x57:
+            if getattr(self, "sd_selected", False):
+                return 0xFF                      # Клод: SD выбрана, карты в модели нет
             return self._read_ft_spi()
         if port == 0xBFF7:
             if not self.input.mr_gluk_enabled:
@@ -403,10 +409,16 @@ class ZumaFullZ80Emulator:
         elif low == 0xAF:
             self._write_tsconf_register(high, value)
         elif low in (0x57, 0x77):
+            if low == 0x57 and getattr(self, "sd_selected", False):
+                return                           # Клод: байты для SD, не для FT812
             self._write_ft_spi(low, value)
 
     def _write_tsconf_register(self, reg: int, value: int) -> None:
-        if reg == 0x10:
+        if reg == 0x15:
+            # Клод: FMADDR — бит 4 (FM_EN) включает окно FM игры с #0000.
+            # FAT32-драйвер на время вызова его выключает: #0000..#1FFF — его буферы.
+            self.fm_enabled = bool(value & 0x10)
+        elif reg == 0x10:
             self.mem.pages[0] = value & 0xFF
         elif reg == 0x11:
             self.mem.pages[1] = value & 0xFF
@@ -461,6 +473,12 @@ class ZumaFullZ80Emulator:
         # This keeps enough state for diagnostics. Actual TSLib write helpers
         # are also intercepted at the memory-copy level by normal Z80 code.
         if low_port == 0x77:
+            # Клод: бит 1 = 0 — выбрана SD (#01; #03 — никто, #07 — FT812). Карты
+            # в модели нет: пока SD выбрана, #57 читается как #FF (MISO вверху), и
+            # инициализация карты FAT32-драйвером быстро кончается отказом, как на
+            # железе без карты. Прежде шёл ответ FT-модели (0), и ожидания драйвера
+            # тянулись миллионами шагов.
+            self.sd_selected = not (value & 0x02)
             self.ft.spi_phase = 0
             self.ft.spi_addr = 0
             self.ft.spi_mode = "idle"

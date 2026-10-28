@@ -84,12 +84,25 @@ build.cmd
 
 Делает три шага:
 
+0. **`python Source/OTHER/build_fat32.py`** → `Build/fat32.bin`, `Build/fat32-work.bin` — FAT32-драйвер (см. ниже)
 1. **`sjasmplus Source/ASM/main.asm`** → `Build/TSLib.bin`, `Build/Core.bin`, `Build/main1_play.bin`, `Build/main.lst`, `Build/zuma.sym`
 2. **`spgbld -b spgbld_vdac2.ini Build/zuma_vdac2.spg`** — упаковывает code blocks и graphics assets в `.spg`
 3. **запуск** `Build/zuma_vdac2.spg` в Unreal x64
 
 Пути к `sjasmplus.exe` / `spgbld.exe` / `Unreal.exe` зашиты в `build.cmd` —
 поправьте под себя.
+
+### SD-карта и FAT32
+
+Паки (`ZUMAMAIN/ZUMALVL/ZUMAAUD/ZUMASND.PAK`) и `BOOT.$C` для выхода в WC
+читает самостоятельный FAT32-драйвер
+[FAT32-Driver-ZX-Evolution](https://github.com/andrewinsidelazarev/FAT32-Driver-ZX-Evolution):
+исходники без изменений лежат в `Source/ThirdParty/FAT32` (коммит и SHA-256 —
+`upstream.json`), переходник — `Source/ASM/fat32_adapter.asm`. Драйвер
+монтирует том (MBR/EBR или том без разметки), находит каталог игры по пути
+активной панели WC или обходом всей карты, читает файлы по смещению (FILEX
+`READ_AT`) при любой фрагментации. Код и рабочая страница драйвера — страницы
+`#14/#15` загрузочного SPG; раскладка вызова — `Docs/memory_map_vdac2.md`.
 
 Ассеты-`.bin` хранятся в репо (генерируются из spritesheet'ов соседнего проекта
 Zuma Deluxe — `~/Desktop/Zuma Deluxe/graphics/...`). Регенерировать локально:

@@ -1,0 +1,22 @@
+{
+  "repository": "https://github.com/andrewinsidelazarev/FAT32-Driver-ZX-Evolution",
+  "commit": "cfb0fedf20d3f2e929437f80131f44c0167ff120",
+  "note": "Клод: исходники драйвера без изменений; SHA-256 считается по тексту с концами строк LF (git core.autocrlf меняет их в рабочем дереве). Сборка — Source/OTHER/build_fat32.py.",
+  "sources": {
+    "LICENSE": "936e7254db19e3d6ebb4b09963dbe018bf83839adfe6ce309efc12661eafd093",
+    "build.py": "93140322123975a3a240967fd628d28823f2c85bd3c78a2e7ee4af9086ace307",
+    "include/fat32.inc": "d5e47546237780f8926d2456f54a93d9ab701400981cc70145acff64d2e2b56c",
+    "include/filex.inc": "ef44a3ca6b72783985a3abb708196892f2ef03b0f45f75892978f8255b9b21ac",
+    "ports/sdzc.asm": "686b9a5356c32cceb96106cda1a77b523270e70e254fb619d1fc5ddef9b269d3",
+    "src/block_io.asm": "964780966850d7b3637d8c54ba67338df183bbf730e4ac388e47a54248b517a1",
+    "src/core32.asm": "53325ddf024d3421ea7f5ec6bb6f114129b44c489f5bb7e0ae834fb0b01e7944",
+    "src/extension.asm": "8e042393471482322f299d2234233b2ed681fa0f9fa02a08c25048894de0ee71",
+    "src/extension_ids.inc": "5c33be6abb6c745776d582159e3692b16250c189b52f8d8671c7e60f59ae1a12",
+    "src/filex.asm": "4eea97723f44ca59b325d233aa9857d47c475a830d7d7116cf590c763cc07f4d",
+    "src/filex_cache.asm": "efb8a4c08f5eefb79188757d0ac6b544fbc873b46e2b2cc3fa729d8e7bd91225",
+    "src/main.asm": "c9d88a72eb9027057a1c32ad993a46ec70ea59ae2c74d13f905abc6aa93702b4",
+    "src/public.asm": "1d5fd4deff906db98194db7c18054f51654d1c8d072c4d67d5963773caf4bd2b",
+    "src/safety.asm": "09c8329650c521ee6ef63fa5e0fc62a833dc7e939db494f2a43d6fa728390d2f",
+    "src/state.inc": "5f22f0804eb6ad49dd3c9c8a99db2fb4a09c89be3832a33dc531b1f831c9db5e"
+  }
+}

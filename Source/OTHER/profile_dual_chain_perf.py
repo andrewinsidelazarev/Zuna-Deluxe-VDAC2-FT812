@@ -99,6 +99,7 @@ class Harness:
             "Core.ZiFi_PakReadToc",
             "Core.ZiFi_Load512",
             "Core.RawPak_ReadOneLogicalIX",
+            "Core.Fat_ReadSectors",            # Клод: чтение страниц паков FAT32-драйвером
             "Core.sd_init",
             "Core.sd_read_sector",
             "FT.Coprocessor.Inflate",
@@ -109,6 +110,7 @@ class Harness:
         loader_hook_prefixes = (
             "Core.ZiFi_",
             "Core.RawPak_",
+            "Core.Fat_",
             "Core.sd_",
             "FT.Coprocessor.Inflate",
             "FT.ReadMem",

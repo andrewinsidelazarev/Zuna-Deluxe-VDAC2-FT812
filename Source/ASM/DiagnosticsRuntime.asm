@@ -226,8 +226,8 @@ VDC_AssertFrame:     DEFW 0
 ZiFiTraceStep:       DEFB 0
 ZiFiTraceBgOff:      DEFW 0
 ZiFiTraceBgSize:     DEFW 0
-ZiFiTraceOpenStep:   DEFB 0
-ZiFiTraceDirsVisited: DEFB 0
+ZiFiTraceOpenStep:   DEFB 0         ; Клод: не пишется с переходом на FAT32-драйвер (был шаг RawPak_OpenRoot)
+ZiFiTraceDirsVisited: DEFB 0        ; Клод: не пишется (был счётчик каталогов прежнего поиска)
 ZiFiTraceZumaFound:  DEFB 0
 ZiFiTracePakFound:   DEFB 0
 ZiFiTracePakSizeL:   DEFW 0
@@ -235,8 +235,8 @@ ZiFiTracePakSizeH:   DEFW 0
                 endif
 
                 ifdef DIAG_SECTION_QUIT_TRACE_VARS
-QuitTraceStage:      DEFB 0         ; #10 probe, #20 copy, #30 params, #40 jump, #80+ stub
-QuitTraceSectors:    DEFB 0         ; sectors, прочитанные quit stub
+QuitTraceStage:      DEFB 0         ; #10 probe, #20 copy, #40 jump, #80+ stub (Клод: #30 params удалён)
+QuitTraceSectors:    DEFB 0         ; секторов BOOT.$C, скопированных quit stub из QUIT_BOOT_PAGE0/1
                 endif
 
                 ifdef DIAG_SECTION_VDC

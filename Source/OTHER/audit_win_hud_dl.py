@@ -42,6 +42,7 @@ def install_fast_hooks(fs: FullStackTrace) -> None:
         for x in (
             sym.get("Core.sd_init"),
             sym.get("Core.sd_read_sector"),
+            sym.get("Core.Fat_ReadSectors"),       # Клод: чтение паков FAT32-драйвером
             sym.get("FT.Coprocessor.Inflate"),
             sym.get("FT.WriteMem"),
         )

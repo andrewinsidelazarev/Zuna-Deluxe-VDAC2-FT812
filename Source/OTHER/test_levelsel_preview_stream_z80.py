@@ -46,9 +46,10 @@ def main() -> int:
             print("  " + event)
         return 1
 
-    raw_reads = sum(1 for call in fs.zifi_calls if "RawPak_ReadOneLogicalIX" in call)
-    if raw_reads != 256:
-        print(f"FAIL: expected 256 preview sectors, got {raw_reads}")
+    # Клод: превью читается страницами по 32 сектора (Fat_ReadSectors, FILEX READ_AT).
+    page_reads = [call for call in fs.zifi_calls if "Fat_ReadSectors" in call]
+    if len(page_reads) != 8 or any("n=32" not in call for call in page_reads):
+        print(f"FAIL: expected 8 preview page reads of 32 sectors, got {page_reads}")
         return 1
 
     pak = (ROOT / "Build" / "ZUMALVL.PAK").read_bytes()

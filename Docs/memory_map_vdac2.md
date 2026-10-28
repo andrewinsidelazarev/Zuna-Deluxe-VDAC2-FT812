@@ -45,10 +45,14 @@ python Source\OTHER\audit_ramg_full.py
 | Блок | CPU/slot | Файл | Размер | Свободно |
 |---|---:|---|---:|---:|
 | TSLib/slot0 | `#1000`, page `#00` | `Build/TSLib.bin` | 12208 | n/a |
-| Core/Main0 | `#5C00`, page `#05` | `Build/Core.bin` | 9207 | n/a |
-| Gameplay overlay | `#C000`, page `#04` | `Build/main1_play.bin` | 16360 | 24 |
-| UI overlay | `#C000`, page `#41` | `Build/ui_ovl.bin` | 14514 | 1870 |
-| Loader overlay | `#C000`, page `#40` | `Build/loader_ovl.bin` | 12318 | 4066 |
+| Core/Main0 | `#5C00`, page `#05` | `Build/Core.bin` | 8959 | n/a |
+| Gameplay overlay | `#C000`, page `#04` | `Build/main1_play.bin` | 16383 | 1 |
+| UI overlay | `#C000`, page `#41` | `Build/ui_ovl.bin` | 14490 | 1894 |
+| Loader overlay | `#C000`, page `#40` | `Build/loader_ovl.bin` | 9437 | 6947 |
+| FAT32-драйвер, код | `#4000`, page `#14` | `Build/fat32.bin` | 16156 | 228 |
+| FAT32-драйвер, рабочая RAM | `#0000`, page `#15` | `Build/fat32-work.bin` | 16384 | n/a |
+
+Размеры — сборка 2026-10-27 со встроенным FAT32-драйвером (Клод).
 
 Стартовая схема:
 
@@ -64,14 +68,36 @@ python Source\OTHER\audit_ramg_full.py
 | Page | Назначение |
 |---:|---|
 | `#01` | `SCRATCH_PAGE` для ZX7 unpack |
-| `#03` | RawPak sector/staging buffer |
+| `#03` | буфер загрузчика (`ZIFI_BUFFER_PAGE`): TOC, палитра, секторы SFX, записи каталога при поиске паков |
 | `#04` | gameplay overlay |
 | `#06` | первая страница Track V4 |
 | `#07..#0E` | fallback/staging bg pages |
 | `#0F/#10/#12` | дополнительные страницы Track V4 |
+| `#14` | FAT32-драйвер: код, входы `#4000+N*3` |
+| `#15` | FAT32-драйвер: рабочая RAM и порт SD-ZC (`#3900`) |
 | `#40` | loader overlay |
 | `#41` | UI overlay |
+| `#50/#51` | `BOOT.$C` для выхода в WC (`QUIT_BOOT_PAGE0/1`), только на Quit |
 | `#F4` | AY SFX page, source `Sounds/AY/ay_sfx_data.bin` |
+
+### SD и FAT32 (Клод, 2026-10-27)
+
+Паки и `BOOT.$C` читает самостоятельный FAT32-драйвер
+(`Source/ThirdParty/FAT32`, переходник `Source/ASM/fat32_adapter.asm`). На время
+вызова драйвера (`Fat_Api`):
+
+| Slot | Page | Назначение |
+|---|---:|---|
+| 0 | `#15` | рабочая RAM драйвера; FMADDR выключен — окно FM `#0000..#0FFF` пересекается с буферами драйвера |
+| 1 | `#14` | код драйвера |
+| 2 | `#40` | второе отображение оверлея загрузчика: переходник, его стек (512 байт), блок FILEX (`#8000..#BFFF`, как требует драйвер), имя для `FIND` |
+| 3 | приёмник или `#40` | `READ_AT` пишет в `#C000..#FFFF` |
+
+Прерывания на время вызова запрещены (вектора IM2 и стек игры — в Core). Страницы
+`#14/#15` грузятся только из загрузочного SPG и исключены из `ZUMAMAIN.PAK`
+(`BOOT_PAGES` в `make_main_pack.py`): пак читается самим драйвером. Том
+монтируется один раз за запуск игры (и заново после ошибки драйвера), состояние
+драйвера живёт в `#15` между сеансами.
 
 В resident-области gameplay два полных кеша шаров занимают
 `#4100..#4B7F` (`#4100` и `#4640`, по 1344 байта). Метаданные раздельных
@@ -103,6 +129,8 @@ Boot SPG (`spgbld_boot.ini`) содержит минимальный boot/runtim
 | `#F4` | `Sounds/AY/ay_sfx_data.bin` |
 | `#40` | `Build/loader_ovl.bin` |
 | `#41` | `Build/ui_ovl.bin` |
+| `#14` | `Build/fat32.bin` (FAT32-драйвер) |
+| `#15` | `Build/fat32-work.bin` (рабочая RAM драйвера, порт SD-ZC) |
 | `#25..#27` | loading text pages |
 | `#A8..#C4` | boot loading artwork/logo/authors |
 
@@ -118,6 +146,7 @@ assets. `ZUMAMAIN.PAK` генерируется из `spgbld_vdac2.ini`; стр�
 | `#06` | fallback/track page |
 | `#07..#0E` | fallback bg pages |
 | `#11` | fallback bg palette |
+| `#14/#15` | FAT32-драйвер (только загрузочный SPG) |
 | `#16..#1F` | killzone + destroy |
 | `#20..#27` | text/loading/sparkle |
 | `#28..#2C` | WIN explosion |
@@ -126,6 +155,7 @@ assets. `ZUMAMAIN.PAK` генерируется из `spgbld_vdac2.ini`; стр�
 | `#41` | UI overlay |
 | `#42` | level chain table |
 | `#43..#4F` | L19 balls atlas + palette |
+| `#50/#51` | `BOOT.$C` при выходе в WC |
 | `#52..#5F` | frog/cursor/HUD |
 | `#60..#6D` | dialog/fonts |
 | `#70..#92` | main menu |
@@ -317,11 +347,11 @@ Same-profile intentional overlaps:
 [ramg] level_select: 10 ranges, max end #0F4000
 [ramg] main_menu: 6 ranges, max end #0AD200
 [ramg] more_games: 2 ranges, max end #0ABE60
-[build] Main0_Size=9207 bytes
-[build] Main1_Size=16360 bytes, free=24 bytes (gameplay overlay page #04)
+[build] Main0_Size=8959 bytes
+[build] Main1_Size=16383 bytes, free=1 bytes (gameplay overlay page #04)
 [build] warning: gameplay overlay (page #04) has less than 256 bytes free
-[build] UiOvl_Size=14514 bytes, free=1870 bytes (ui overlay page #41)
-[build] LoaderOvl_Size=12318 bytes, free=4066 bytes (loader overlay page #40)
+[build] UiOvl_Size=14490 bytes, free=1894 bytes (ui overlay page #41)
+[build] LoaderOvl_Size=9437 bytes, free=6947 bytes (loader overlay page #40)
 PASS: memory-map checks
 ```
 

@@ -4,17 +4,19 @@
 
 ; Автономный выход из SPG: сами грузим Wild Commander (boot.$C HOBETA с SD).
 ; MEMCONFIG=0+JP#0000 (Service ROM) НЕ грузит boot.$ (даёт пустой ZX-экран), поэтому
-; используем свой HOBETA-загрузчик: найти BOOT.$C → стаб в #4000 (bank5, ниже #6011)
-; → режим WC без LCK128 (MemConfig=#01; slot1=bank5/slot2=bank2/slot3=bank0) → JP
-; #4000 → стаб читает файл в #6000 (file[17]=WC на #6011) → JP #6011.
+; используем свой HOBETA-загрузчик: прочитать BOOT.$C → стаб в #4000 (bank5, ниже
+; #6011) → JP #4000 → стаб копирует файл в #6000 (file[17]=WC на #6011), ставит режим
+; WC без LCK128 (MemConfig=#01; slot1=bank5/slot2=bank2/slot3=bank0) → JP #6011.
 ; Эталон живого WC со скрина: VConfig=#24, SusConfig=#06, MemConfig=#01, INTMASK=0.
+; Клод: BOOT.$C целиком читает FAT32-драйвер (ProbeBootHobeta) в страницы
+; Core.QUIT_BOOT_PAGE0/1; параметров LBA/секторов/адресации стабу больше не нужно.
 MenuQuitToWC:
                 DI
                 if RUNTIME_DIAGNOSTICS_ENABLED
                 LD   A, #10
                 LD   (Core.QuitTraceStage), A
                 endif
-                CALL Core.ProbeBootHobeta               ; найти BOOT.$C и первый сектор через старый DFS
+                CALL Core.ProbeBootHobeta               ; найти BOOT.$C в корне и прочитать целиком
                 LD   A, (Core.Boot_Found)
                 OR   A
                 JP   Z, .qFallback
@@ -28,25 +30,12 @@ MenuQuitToWC:
                 LD   BC, Core.QuitStub_Len
                 LDIR
 
-                if RUNTIME_DIAGNOSTICS_ENABLED
-                LD   A, #30
-                LD   (Core.QuitTraceStage), A
-                endif
-                LD   HL, (Core.Boot_StartLba + 0)
-                LD   (Core.QS_Lba + 0), HL
-                LD   HL, (Core.Boot_StartLba + 2)
-                LD   (Core.QS_Lba + 2), HL
-                LD   A, (Core.Boot_SecCount)
-                LD   (Core.QS_Cnt), A
-                LD   A, (Core.Boot_Blkt)
-                LD   (Core.QS_Blkt), A
-
                 CALL .qResetHw                          ; сбросить FT812 до ухода из Zuma
                 if RUNTIME_DIAGNOSTICS_ENABLED
                 LD   A, #40
                 LD   (Core.QuitTraceStage), A
                 endif
-                JP   #4000                              ; дальше стаб сам выставляет память и читает BOOT.$C
+                JP   #4000                              ; дальше стаб копирует BOOT.$C и выставляет память WC
 
 .qFallback:     CALL .qResetHw                          ; BOOT.$C нет → reset HW + вход TR-DOS
                 if RUNTIME_DIAGNOSTICS_ENABLED
